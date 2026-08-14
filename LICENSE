@@ -1,0 +1,60 @@
+MIT License
+
+Copyright (c) 2026 Ninja Paws Consulting
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+EDUCATIONAL USE:
+
+This software is provided for educational and training purposes only. It is
+designed to demonstrate cloud security concepts and best practices.
+
+IMPORTANT DISCLAIMERS:
+
+1. This repository intentionally contains a vulnerable software version
+   (NGINX 1.30.3) for educational demonstrations only.
+
+2. This repository contains NO:
+   - Customer data
+   - Production credentials
+   - Business-sensitive information
+   - Personal information
+   - API keys or tokens
+   - Connection strings
+   - Private certificates
+
+3. All values shown are examples and placeholders only.
+
+4. This software is for DEFENSIVE security training purposes only and does
+   not demonstrate or teach:
+   - Exploitation techniques
+   - Offensive security methods
+   - Attack payloads
+   - Privilege escalation
+   - Denial of service
+   - Malware creation
+   - Vulnerability weaponization
+
+5. Users agree to use this software only for authorized educational,
+   training, and demonstration purposes in accordance with all applicable
+   laws and regulations.
+
+For more information, see README.md

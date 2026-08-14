@@ -1,0 +1,26 @@
+{
+  "name": "ninjapaws-cloud-security-dojo",
+  "version": "1.0.0",
+  "description": "🥷 Ninja Paws Cloud Security Dojo - Master the art of cloud security one vulnerability at a time",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "keywords": [
+    "security",
+    "azure",
+    "container",
+    "docker",
+    "training",
+    "education"
+  ],
+  "author": "Ninja Paws Consulting",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

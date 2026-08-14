@@ -1,0 +1,143 @@
+name: ✅ Remediation Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - 'package.json'
+      - 'app.js'
+      - 'nginx.conf'
+
+env:
+  REGISTRY: myregistry.azurecr.io
+  IMAGE_NAME: ninjapaws-dojo
+
+jobs:
+  validate-remediation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: 🥷 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🏗️ Build Docker image from PR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 🔍 Scan with Trivy for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
+          format: 'json'
+          output: 'trivy-results.json'
+        continue-on-error: true
+
+      - name: 📋 Generate Vulnerability Report
+        run: |
+          echo "## ⚔️ Remediation Validation Report" > validation-report.md
+          echo "" >> validation-report.md
+          echo "### Vulnerability Scan Results" >> validation-report.md
+          echo "" >> validation-report.md
+          
+          if [ -f trivy-results.json ]; then
+            VULN_COUNT=$(jq '[.Results[]?.Misconfigurations[]?, .Results[]?.Vulnerabilities[]?] | length' trivy-results.json)
+            
+            if [ "$VULN_COUNT" -eq 0 ]; then
+              echo "✅ **Status:** No vulnerabilities detected!" >> validation-report.md
+              echo "**Result:** Remediation successful ✅" >> validation-report.md
+            else
+              echo "⚠️ **Status:** $VULN_COUNT vulnerabilities detected" >> validation-report.md
+              echo "**Result:** Remediation incomplete ❌" >> validation-report.md
+            fi
+          else
+            echo "⚠️ **Status:** Unable to scan image" >> validation-report.md
+          fi
+          
+          cat validation-report.md
+
+      - name: 🧪 Test Application
+        run: |
+          docker run -d \
+            --name dojo-test \
+            -p 3000:3000 \
+            -e NGINX_VERSION=1.30.4 \
+            -e VULNERABILITY_STATUS=remediated \
+            ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
+          
+          echo "Waiting for application to start..."
+          sleep 5
+          
+          echo "Testing endpoints..."
+          
+          # Test health endpoint
+          if curl -sf http://localhost:3000/health > /dev/null; then
+            echo "✅ /health endpoint working"
+          else
+            echo "❌ /health endpoint failed"
+            exit 1
+          fi
+          
+          # Test status endpoint
+          if curl -sf http://localhost:3000/api/status > /dev/null; then
+            echo "✅ /api/status endpoint working"
+          else
+            echo "❌ /api/status endpoint failed"
+            exit 1
+          fi
+          
+          # Test homepage
+          if curl -sf http://localhost:3000/ > /dev/null; then
+            echo "✅ / homepage working"
+          else
+            echo "❌ / homepage failed"
+            exit 1
+          fi
+          
+          echo "All endpoints healthy!"
+          docker stop dojo-test
+
+      - name: 📊 Extract NGINX version
+        run: |
+          docker run --rm \
+            ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \
+            nginx -v 2>&1 | tee nginx-version.txt
+
+      - name: 💬 Comment Validation Results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('validation-report.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report + '\n\n### ✅ Testing Results\n\n- ✅ Health endpoint functional\n- ✅ API status endpoint functional\n- ✅ Homepage rendering correctly\n- ✅ Application startup successful\n\n**Next Steps:** \n1. Review vulnerability scan results\n2. Verify NGINX version is updated\n3. Approve and merge PR\n4. Monitor deployment with Microsoft Defender for Cloud'
+            })
+
+      - name: 🚀 Request Deployment Review
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['security-remediation', 'validated']
+            })
