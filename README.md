@@ -102,6 +102,17 @@ docker-compose up -d
 # API Status: http://localhost:8080/api/status
 ```
 
+### GitHub Codespaces
+
+This repo includes a [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) with Docker-in-Docker and the Azure CLI preinstalled, so you can open it directly in a Codespace with no extra setup:
+
+1. Click **Code → Codespaces → Create codespace on main**
+2. Wait for the container to build (runs `npm install` automatically)
+3. Run `docker-compose up -d` in the terminal
+4. VS Code will auto-forward ports `8080` and `3000` — use the **Ports** tab to open them in a browser
+
+Copy [`.env.example`](.env.example) to `.env` if you want to override defaults such as `VULNERABILITY_STATUS` or `PORT`.
+
 ### Build Docker Image
 
 ```bash

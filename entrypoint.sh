@@ -13,9 +13,12 @@ NGINX_PID=$!
 # Give NGINX time to start
 sleep 2
 
-# Start Node.js application
+# Start Node.js application in the background so we can supervise both processes
 echo "Starting Node.js application..."
-exec node app.js
+node app.js &
+NODE_PID=$!
 
-# If Node.js exits, stop NGINX
-trap "kill $NGINX_PID" EXIT
+# If either process dies, stop the other and exit with its status
+trap 'kill "$NGINX_PID" "$NODE_PID" 2>/dev/null' EXIT
+wait -n "$NGINX_PID" "$NODE_PID"
+exit $?
