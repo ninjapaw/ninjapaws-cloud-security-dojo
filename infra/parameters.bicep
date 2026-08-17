@@ -1,5 +1,4 @@
 param location string = 'eastus'
-param environment string = 'training'
 param containerRegistryName string = 'ninjapawsdojo'
 param appServiceName string = 'ninjapaws-dojo-app'
 param appServicePlanName string = 'ninjapaws-dojo-plan'
@@ -11,7 +10,6 @@ module infrastructure './main.bicep' = {
     containerRegistryName: containerRegistryName
     appServiceName: appServiceName
     appServicePlanName: appServicePlanName
-    environment: environment
   }
 }
 

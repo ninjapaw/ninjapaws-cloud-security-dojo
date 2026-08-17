@@ -1,154 +1,49 @@
-## Security Policy
-
-This document outlines security practices for the Ninja Paws Cloud Security Dojo project.
-
-### Purpose
-
-This is an **educational project** designed to teach cloud security concepts through hands-on demonstration of vulnerability detection and remediation.
-
-### Important Notices
-
-#### ⚠️ Educational Use Only
-
-This repository is intentionally designed for training purposes and is **not** for production use.
-
-#### 🔐 Security Practices
-
-**This repository:**
-- ✅ Contains NO production credentials
-- ✅ Contains NO customer data
-- ✅ Contains NO sensitive business information
-- ✅ Uses placeholders for all environment values
-- ✅ Demonstrates DEFENSIVE security only
-- ✅ Follows Azure and GitHub security best practices
-
-**This repository does NOT:**
-- ❌ Include exploitation code
-- ❌ Demonstrate offensive techniques
-- ❌ Contain attack payloads
-- ❌ Show privilege escalation methods
-- ❌ Include weaponized exploits
-- ❌ Provide malware examples
-
-### Reporting Security Issues
-
-If you discover a security vulnerability in this educational project:
-
-1. **Do NOT** open a public GitHub issue
-2. **Email** security-report@ninjapawsconsulting.com
-3. **Include:**
-   - Detailed description of the vulnerability
-   - Steps to reproduce (if applicable)
-   - Potential impact assessment
-   - Suggested remediation (if known)
-
-4. **Expect:** Response within 48 hours
-
-### Vulnerability Disclosure
-
-For vulnerabilities in the training environment itself:
-
-- We appreciate responsible disclosure
-- Educational projects may move at different pace than production systems
-- Fixes will be prioritized based on impact to learning objectives
-- Your contribution will be acknowledged in release notes
-
-### Security Scanning
-
-This repository uses:
-
-- **GitHub Security Features:**
-  - Secret scanning
-  - Dependency alerts
-  - Code scanning
-
-- **Container Security:**
-  - Trivy image scanning
-  - Snyk vulnerability analysis
-  - Microsoft Defender for Cloud
-
-- **Infrastructure Security:**
-  - Azure Policy scanning
-  - RBAC enforcement
-  - Managed Identity authentication
-
-### Secure Configuration
-
-#### Local Development
-
-```bash
-# Never commit credentials
 echo "SECRETS GO HERE" > .env.local
 git add .gitignore  # Ensure .env.local is ignored
+## Security
 
-# Use environment variables
-export AZURE_SUBSCRIPTION_ID="<placeholder>"
-export AZURE_TENANT_ID="<placeholder>"
-```
+This project is an educational cloud security training environment. It is intended to demonstrate defensive security practices, vulnerability detection, and remediation in a safe and controlled way.
 
-#### Azure Deployment
+This repository is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation.
 
-- Use Managed Identity (not access keys)
-- Enable RBAC (role-based access control)
-- Use Azure Key Vault for secrets (if needed)
-- Monitor with Defender for Cloud
+## Reporting security issues
 
-#### GitHub Actions
+Please do not open a public GitHub issue for security vulnerabilities.
 
-- Use OIDC federated identity (not PATs)
-- Scope permissions minimally
-- Use environment-specific secrets
-- Review workflow logs (don't commit secrets)
+Instead, use the repository's private security reporting process or the appropriate maintainer contact for the project. If you are reporting an issue, include:
 
-### Best Practices for Training
+- type of issue
+- affected files or components
+- reproduction steps or environment details
+- potential impact
+- suggested remediation, if known
 
-When using this project:
+If the issue is a general project concern rather than a security issue, open a normal GitHub issue with the details needed to understand and reproduce it.
 
-1. **Use placeholders** for sensitive values
-2. **Never hardcode** credentials anywhere
-3. **Review** all code before deployment
-4. **Test locally** in safe environment
-5. **Monitor** deployments with Defender
-6. **Clean up** resources when done
-7. **Report** any security concerns responsibly
+## Security expectations
 
-### Compliance
+This repository intentionally demonstrates defensive security workflows and should be used only in safe, non-production, authorized environments.
 
-This project aims to follow:
+The training environment contains example and placeholder values only. It does not include customer data, production credentials, or business-sensitive information.
 
-- ✅ Microsoft Security Best Practices
-- ✅ Azure Well-Architected Framework
-- ✅ OWASP Top 10
-- ✅ Container Security Standards
-- ✅ GitHub Security Guidelines
+This project is for educational purposes only and does not teach exploitation, malicious tradecraft, or offensive security techniques.
 
-### Educational Curriculum
+## Best practices used in this project
 
-The project teaches secure practices including:
+- GitHub security scanning and dependency review
+- Container image scanning with Microsoft Defender for Cloud and vulnerability reporting
+- Azure security baselines and managed identity guidance
+- Principle of least privilege and RBAC examples
+- Clear separation between training content and production systems
 
-- Vulnerability detection
-- Patch management
-- Secure supply chain
-- Container security
-- Code-to-runtime visibility
-- Monitoring and alerting
-- Incident response
+## Trademark and legal note
 
-### License & Terms
+Microsoft trademarks and product names are the property of Microsoft Corporation. Use of Microsoft names, logos, or trademarks must comply with Microsoft's trademark and branding guidance and must not imply endorsement or sponsorship.
 
-MIT License with educational restrictions.
+## Policy
 
-See [LICENSE](LICENSE) file for complete terms.
+This repository follows a responsible and transparent approach to vulnerability disclosure and public learning content. Security reports should be handled privately and with the expectation that issues will be reviewed responsibly and remediated in line with the educational purpose of the project.
 
-### Contact
+## License
 
-- **Repository:** https://github.com/ninjapaw/ninjapaws-cloud-security-dojo
-- **Issues:** Use GitHub Issues for non-security topics
-- **Discussions:** Use GitHub Discussions for questions
-- **Security:** See "Reporting Security Issues" section above
-
----
-
-**Remember:** Security is everyone's responsibility. Please use this project responsibly and help us keep the training environment safe and secure for all learners.
-
-🥷 **Stay safe, learn hard!** 🛡🐾
+The project is licensed under the [MIT License](LICENSE).

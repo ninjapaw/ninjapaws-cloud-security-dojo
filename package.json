@@ -15,7 +15,7 @@
     "training",
     "education"
   ],
-  "author": "Ninja Paws Consulting",
+  "author": "Ninja Paws",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2"

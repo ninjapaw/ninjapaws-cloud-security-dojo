@@ -1,515 +1,261 @@
-# 🥷 Ninja Paws Cloud Security Dojo
+# Ninja Paws Cloud Security Dojo
 
-**Master the art of cloud security one vulnerability at a time.**
+This repository is a public educational cloud security training environment for demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
 
-A public Azure security demonstration and educational workshop environment showcasing vulnerability detection, remediation, and validation across a complete cloud-native supply chain.
+## Quicklinks
 
-## 🎯 Overview
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Pull request template](pull_request_template.md)
+- [Azure deploy button](#azure-deploy-button)
+- [GitHub issues](https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues)
 
-The Ninja Paws Cloud Security Dojo is a hands-on training environment that demonstrates how [GitHub Advanced Security](https://github.com/features/security), [Microsoft Defender for Cloud](https://azure.microsoft.com/en-us/products/defender-for-cloud/), [Defender for DevOps](https://azure.microsoft.com/en-us/products/defender-for-devops/), [Azure Container Registry](https://azure.microsoft.com/en-us/products/container-registry/), and [Azure App Service](https://azure.microsoft.com/en-us/products/app-service/) work together to detect, remediate, and validate container vulnerabilities in a production-like environment.
+## Overview
 
-### 🏯 Perfect For
+The dojo demonstrates a defensive security workflow using:
 
-- Microsoft customers wanting to understand cloud security
-- Security teams learning vulnerability detection
-- Cloud architects designing secure infrastructure
-- Developers learning secure coding practices
-- Conference demonstrations
-- Security workshops
-- Community events
-- Training sessions
+- Node.js and Express for the application and status API
+- NGINX as a reverse proxy
+- Docker and Docker Compose for local training
+- GitHub Actions for image scanning and remediation validation
+- Azure Container Registry for image storage
+- Azure App Service for container hosting
+- Bicep and managed identity for Azure infrastructure
+- Microsoft Defender for Cloud for container security monitoring
 
-## 📋 Educational Disclaimer
-
-**⚠️ Important:** This environment intentionally contains a vulnerable software version for educational detection and remediation demonstrations. This repository contains **no customer data, production credentials, or business-sensitive information**. All values are examples and placeholders only.
-
-This repository demonstrates **defensive security practices only** — not exploitation, offensive techniques, or attack payloads.
-
-## 🛡 Current Vulnerability
-
-### CVE-2026-42533: NGINX HTTP/2 CONTINUATION Frames Memory Corruption
-
-**Training Version:** NGINX Open Source 1.30.3  
-**Vulnerable Component:** NGINX web server  
-**Status:** 🚨 Vulnerable (intentional for training)
-
-```
-Branch: main
-NGINX: 1.30.3
-Status: Vulnerable
-Action: Detect and remediate on fix/cve-2026-42533 branch
-```
-
-### ⚔️ Remediation Mission
-
-**Remediation Branch:** `fix/cve-2026-42533`  
-**Target Version:** NGINX Open Source 1.30.4 or later  
-**Expected:** Pull request with before/after vulnerability status
-
-## 🏗️ Architecture
-
-```
+```text
 GitHub Repository
-    ↓
-GitHub Actions (Detect)
-    ↓
-Azure Container Registry (Build & Scan)
-    ↓
-Azure App Service Linux Container (Deploy)
-    ↓
-Microsoft Defender for Cloud (Monitor & Validate)
+  |
+GitHub Actions
+  |
+Azure Container Registry
+  |
+Azure App Service Linux Container
+  |
+Microsoft Defender for Cloud
 ```
 
-### Infrastructure
+## Intentional training vulnerability
 
-- **Container Registry:** Azure Container Registry (Basic SKU)
-- **App Hosting:** Azure App Service (Linux Container)
-- **Authentication:** Managed Identity
-- **Infrastructure as Code:** Bicep
-- **CI/CD:** GitHub Actions
-- **Monitoring:** Microsoft Defender for Cloud
+The default `main` branch intentionally pins NGINX `1.30.3` and reports `CVE-2026-42533` as vulnerable for authorized training and scanner demonstrations. This state is not suitable for production.
 
-## 📦 Technology Stack
+The remediation exercise updates the Docker build argument to NGINX `1.30.4` or newer, changes the training status to `remediated`, rebuilds the image, and verifies the actual package and runtime state. The remediation workflow does not inject fake version or status values.
 
-- **Base OS:** Ubuntu 24.04
-- **Container Runtime:** Docker
-- **Web Server:** NGINX Open Source (vulnerable version)
-- **Runtime:** Node.js
-- **Framework:** Express.js
-- **Infrastructure:** Bicep, Azure Resource Manager
-
-## 🚀 Quick Start
+## Getting started
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Node.js 18+
+- Docker and Docker Compose
+- Node.js 18 or newer for direct local development
 - Git
+- Azure CLI for Azure deployment
 
-### Local Development
+### Local development
 
 ```bash
-# Clone repository
 git clone https://github.com/ninjapaw/ninjapaws-cloud-security-dojo.git
 cd ninjapaws-cloud-security-dojo
-
-# Start with Docker Compose
-docker-compose up -d
-
-# Access the application
-# Homepage: http://localhost:8080
-# Health: http://localhost:8080/health
-# API Status: http://localhost:8080/api/status
+npm install
+npm start
 ```
 
-### GitHub Codespaces
-
-This repo includes a [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) with Docker-in-Docker and the Azure CLI preinstalled, so you can open it directly in a Codespace with no extra setup:
-
-1. Click **Code → Codespaces → Create codespace on main**
-2. Wait for the container to build (runs `npm install` automatically)
-3. Run `docker-compose up -d` in the terminal
-4. VS Code will auto-forward ports `8080` and `3000` — use the **Ports** tab to open them in a browser
-
-Copy [`.env.example`](.env.example) to `.env` if you want to override defaults such as `VULNERABILITY_STATUS` or `PORT`.
-
-### Build Docker Image
+Open `http://localhost:3000/`, or query the endpoints:
 
 ```bash
-# Build the image
-docker build -t ninjapaws-dojo:vulnerable .
+curl http://localhost:3000/health
+curl http://localhost:3000/api/status
+```
 
-# Run the container
-docker run -p 8080:80 -p 3000:3000 \
-  -e NGINX_VERSION=1.30.3 \
-  -e VULNERABILITY_STATUS=vulnerable \
+### Docker Compose
+
+```bash
+docker compose up --build -d
+curl http://localhost:8080/health
+docker compose logs -f dojo
+docker compose down
+```
+
+The default ports are `8080` for NGINX and `3000` for the direct Node.js endpoint.
+
+### Docker image
+
+```bash
+docker build -t ninjapaws-dojo:vulnerable .
+docker run --rm \
+  -p 8080:80 \
+  -p 3000:3000 \
   ninjapaws-dojo:vulnerable
 ```
 
-## 📱 Application Endpoints
+The Docker build accepts these arguments:
 
-### `/` - Homepage
-Interactive training dashboard displaying:
-- Current NGINX version
-- CVE identifier and status
-- Vulnerability detection status
-- Microsoft Defender workflow integration
-- Educational materials and disclaimers
+| Argument | Default | Purpose |
+|---|---:|---|
+| `UBUNTU_VERSION` | `24.04` | Ubuntu base image tag |
+| `NGINX_VERSION` | `1.30.3` | Pinned NGINX package version |
+| `NODE_MAJOR_VERSION` | `20` | NodeSource major release stream |
+| `VULNERABILITY_STATUS` | `vulnerable` | Training state reported by the app |
+| `PORT` | `3000` | Node.js listening port |
 
-### `/health` - Health Check
-JSON health status endpoint for monitoring systems.
-
-```bash
-curl http://localhost:8080/health
-```
-
-```json
-{
-  "status": "healthy",
-  "timestamp": "2026-08-14T12:34:56.789Z",
-  "environment": "training"
-}
-```
-
-### `/api/status` - Detailed Status
-Comprehensive API status with vulnerability details.
+Example override for a remediation build:
 
 ```bash
-curl http://localhost:8080/api/status
+docker build \
+  --build-arg NGINX_VERSION=1.30.4 \
+  --build-arg VULNERABILITY_STATUS=remediated \
+  -t ninjapaws-dojo:remediated .
 ```
 
-```json
-{
-  "environment": "Ninja Paws Cloud Security Dojo",
-  "status": "running",
-  "nginx_version": "1.30.3",
-  "vulnerability": {
-    "cve_id": "CVE-2026-42533",
-    "status": "vulnerable",
-    "description": "NGINX HTTP/2 CONTINUATION Frames Memory Corruption"
-  },
-  "host": "container-hostname",
-  "platform": "linux",
-  "arch": "x64",
-  "uptime": 1234.56,
-  "timestamp": "2026-08-14T12:34:56.789Z"
-}
-```
+For Compose overrides, copy `.env.example` to `.env.local` and adjust the values. Do not commit credentials or sensitive values.
 
-## 🔄 Workflow: Detect & Remediate
+## Application endpoints
 
-### Step 1: Detect Vulnerability
-1. Push code to main branch
-2. GitHub Actions workflow triggers
-3. Container image built and pushed to ACR
-4. Microsoft Defender for Cloud scans image
-5. Vulnerability detected: ✅ CVE-2026-42533
+- `/` displays the training dashboard.
+- `/health` returns the health state used by container and App Service checks.
+- `/api/status` returns the NGINX version, training state, CVE identifier, platform, and runtime details.
 
-### Step 2: Create Remediation
-1. Create feature branch `fix/cve-2026-42533`
-2. Update Dockerfile: NGINX 1.30.3 → 1.30.4
-3. Update environment variables
-4. Commit and push
-5. Open Pull Request
+## Azure deployment
 
-### Step 3: Validate Remediation
-1. Pull request triggers validation workflow
-2. New container image built with NGINX 1.30.4
-3. Image scanned by Microsoft Defender
-4. Vulnerability remediated: ✅ Status cleared
-5. Review, approve, and merge
+### Azure deploy button
 
-### Step 4: Monitor in Azure
-1. Defender for Cloud confirms remediation
-2. App Service deployment reflects patched version
-3. Health checks validate functionality
-4. Training session demonstrates complete supply chain
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fninjapaw%2Fninjapaws-cloud-security-dojo%2Fmain%2Fazuredeploy.json)
 
-## 📊 GitHub Actions Workflows
+The ARM template provisions an Azure Container Registry, Linux App Service Plan, App Service, user-assigned managed identity, and `AcrPull` role assignment. The App Service pulls from ACR through managed identity; registry admin credentials are disabled.
 
-### `.github/workflows/detect-vulnerability.yml`
-Automatically triggers on:
-- Push to main branch
-- Pull requests to main
-- Manual trigger
-
-Actions:
-- Build Docker image
-- Push to Azure Container Registry
-- Scan with Microsoft Defender for Cloud
-- Generate security report
-
-### `.github/workflows/deploy.yml`
-Automatically triggers on:
-- Merge to main branch
-- Manual trigger
-
-Actions:
-- Build and push image to ACR
-- Deploy to Azure App Service
-- Run health checks
-- Notify deployment status
-
-## 🏗️ Azure Infrastructure
-
-### Bicep Templates
-
-Infrastructure as Code using Bicep for reproducible deployments.
-
-**Resources:**
-- Azure Container Registry (Basic SKU)
-- Azure App Service Plan (Linux)
-- Azure App Service (Container)
-- Managed Identity for authentication
-
-**Deploy:**
+### Deployment script
 
 ```bash
-# Authenticate to Azure
 az login
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
+```
 
-# Create resource group
-az group create \
-  --name ninjapaws-dojo \
-  --location eastus
+Optional arguments are resource group, location, registry name, and App Service name:
 
-# Deploy Bicep template
+```bash
+./scripts/deploy.sh ninjapaws-dojo eastus ninjapawsdojo ninjapaws-dojo-app
+```
+
+The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and fails if the public `/health` endpoint does not become healthy.
+
+### Manual Bicep deployment
+
+```bash
+az login
+az group create --name ninjapaws-dojo --location eastus
 az deployment group create \
-  --name dojo-deployment \
+  --name ninjapaws-dojo-deployment \
   --resource-group ninjapaws-dojo \
   --template-file infra/main.bicep \
   --parameters \
     containerRegistryName=ninjapawsdojo \
-    appServiceName=ninjapaws-dojo
+    appServiceName=ninjapaws-dojo-app \
+    location=eastus
 ```
 
-## 🛠️ Configuration
+### Verify Azure deployment
 
-### Environment Variables
+```bash
+APP_HOST=$(az webapp show \
+  --resource-group ninjapaws-dojo \
+  --name ninjapaws-dojo-app \
+  --query defaultHostName -o tsv)
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `NGINX_VERSION` | `1.30.3` | NGINX version string |
-| `VULNERABILITY_STATUS` | `vulnerable` | Current vulnerability status |
-| `ENVIRONMENT` | `training` | Environment name |
-| `PORT` | `3000` | Node.js application port |
-| `DEFENDER_ENABLED` | `false` | Microsoft Defender monitoring status |
-
-### Docker Compose Override
-
-Create `.env.local` to override:
-
-```env
-NGINX_VERSION=1.30.3
-VULNERABILITY_STATUS=vulnerable
-ENVIRONMENT=training
-PORT=3000
+curl "https://${APP_HOST}/health"
+curl "https://${APP_HOST}/api/status"
+az webapp log tail --resource-group ninjapaws-dojo --name ninjapaws-dojo-app
 ```
 
-## 📚 Learning Objectives
+The GitHub Actions deployment requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` repository secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls.
 
-This dojo teaches:
+### GitHub organization secrets
 
-✅ **Vulnerability Detection**
-- Container scanning
-- Image analysis
-- Security baseline validation
+Add these organization secrets and allow the `ninjapaws-cloud-security-dojo` repository to use them:
 
-✅ **Vulnerability Remediation**
-- Dependency updates
-- Configuration hardening
-- Testing before/after
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | Client ID of the Microsoft Entra application used by GitHub Actions |
+| `AZURE_TENANT_ID` | Microsoft Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID containing the dojo resources |
 
-✅ **Secure Supply Chain**
-- GitHub Advanced Security
-- Container registry security
-- Image signing and validation
+Configure federated credentials on the Entra application for this GitHub repository and each deployment branch: `main` and `fix/cve-2026-42533`. Do not create or store an Azure client secret for this workflow.
 
-✅ **Code-to-Runtime Visibility**
-- Application instrumentation
-- Health monitoring
-- Defender integration
+The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the deployment identity needs Contributor plus permission to write role assignments at the deployment scope. The optional detection-workflow ACR publication also requires `AcrPush` on `ninjapawsdojo`.
 
-✅ **Container Image Security**
-- Layer analysis
-- Dependency scanning
-- CVE tracking
+### Azure cleanup
 
-✅ **GitHub Security Workflows**
-- Secret scanning
-- Dependency alerts
-- Pull request validation
+Training resources incur charges while running. Delete the resource group when finished:
 
-✅ **Microsoft Defender Capabilities**
-- Defender for Cloud
-- Defender for DevOps
-- Container image scanning
-
-## 🚫 What This Is NOT
-
-This repository explicitly does **NOT** demonstrate:
-
-- ❌ Exploitation techniques
-- ❌ Offensive security methods
-- ❌ Attack payloads or proof-of-concepts
-- ❌ Privilege escalation
-- ❌ Denial of service attacks
-- ❌ Malware creation
-- ❌ Vulnerability weaponization
-
-**Defensive guidance only.**
-
-## 🔐 Security Standards
-
-### Repository Protections
-
-- ✅ No customer data
-- ✅ No business-sensitive information
-- ✅ No production credentials
-- ✅ No API keys or tokens
-- ✅ No subscription IDs or tenant IDs
-- ✅ No connection strings
-- ✅ No certificates or private keys
-- ✅ No private endpoint configurations
-
-All sensitive values use placeholders and environment variables.
-
-### Branch Protections
-
-```
-main branch:
-  - Require pull request reviews
-  - Require status checks to pass
-  - Require branches to be up to date
-  - Include administrators
+```bash
+az group delete --name ninjapaws-dojo --yes --no-wait
 ```
 
-## 📋 Pull Request Template
+## Detection and remediation workflow
 
-All pull requests include:
-- Summary of changes
-- Purpose and training objective
-- Security impact assessment
-- Before/after versions
-- Validation steps
-- Defender for Cloud validation notes
+1. Build the default vulnerable image.
+2. Analyze source with GitHub Advanced Security and scan trusted images with Defender for Cloud after pushing to ACR.
+3. Create a remediation branch.
+4. Change `ARG NGINX_VERSION=1.30.3` to `ARG NGINX_VERSION=1.30.4` or newer.
+5. Set `VULNERABILITY_STATUS=remediated` for the patched training image.
+6. Build and test the patched image.
+7. Open a pull request and review the remediation workflow results.
+8. Merge only after the actual package version, runtime status, endpoints, and security scan pass.
 
-Example PR for remediation:
+The relevant workflows are:
 
-```markdown
-## Summary
-Update NGINX from 1.30.3 (vulnerable) to 1.30.4 (patched)
+- `.github/workflows/detect-vulnerability.yml`: builds and scans the default image.
+- `.github/workflows/validate-remediation.yml`: scans the PR image, checks the actual NGINX version, tests endpoints, and verifies remediated runtime state.
+- `.github/workflows/deploy.yml`: provisions or updates Azure, pushes the image, and runs a health check.
 
-## Purpose
-Demonstrate vulnerability remediation and validation workflow
+### Security integrations
 
-## Security Impact
-- Fixes CVE-2026-42533
-- No breaking changes
-- Backward compatible
+- **GitHub Advanced Security:** enable code scanning for the repository. The detection workflow runs CodeQL for JavaScript source analysis.
+- **Microsoft Defender for DevOps:** in the Azure Defender for Cloud environment settings, connect the GitHub organization/repository as a DevOps connector. Defender for DevOps then evaluates the connected repository and reports findings in Azure.
+- **Microsoft Defender for Cloud:** configure the Azure OIDC secrets listed above and grant the federated identity `AcrPush` on the registry. On trusted pushes, the detection workflow publishes the image to ACR; Defender for Cloud scans the pushed image and reports container findings in Azure.
 
-## Versions
-- Before: NGINX 1.30.3
-- After: NGINX 1.30.4
+The GitHub workflow does not attempt to replace Azure onboarding. GitHub permissions, the Azure connector, Defender plans, and ACR scanning must be enabled in their respective services.
 
-## Validation
-- [ ] Image builds successfully
-- [ ] Health checks pass
-- [ ] Defender for Cloud confirms no vulnerabilities
-- [ ] Application functionality verified
+## Training exercises
 
-## Defender Notes
-Vulnerability status changes from "vulnerable" to "remediated"
+### Detection
+
+```bash
+docker build -t ninjapaws-dojo:scan .
+curl http://localhost:8080/api/status | jq '.vulnerability'
 ```
 
-## 🎓 Hands-On Exercises
+### Remediation
 
-### Exercise 1: Detect Vulnerability
-**Objective:** Understand how automated scanning detects vulnerabilities
+Create a branch, update the NGINX build argument and status, then rebuild:
 
-**Steps:**
-1. Clone repository
-2. Review main branch with NGINX 1.30.3
-3. Observe GitHub Actions workflow execution
-4. Check Microsoft Defender for Cloud findings
-5. Document discovered vulnerabilities
+```bash
+git checkout -b fix/cve-2026-42533
+docker build \
+  --build-arg NGINX_VERSION=1.30.4 \
+  --build-arg VULNERABILITY_STATUS=remediated \
+  -t ninjapaws-dojo:remediated .
+```
 
-### Exercise 2: Create Remediation
-**Objective:** Apply security updates and validate
+Run the image and verify `/health`, `/api/status`, and the NGINX package version before opening a pull request.
 
-**Steps:**
-1. Create feature branch from main
-2. Update Dockerfile NGINX version to 1.30.4
-3. Update environment variables
-4. Commit with security context in message
-5. Push and create pull request
+### Reporting
 
-### Exercise 3: Validate Fix
-**Objective:** Confirm remediation through automated checks
+Record the image tag, scanner, timestamp, package version, vulnerability result, remediation change, and endpoint validation results in the pull request. Never include secrets, customer data, or private infrastructure details.
 
-**Steps:**
-1. Review pull request
-2. Monitor GitHub Actions workflow
-3. Check Microsoft Defender scan results
-4. Verify vulnerability is resolved
-5. Approve and merge
+## Troubleshooting
 
-### Exercise 4: Deploy & Monitor
-**Objective:** Deploy to Azure and monitor with Defender
+- Port already in use: change the host side of the Compose mapping, such as `9999:80`.
+- App does not respond: run `docker compose ps` and `docker compose logs dojo`.
+- Image does not build: retry with `docker build --no-cache`, then check network access to Ubuntu, NGINX, NodeSource, and npm registries.
+- Azure image pull failure: verify the App Service identity has `AcrPull`, the image exists in ACR, and `WEBSITES_PORT` is `80`.
+- Azure health failure: inspect App Service logs and confirm NGINX forwards to Node.js on port `3000`.
 
-**Steps:**
-1. Monitor main branch deployment
-2. Check Azure App Service status
-3. Review Defender for Cloud dashboard
-4. Verify application health
-5. Document complete workflow
+## Security and legal information
 
-## 🌐 Use Cases
+This is an independent community project, not a Microsoft product, and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names remain the property of Microsoft Corporation.
 
-### Conference Demonstrations
-- Live demo of complete security workflow
-- 15-30 minute presentation
-- Show detection → remediation → validation
-- Audience can follow along
+The project is for authorized, non-production, defensive security training only. It intentionally contains a vulnerable training state and must not be exposed to untrusted users or used with real customer data, credentials, or production systems. See [SECURITY.md](SECURITY.md) for reporting guidance.
 
-### Security Training
-- 2-4 hour hands-on workshop
-- Multiple parallel exercises
-- Step-by-step guidance
-- Real-world scenario simulation
+## License
 
-### Customer Workshops
-- Demonstrate security best practices
-- Show integration possibilities
-- Discuss architecture patterns
-- Plan customer implementations
-
-### Community Events
-- Beginners-friendly security intro
-- Public repository for learning
-- Self-paced training materials
-- Starter template for advanced scenarios
-
-## 📞 Support
-
-- **Documentation:** See `/docs` folder
-- **Issues:** GitHub Issues for questions and improvements
-- **Discussions:** GitHub Discussions for general topics
-- **Contributing:** Pull requests welcome (see `CONTRIBUTING.md`)
-
-## 📄 License
-
-MIT License - See LICENSE file
-
----
-
-## 🐾 Branding Guide
-
-**Ninja Paws Consulting** | Cloud Security Training Environment
-
-### Terminology
-
-| Term | Emoji | Usage |
-|------|-------|-------|
-| Ninja | 🥷 | Speed, precision, skill |
-| Defender | 🛡 | Protection, monitoring |
-| Paws | 🐾 | Identity, friendly approach |
-| Dojo | 🏯 | Training, learning |
-| Remediation Mission | ⚔️ | Challenge, objective |
-| Security Validation | ✅ | Success, completion |
-
-### Colors
-
-- Primary: Navy Blue (#1e3c72)
-- Secondary: Cyan Blue (#2a5298)
-- Success: Green (#28a745)
-- Warning: Orange (#ffc107)
-- Danger: Red (#dc3545)
-
-### Tone
-
-Professional, educational, approachable, and encouraging.
-
----
-
-**Built with 🥷 for cloud security professionals worldwide**
+This project is licensed under the [MIT License](LICENSE).

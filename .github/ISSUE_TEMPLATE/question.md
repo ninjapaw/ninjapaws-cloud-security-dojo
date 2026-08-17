@@ -9,7 +9,7 @@ body:
       value: |
         Have a question? We're here to help!
         
-        💡 **Tip:** Check the [README](README.md) and [documentation](docs/) first.
+        💡 **Tip:** Check the [README](README.md) and [security policy](../../SECURITY.md) first.
         
         For discussions, you might prefer using [GitHub Discussions](../../discussions).
 

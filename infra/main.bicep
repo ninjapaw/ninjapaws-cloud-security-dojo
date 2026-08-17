@@ -4,7 +4,6 @@ param appServiceName string
 param appServicePlanName string = '${appServiceName}-plan'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
-param environment string = 'training'
 
 // Azure Container Registry
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -69,22 +68,20 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
       alwaysOn: true
       http20Enabled: true
       minTlsVersion: '1.2'
+      acrUseManagedIdentityCreds: true
+      acrUserManagedIdentityID: managedIdentity.properties.clientId
       appSettings: [
         {
           name: 'DOCKER_REGISTRY_SERVER_URL'
           value: 'https://${containerRegistry.properties.loginServer}'
         }
         {
-          name: 'DOCKER_REGISTRY_SERVER_USERNAME'
-          value: ''
-        }
-        {
-          name: 'DOCKER_REGISTRY_SERVER_PASSWORD'
-          value: ''
-        }
-        {
           name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
           value: 'false'
+        }
+        {
+          name: 'WEBSITES_PORT'
+          value: '80'
         }
         {
           name: 'NGINX_VERSION'
@@ -93,10 +90,6 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
         {
           name: 'VULNERABILITY_STATUS'
           value: 'vulnerable'
-        }
-        {
-          name: 'ENVIRONMENT'
-          value: environment
         }
         {
           name: 'PORT'
@@ -113,31 +106,6 @@ resource healthCheck 'Microsoft.Web/sites/config@2023-01-01' = {
   name: 'web'
   properties: {
     healthCheckPath: '/health'
-  }
-}
-
-// Diagnostic Settings for App Service
-resource diagnosticSettings 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  scope: appService
-  name: '${appServiceName}-diagnostics'
-  properties: {
-    workspaceId: ''
-    logs: [
-      {
-        category: 'AppServiceHTTPLogs'
-        enabled: true
-      }
-      {
-        category: 'AppServiceConsoleLogs'
-        enabled: true
-      }
-    ]
-    metrics: [
-      {
-        category: 'AllMetrics'
-        enabled: true
-      }
-    ]
   }
 }
 

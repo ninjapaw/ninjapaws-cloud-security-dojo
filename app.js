@@ -2,48 +2,43 @@
 
 const express = require('express');
 const os = require('os');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const DEFAULT_NGINX_VERSION = '1.30.3';
+const DEFAULT_VULNERABILITY_STATUS = 'vulnerable';
+const CVE_ID = 'CVE-2026-42533';
+const VULNERABILITY_DESCRIPTION = 'NGINX HTTP/2 CONTINUATION Frames Memory Corruption';
 
-// Middleware
-app.set('view engine', 'html');
-app.engine('html', (filepath, options, callback) => {
-  fs.readFile(filepath, (err, content) => {
-    if (err) return callback(err);
-    const rendered = content.toString();
-    return callback(null, rendered);
-  });
-});
-
-// Static files
-app.use(express.static('public'));
+function getRuntimeStatus() {
+  return {
+    nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
+    vulnerabilityStatus: process.env.VULNERABILITY_STATUS || DEFAULT_VULNERABILITY_STATUS,
+    defenderEnabled: process.env.DEFENDER_ENABLED === 'true'
+  };
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    environment: process.env.ENVIRONMENT || 'training'
+    environment: 'training'
   });
 });
 
 // API status endpoint
 app.get('/api/status', (req, res) => {
-  const nginxVersion = process.env.NGINX_VERSION || '1.30.3';
-  const vulnerabilityStatus = process.env.VULNERABILITY_STATUS || 'vulnerable';
-  const cveId = 'CVE-2026-42533';
+  const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
   
   res.json({
     environment: 'Ninja Paws Cloud Security Dojo',
     status: 'running',
     nginx_version: nginxVersion,
     vulnerability: {
-      cve_id: cveId,
+      cve_id: CVE_ID,
       status: vulnerabilityStatus,
-      description: 'NGINX HTTP/2 CONTINUATION Frames Memory Corruption'
+      description: VULNERABILITY_DESCRIPTION
     },
     host: os.hostname(),
     platform: os.platform(),
@@ -55,10 +50,7 @@ app.get('/api/status', (req, res) => {
 
 // Home endpoint
 app.get('/', (req, res) => {
-  const nginxVersion = process.env.NGINX_VERSION || '1.30.3';
-  const vulnerabilityStatus = process.env.VULNERABILITY_STATUS || 'vulnerable';
-  const defenderfEnabled = process.env.DEFENDER_ENABLED === 'true';
-  const cveId = 'CVE-2026-42533';
+  const { nginxVersion, vulnerabilityStatus, defenderEnabled } = getRuntimeStatus();
 
   const html = `
 <!DOCTYPE html>
@@ -299,7 +291,7 @@ app.get('/', (req, res) => {
         </div>
         <div class="status-item">
           <div class="status-label">CVE Identifier</div>
-          <div class="status-value">${cveId}</div>
+          <div class="status-value">${CVE_ID}</div>
         </div>
         <div class="status-item">
           <div class="status-label">Vulnerability Status</div>
@@ -309,7 +301,7 @@ app.get('/', (req, res) => {
         </div>
         <div class="status-item">
           <div class="status-label">Defender Enabled</div>
-          <div class="status-value">${defenderfEnabled ? '✅ Yes' : '⏳ Monitoring'}</div>
+          <div class="status-value">${defenderEnabled ? '✅ Yes' : '⏳ Monitoring'}</div>
         </div>
       </div>
     </div>
@@ -319,14 +311,14 @@ app.get('/', (req, res) => {
         ${vulnerabilityStatus === 'vulnerable' ? '⚠️ Vulnerable Version Detected' : '✅ Vulnerability Remediated'}
       </div>
       <div class="alert-text">
-        <strong>CVE-2026-42533:</strong> NGINX HTTP/2 CONTINUATION Frames Memory Corruption
+        <strong>${CVE_ID}:</strong> ${VULNERABILITY_DESCRIPTION}
         <br>
         ${vulnerabilityStatus === 'vulnerable' 
           ? 'This training environment intentionally contains a vulnerable software version (NGINX 1.30.3) for educational detection and remediation demonstrations.'
           : 'This version has been patched. NGINX is now at version 1.30.4 or later with the vulnerability remediated.'
         }
       </div>
-      ${defenderfEnabled ? '<span class="defender-badge">🛡 Microsoft Defender Monitoring Active</span>' : ''}
+      ${defenderEnabled ? '<span class="defender-badge">🛡 Microsoft Defender Monitoring Active</span>' : ''}
     </div>
 
     <div class="endpoints">
@@ -344,12 +336,15 @@ app.get('/', (req, res) => {
         This environment is part of the Ninja Paws Cloud Security Dojo training program. It intentionally contains a vulnerable software version for educational detection and remediation demonstrations. This repository contains no customer data, production credentials, or business-sensitive information. All values are examples and placeholders only.
       </div>
       <div style="margin-top: 10px;">
+        This is an independent community project, not a Microsoft product, and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names belong to Microsoft Corporation.
+      </div>
+      <div style="margin-top: 10px;">
         <strong>🎯 Learning Objectives:</strong> Vulnerability detection, remediation, secure supply chains, container security, and Microsoft Defender for Cloud capabilities.
       </div>
     </div>
 
     <div class="footer">
-      <p>🐾 Ninja Paws Consulting | Cloud Security Training Environment</p>
+      <p>🐾 Ninja Paws | Cloud Security Training Environment</p>
       <p>For Conferences • Workshops • Community Events • Training Sessions</p>
     </div>
   </div>

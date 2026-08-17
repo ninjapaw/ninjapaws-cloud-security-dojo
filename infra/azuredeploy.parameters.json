@@ -13,9 +13,6 @@
     },
     "appServicePlanName": {
       "value": "ninjapaws-dojo-plan"
-    },
-    "environment": {
-      "value": "training"
     }
   }
 }

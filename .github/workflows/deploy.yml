@@ -7,110 +7,128 @@ on:
       - fix/cve-2026-42533
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Environment to deploy to'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+        type: string
 
-env:
-  REGISTRY: myregistry.azurecr.io
-  IMAGE_NAME: ninjapaws-dojo
-  RESOURCE_GROUP: ninjapaws-dojo
-  APP_SERVICE_NAME: ninjapaws-dojo-app
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    env:
+      RESOURCE_GROUP: ninjapaws-dojo
+      LOCATION: eastus
+      CONTAINER_REGISTRY_NAME: ninjapawsdojo
+      APP_SERVICE_NAME: ninjapaws-dojo-app
+      IMAGE_NAME: ninjapaws-dojo
+      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
 
     steps:
       - name: 🥷 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🔐 Azure Login (Federated Identity)
-        uses: azure/login@v1
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: 🏗️ Create/validate Azure resource group
+        run: |
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --output table
+
+      - name: 🧱 Deploy Azure infrastructure
+        run: |
+          az deployment group create \
+            --name "ninjapaws-${{ github.run_id }}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters \
+              location="$LOCATION" \
+              containerRegistryName="$CONTAINER_REGISTRY_NAME" \
+              appServiceName="$APP_SERVICE_NAME" \
+            --output table
+
       - name: 🛠️ Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔑 Login to Azure Container Registry
+      - name: 🔑 Get ACR login server
         run: |
-          az acr login --name ${REGISTRY%%.*}
+          ACR_LOGIN_SERVER=$(az acr show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_REGISTRY_NAME" --query loginServer -o tsv)
+          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> "$GITHUB_ENV"
 
-      - name: 🏗️ Build and Push Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
-      - name: 🔍 Scan Image with Defender for Cloud
+      - name: 🐳 Build and push image to ACR
         run: |
-          echo "Image pushed to ACR: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          echo "Microsoft Defender for Cloud will automatically scan this image"
-          echo "Check Azure Portal > Defender for Cloud > Container registries for results"
+          az acr login --name "$CONTAINER_REGISTRY_NAME"
+          docker build \
+            --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
+            --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest" \
+            .
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG"
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest"
 
-      - name: 🚀 Deploy to Azure App Service
+      - name: 🚀 Configure App Service container image
         run: |
           az webapp config container set \
-            --name ${{ env.APP_SERVICE_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --docker-custom-image-name ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            --docker-registry-server-url https://${{ env.REGISTRY }} \
-            --docker-registry-server-username $(az account show --query clientId -o tsv) \
-            --docker-registry-server-password $(az account get-access-token --query accessToken -o tsv)
+            --name "$APP_SERVICE_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --docker-custom-image-name "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
+            --docker-registry-server-url "https://$ACR_LOGIN_SERVER"
 
-      - name: ⏳ Wait for deployment
+      - name: ⚙️ Set app settings
         run: |
-          echo "Waiting for App Service to pull and start new image..."
-          sleep 30
+          az webapp config appsettings set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_SERVICE_NAME" \
+            --settings \
+              WEBSITES_PORT=80 \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
+              NGINX_VERSION=1.30.3 \
+              VULNERABILITY_STATUS=vulnerable \
+              PORT=3000 \
+              DOCKER_REGISTRY_SERVER_URL="https://$ACR_LOGIN_SERVER"
 
-      - name: 🏥 Health Check
+      - name: ♻️ Restart the app
         run: |
-          HEALTH_ENDPOINT="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net/health"
+          az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME"
+
+      - name: 🏥 Health check
+        run: |
+          HEALTH_ENDPOINT="https://${APP_SERVICE_NAME}.azurewebsites.net/health"
           echo "Checking health endpoint: $HEALTH_ENDPOINT"
-          
-          for i in {1..10}; do
-            echo "Attempt $i/10..."
-            if curl -sf "$HEALTH_ENDPOINT" > /dev/null; then
+          for i in {1..12}; do
+            if curl -fsS "$HEALTH_ENDPOINT" > /dev/null; then
               echo "✅ Application is healthy"
-              curl -s "$HEALTH_ENDPOINT" | jq '.'
+              curl -fsS "$HEALTH_ENDPOINT"
               exit 0
             fi
+            echo "Attempt $i/12 - waiting for the app to respond..."
             sleep 10
           done
-          
           echo "❌ Application health check failed"
           exit 1
 
-      - name: 📊 Get Deployment Info
+      - name: 📊 Deployment summary
         run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Application:** ${{ env.APP_SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**URL:** https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Defender for Cloud:** Check Azure Portal for image scanning results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Resource group:** $RESOURCE_GROUP" >> "$GITHUB_STEP_SUMMARY"
+          echo "**App Service:** $APP_SERVICE_NAME" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Container registry:** $CONTAINER_REGISTRY_NAME" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Image:** $ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "**URL:** https://${APP_SERVICE_NAME}.azurewebsites.net" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 📢 Notify Deployment
-        if: always()
+      - name: 📢 Deployment status comment
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -120,4 +138,4 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: `${status} **Deployment Status:** ${{ job.status }}\n\n**App Service:** https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net`
-            }) || console.log('Not a PR context');
+            }).catch(() => console.log('Not a PR context'));
