@@ -1,4 +1,4 @@
-param location string = 'eastus'
+param location string = 'centralus'
 param containerRegistryName string = 'ninjapawsdojo'
 param appServiceName string = 'ninjapaws-dojo-app'
 param appServicePlanName string = 'ninjapaws-dojo-plan'

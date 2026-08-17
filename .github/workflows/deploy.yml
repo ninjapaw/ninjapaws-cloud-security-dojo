@@ -21,8 +21,8 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     env:
-      RESOURCE_GROUP: ninjapaws-dojo
-      LOCATION: eastus
+      RESOURCE_GROUP: NP-ninjapaws-dojo-CentralUS
+      LOCATION: centralus
       CONTAINER_REGISTRY_NAME: ninjapawsdojo
       APP_SERVICE_NAME: ninjapaws-dojo-app
       IMAGE_NAME: ninjapaws-dojo

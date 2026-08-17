@@ -133,7 +133,7 @@ chmod +x scripts/deploy.sh
 Optional arguments are resource group, location, registry name, and App Service name:
 
 ```bash
-./scripts/deploy.sh ninjapaws-dojo eastus ninjapawsdojo ninjapaws-dojo-app
+./scripts/deploy.sh NP-ninjapaws-dojo-CentralUS centralus ninjapawsdojo ninjapaws-dojo-app
 ```
 
 The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and fails if the public `/health` endpoint does not become healthy.
@@ -142,28 +142,28 @@ The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR
 
 ```bash
 az login
-az group create --name ninjapaws-dojo --location eastus
+az group create --name NP-ninjapaws-dojo-CentralUS --location centralus
 az deployment group create \
   --name ninjapaws-dojo-deployment \
-  --resource-group ninjapaws-dojo \
+  --resource-group NP-ninjapaws-dojo-CentralUS \
   --template-file infra/main.bicep \
   --parameters \
     containerRegistryName=ninjapawsdojo \
     appServiceName=ninjapaws-dojo-app \
-    location=eastus
+    location=centralus
 ```
 
 ### Verify Azure deployment
 
 ```bash
 APP_HOST=$(az webapp show \
-  --resource-group ninjapaws-dojo \
+  --resource-group NP-ninjapaws-dojo-CentralUS \
   --name ninjapaws-dojo-app \
   --query defaultHostName -o tsv)
 
 curl "https://${APP_HOST}/health"
 curl "https://${APP_HOST}/api/status"
-az webapp log tail --resource-group ninjapaws-dojo --name ninjapaws-dojo-app
+az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
 ```
 
 The GitHub Actions deployment requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` repository secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls.
@@ -187,13 +187,13 @@ The deployment identity needs permission to deploy the Bicep resources and creat
 Training resources incur charges while running. Delete the resource group when finished:
 
 ```bash
-az group delete --name ninjapaws-dojo --yes --no-wait
+az group delete --name NP-ninjapaws-dojo-CentralUS --yes --no-wait
 ```
 
 ## Detection and remediation workflow
 
 1. Build the default vulnerable image.
-2. Analyze source with GitHub Advanced Security and scan trusted images with Defender for Cloud after pushing to ACR.
+2. Let GitHub Advanced Security analyze source and Defender for Cloud scan trusted images after the deployment workflow pushes them to ACR.
 3. Create a remediation branch.
 4. Change `ARG NGINX_VERSION=1.30.3` to `ARG NGINX_VERSION=1.30.4` or newer.
 5. Set `VULNERABILITY_STATUS=remediated` for the patched training image.
@@ -201,19 +201,18 @@ az group delete --name ninjapaws-dojo --yes --no-wait
 7. Open a pull request and review the remediation workflow results.
 8. Merge only after the actual package version, runtime status, endpoints, and security scan pass.
 
-The relevant workflows are:
+The repository workflows are:
 
-- `.github/workflows/detect-vulnerability.yml`: builds and scans the default image.
-- `.github/workflows/validate-remediation.yml`: scans the PR image, checks the actual NGINX version, tests endpoints, and verifies remediated runtime state.
+- `.github/workflows/validate-remediation.yml`: builds the PR image, checks the actual NGINX version, tests endpoints, and verifies remediated runtime state.
 - `.github/workflows/deploy.yml`: provisions or updates Azure, pushes the image, and runs a health check.
 
 ### Security integrations
 
-- **GitHub Advanced Security:** enable code scanning for the repository. The detection workflow runs CodeQL for JavaScript source analysis.
+- **GitHub Advanced Security:** enable CodeQL default setup or an organization code-security configuration for this repository. GitHub then analyzes JavaScript source without a repository-owned CodeQL workflow.
 - **Microsoft Defender for DevOps:** in the Azure Defender for Cloud environment settings, connect the GitHub organization/repository as a DevOps connector. Defender for DevOps then evaluates the connected repository and reports findings in Azure.
-- **Microsoft Defender for Cloud:** configure the Azure OIDC secrets listed above and grant the federated identity `AcrPush` on the registry. On trusted pushes, the detection workflow publishes the image to ACR; Defender for Cloud scans the pushed image and reports container findings in Azure.
+- **Microsoft Defender for Cloud:** enable the Defender plan for Container Registries. The deployment workflow publishes trusted images to ACR; Defender for Cloud scans the pushed image and reports container findings in Azure.
 
-The GitHub workflow does not attempt to replace Azure onboarding. GitHub permissions, the Azure connector, Defender plans, and ACR scanning must be enabled in their respective services.
+These integrations are configured in GitHub and Azure, not in application code. GitHub permissions, the Azure connector, Defender plans, and ACR scanning must be enabled in their respective services.
 
 ## Training exercises
 

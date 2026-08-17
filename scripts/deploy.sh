@@ -11,8 +11,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-RESOURCE_GROUP=${1:-ninjapaws-dojo}
-LOCATION=${2:-eastus}
+RESOURCE_GROUP=${1:-NP-ninjapaws-dojo-CentralUS}
+LOCATION=${2:-centralus}
 REGISTRY_NAME=${3:-ninjapawsdojo}
 ACR_NAME=${REGISTRY_NAME//-/}
 APP_SERVICE_NAME=${4:-ninjapaws-dojo-app}
