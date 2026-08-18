@@ -32,10 +32,10 @@ jobs:
     environment: deployment-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
     env:
       DEPLOY_ENVIRONMENT: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
-      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || (github.ref_name == 'main' && 'NP-ninjapaws-dojo-CentralUS' || 'NP-ninjapaws-dojo-dev-CentralUS') }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || (github.ref_name == 'main' && 'NP-ninjapaws-dojo-CentralUS' || '') }}
       LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
-      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME || (github.ref_name == 'main' && 'ninjapawsdojo' || 'ninjapawsdojodev') }}
-      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME || (github.ref_name == 'main' && 'ninjapaws-dojo-app' || 'ninjapaws-dojo-app-dev') }}
+      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME || (github.ref_name == 'main' && 'ninjapawsdojo' || '') }}
+      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME || (github.ref_name == 'main' && 'ninjapaws-dojo-app' || '') }}
       IMAGE_NAME: ninjapaws-dojo
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
 
@@ -60,6 +60,11 @@ jobs:
             echo "::error title=Branch and environment mismatch::Branch '$SOURCE_REF' maps to $detected, not $DEPLOY_ENVIRONMENT."
             exit 1
           fi
+
+          # Non-production targets have no implicit resource names, so nothing is provisioned by accident.
+          : "${RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in the deployment-$DEPLOY_ENVIRONMENT Environment}"
+          : "${CONTAINER_REGISTRY_NAME:?Set AZURE_CONTAINER_REGISTRY_NAME in the deployment-$DEPLOY_ENVIRONMENT Environment}"
+          : "${APP_SERVICE_NAME:?Set AZURE_APP_SERVICE_NAME in the deployment-$DEPLOY_ENVIRONMENT Environment}"
 
           echo "Deploying '$SOURCE_REF' to the $DEPLOY_ENVIRONMENT environment." >> "$GITHUB_STEP_SUMMARY"
 
