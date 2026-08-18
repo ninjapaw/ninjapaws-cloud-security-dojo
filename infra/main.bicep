@@ -30,7 +30,7 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: containerRegistry
   name: guid(containerRegistry.id, managedIdentity.id, 'acrPull')
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-e8e2c1d662d4')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
     principalId: managedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
