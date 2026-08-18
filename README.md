@@ -138,6 +138,28 @@ Optional arguments are resource group, location, registry name, and App Service 
 
 The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and fails if the public `/health` endpoint does not become healthy.
 
+### Configure GitHub OIDC and Azure roles
+
+To create or reuse the Entra application, add the GitHub federated credential, assign the deployment roles, create the resource group, and deploy the infrastructure in one idempotent command:
+
+```bash
+chmod +x scripts/setup-azure-github-oidc.sh
+./scripts/setup-azure-github-oidc.sh
+```
+
+Optional arguments are resource group, location, registry name, App Service name, repository, and Entra application display name:
+
+```bash
+./scripts/setup-azure-github-oidc.sh \
+  NP-ninjapaws-dojo-CentralUS \
+  centralus \
+  ninjapawsdojo \
+  ninjapaws-dojo-app \
+  ninjapaw/ninjapaws-cloud-security-dojo
+```
+
+The script prints the three non-secret values to add as organization secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. It creates no client secret. The executing identity must be allowed to create app registrations, assign Azure roles, and deploy the resource group infrastructure.
+
 ### Manual Bicep deployment
 
 ```bash
