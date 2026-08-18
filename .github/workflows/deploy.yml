@@ -1,8 +1,16 @@
 name: ⚔️ Deploy to Azure
 
 on:
+  push:
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
+      environment:
+        description: GitHub Environment to deploy (leave as auto-detect to infer from the branch)
+        required: false
+        default: auto-detect
+        type: choice
+        options: [auto-detect, development, production]
       image_tag:
         description: 'Docker image tag to deploy'
         required: false
@@ -13,20 +21,47 @@ permissions:
   contents: read
   id-token: write
 
+# dev maps to development, main maps to production.
+concurrency:
+  group: deploy-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: deployment-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
     env:
-      RESOURCE_GROUP: NP-ninjapaws-dojo-CentralUS
-      LOCATION: centralus
-      CONTAINER_REGISTRY_NAME: ninjapawsdojo
-      APP_SERVICE_NAME: ninjapaws-dojo-app
+      DEPLOY_ENVIRONMENT: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || (github.ref_name == 'main' && 'NP-ninjapaws-dojo-CentralUS' || 'NP-ninjapaws-dojo-dev-CentralUS') }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME || (github.ref_name == 'main' && 'ninjapawsdojo' || 'ninjapawsdojodev') }}
+      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME || (github.ref_name == 'main' && 'ninjapaws-dojo-app' || 'ninjapaws-dojo-app-dev') }}
       IMAGE_NAME: ninjapaws-dojo
-      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
+      IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
 
     steps:
       - name: 🥷 Checkout repository
         uses: actions/checkout@v4
+
+      - name: 🧭 Verify branch matches environment
+        env:
+          SOURCE_REF: ${{ github.ref_name }}
+        run: |
+          case "$SOURCE_REF" in
+            main) detected=production ;;
+            dev) detected=development ;;
+            *)
+              echo "::error title=Unsupported branch::Deploy from 'dev' (development) or 'main' (production), not '$SOURCE_REF'."
+              exit 1
+              ;;
+          esac
+
+          if [[ "$DEPLOY_ENVIRONMENT" != "$detected" ]]; then
+            echo "::error title=Branch and environment mismatch::Branch '$SOURCE_REF' maps to $detected, not $DEPLOY_ENVIRONMENT."
+            exit 1
+          fi
+
+          echo "Deploying '$SOURCE_REF' to the $DEPLOY_ENVIRONMENT environment." >> "$GITHUB_STEP_SUMMARY"
 
       - name: 🔐 Azure Login
         uses: azure/login@v2
@@ -118,6 +153,7 @@ jobs:
         run: |
           echo "## 🚀 Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Environment:** $DEPLOY_ENVIRONMENT" >> "$GITHUB_STEP_SUMMARY"
           echo "**Resource group:** $RESOURCE_GROUP" >> "$GITHUB_STEP_SUMMARY"
           echo "**App Service:** $APP_SERVICE_NAME" >> "$GITHUB_STEP_SUMMARY"
           echo "**Container registry:** $CONTAINER_REGISTRY_NAME" >> "$GITHUB_STEP_SUMMARY"
