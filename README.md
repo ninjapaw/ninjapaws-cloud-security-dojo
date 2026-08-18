@@ -166,7 +166,7 @@ curl "https://${APP_HOST}/api/status"
 az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
 ```
 
-The GitHub Actions deployment requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` repository secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls.
+The GitHub Actions deployment is manual-only and requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` organization secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad organization secret cannot fail every push.
 
 ### GitHub organization secrets
 
@@ -178,7 +178,7 @@ Add these organization secrets and allow the `ninjapaws-cloud-security-dojo` rep
 | `AZURE_TENANT_ID` | Microsoft Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID containing the dojo resources |
 
-Configure federated credentials on the Entra application for this GitHub repository and each deployment branch: `main` and `fix/cve-2026-42533`. Do not create or store an Azure client secret for this workflow.
+Configure a federated credential on the Entra application for this GitHub repository's `main` branch. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow.
 
 The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the deployment identity needs Contributor plus permission to write role assignments at the deployment scope. The optional detection-workflow ACR publication also requires `AcrPush` on `ninjapawsdojo`.
 

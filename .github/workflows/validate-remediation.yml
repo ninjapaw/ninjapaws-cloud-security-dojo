@@ -34,6 +34,9 @@ jobs:
           push: false
           load: true
           tags: ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            NGINX_VERSION=1.30.4
+            VULNERABILITY_STATUS=remediated
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
