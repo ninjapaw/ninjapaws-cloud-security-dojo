@@ -10,7 +10,7 @@ on:
         required: false
         default: auto-detect
         type: choice
-        options: [auto-detect, development, production]
+        options: [auto-detect, dev, prod]
       image_tag:
         description: 'Docker image tag to deploy'
         required: false
@@ -21,17 +21,17 @@ permissions:
   contents: read
   id-token: write
 
-# dev maps to development, main maps to production.
+# Branch dev uses the dev environment, branch main uses the prod environment.
 concurrency:
-  group: deploy-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
+  group: deploy-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
   cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    environment: deployment-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
+    environment: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
     env:
-      DEPLOY_ENVIRONMENT: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'production' || 'development') }}
+      DEPLOY_ENVIRONMENT: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || (github.ref_name == 'main' && 'NP-ninjapaws-dojo-CentralUS' || '') }}
       LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
       CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME || (github.ref_name == 'main' && 'ninjapawsdojo' || '') }}
@@ -48,10 +48,10 @@ jobs:
           SOURCE_REF: ${{ github.ref_name }}
         run: |
           case "$SOURCE_REF" in
-            main) detected=production ;;
-            dev) detected=development ;;
+            main) detected=prod ;;
+            dev) detected=dev ;;
             *)
-              echo "::error title=Unsupported branch::Deploy from 'dev' (development) or 'main' (production), not '$SOURCE_REF'."
+              echo "::error title=Unsupported branch::Deploy from 'dev' or 'main', not '$SOURCE_REF'."
               exit 1
               ;;
           esac
@@ -62,9 +62,9 @@ jobs:
           fi
 
           # Non-production targets have no implicit resource names, so nothing is provisioned by accident.
-          : "${RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in the deployment-$DEPLOY_ENVIRONMENT Environment}"
-          : "${CONTAINER_REGISTRY_NAME:?Set AZURE_CONTAINER_REGISTRY_NAME in the deployment-$DEPLOY_ENVIRONMENT Environment}"
-          : "${APP_SERVICE_NAME:?Set AZURE_APP_SERVICE_NAME in the deployment-$DEPLOY_ENVIRONMENT Environment}"
+          : "${RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${CONTAINER_REGISTRY_NAME:?Set AZURE_CONTAINER_REGISTRY_NAME in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${APP_SERVICE_NAME:?Set AZURE_APP_SERVICE_NAME in the $DEPLOY_ENVIRONMENT Environment}"
 
           echo "Deploying '$SOURCE_REF' to the $DEPLOY_ENVIRONMENT environment." >> "$GITHUB_STEP_SUMMARY"
 
