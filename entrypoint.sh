@@ -2,7 +2,7 @@
 set -e
 
 echo "🥷 Ninja Paws Cloud Security Dojo - Starting"
-echo "🛡 NGINX Version: ${NGINX_VERSION:-1.30.3}"
+echo "🛡 NGINX Version: ${NGINX_VERSION:?NGINX_VERSION must be set}"
 echo "⚔ CVE-2026-42533: HTTP/2 CONTINUATION Frames Memory Corruption"
 
 # Start NGINX in the background

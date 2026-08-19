@@ -37,6 +37,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY app.js ./
+COPY config.json ./
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY entrypoint.sh /entrypoint.sh
 
@@ -56,7 +57,7 @@ RUN chmod +x /entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f "http://localhost:${PORT}/health" || exit 1
 
 # Run entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

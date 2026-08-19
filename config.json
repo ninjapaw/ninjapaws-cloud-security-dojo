@@ -1,0 +1,30 @@
+{
+  "$schema": "./config.schema.json",
+  "version": 1,
+  "deployment": {
+    "resourceGroup": "NP-ninjapaws-dojo-CentralUS",
+    "location": "centralus",
+    "containerRegistryName": "ninjapawsdojo",
+    "appServiceName": "ninjapaws-dojo-app",
+    "appServicePlanName": "ninjapaws-dojo-app-plan",
+    "keyVaultName": "ninjapaws-dojo-kv"
+  },
+  "image": {
+    "name": "ninjapaws-dojo",
+    "tag": "latest",
+    "ubuntuVersion": "24.04",
+    "nodeMajorVersion": 20
+  },
+  "runtime": {
+    "port": 3000,
+    "nginxVersion": "1.30.3",
+    "vulnerabilityStatus": "vulnerable",
+    "defenderEnabled": false
+  },
+  "github": {
+    "environments": {
+      "main": "prod",
+      "default": "dev"
+    }
+  }
+}

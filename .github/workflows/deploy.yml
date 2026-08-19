@@ -16,17 +16,30 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     env:
-      RESOURCE_GROUP: NP-ninjapaws-dojo-CentralUS
-      LOCATION: centralus
-      CONTAINER_REGISTRY_NAME: ninjapawsdojo
-      APP_SERVICE_NAME: ninjapaws-dojo-app
-      IMAGE_NAME: ninjapaws-dojo
-      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
-
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
       - name: 🥷 Checkout repository
         uses: actions/checkout@v4
+
+      - name: ⚙️ Load shared configuration
+        run: |
+          jq -e . config.json > /dev/null
+          echo "RESOURCE_GROUP=$(jq -r '.deployment.resourceGroup' config.json)" >> "$GITHUB_ENV"
+          CONFIG_LOCATION=$(jq -r '.deployment.location' config.json)
+          echo "LOCATION=${AZURE_LOCATION:-$CONFIG_LOCATION}" >> "$GITHUB_ENV"
+          echo "CONTAINER_REGISTRY_NAME=$(jq -r '.deployment.containerRegistryName' config.json)" >> "$GITHUB_ENV"
+          echo "APP_SERVICE_NAME=$(jq -r '.deployment.appServiceName' config.json)" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$(jq -r '.image.name' config.json)" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${{ github.event.inputs.image_tag || github.sha }}" >> "$GITHUB_ENV"
+          echo "UBUNTU_VERSION=$(jq -r '.image.ubuntuVersion' config.json)" >> "$GITHUB_ENV"
+          echo "NODE_MAJOR_VERSION=$(jq -r '.image.nodeMajorVersion' config.json)" >> "$GITHUB_ENV"
+          echo "NGINX_VERSION=$(jq -r '.runtime.nginxVersion' config.json)" >> "$GITHUB_ENV"
+          echo "VULNERABILITY_STATUS=$(jq -r '.runtime.vulnerabilityStatus' config.json)" >> "$GITHUB_ENV"
+          echo "APP_PORT=$(jq -r '.runtime.port' config.json)" >> "$GITHUB_ENV"
+          echo "DEFENDER_ENABLED=$(jq -r '.runtime.defenderEnabled' config.json)" >> "$GITHUB_ENV"
 
       - name: 🔐 Azure Login
         uses: azure/login@v2
@@ -49,10 +62,7 @@ jobs:
             --name "ninjapaws-${{ github.run_id }}" \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters \
-              location="$LOCATION" \
-              containerRegistryName="$CONTAINER_REGISTRY_NAME" \
-              appServiceName="$APP_SERVICE_NAME" \
+            --parameters location="$LOCATION" \
             --output table
 
       - name: 🛠️ Set up Docker Buildx
@@ -69,6 +79,11 @@ jobs:
           docker build \
             --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
             --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest" \
+            --build-arg "UBUNTU_VERSION=$UBUNTU_VERSION" \
+            --build-arg "NODE_MAJOR_VERSION=$NODE_MAJOR_VERSION" \
+            --build-arg "NGINX_VERSION=$NGINX_VERSION" \
+            --build-arg "VULNERABILITY_STATUS=$VULNERABILITY_STATUS" \
+            --build-arg "PORT=$APP_PORT" \
             .
           docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG"
           docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest"
@@ -89,9 +104,10 @@ jobs:
             --settings \
               WEBSITES_PORT=80 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
-              NGINX_VERSION=1.30.3 \
-              VULNERABILITY_STATUS=vulnerable \
-              PORT=3000 \
+              NGINX_VERSION="$NGINX_VERSION" \
+              VULNERABILITY_STATUS="$VULNERABILITY_STATUS" \
+              PORT="$APP_PORT" \
+              DEFENDER_ENABLED="$DEFENDER_ENABLED" \
               DOCKER_REGISTRY_SERVER_URL="https://$ACR_LOGIN_SERVER"
 
       - name: ♻️ Restart the app
@@ -123,16 +139,3 @@ jobs:
           echo "**Container registry:** $CONTAINER_REGISTRY_NAME" >> "$GITHUB_STEP_SUMMARY"
           echo "**Image:** $ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "**URL:** https://${APP_SERVICE_NAME}.azurewebsites.net" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 📢 Deployment status comment
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${status} **Deployment Status:** ${{ job.status }}\n\n**App Service:** https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net`
-            }).catch(() => console.log('Not a PR context'));

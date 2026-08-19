@@ -7,7 +7,7 @@ This repository is a public educational cloud security training environment for 
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Pull request template](pull_request_template.md)
-- [Azure deploy button](#azure-deploy-button)
+- [Deployment configuration](#deployment-configuration)
 - [GitHub issues](https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues)
 
 ## Overview
@@ -106,7 +106,15 @@ docker build \
   -t ninjapaws-dojo:remediated .
 ```
 
-For Compose overrides, copy `.env.example` to `.env.local` and adjust the values. Do not commit credentials or sensitive values.
+For local Compose runs, use the shared configuration wrapper. Edit [config.json](config.json) for non-secret training settings, then run:
+
+```bash
+./scripts/compose.sh up --build -d
+curl http://localhost:8080/health
+./scripts/compose.sh down
+```
+
+`config.json` is committed because it contains no credentials. Do not add secrets to it.
 
 ## Application endpoints
 
@@ -116,11 +124,13 @@ For Compose overrides, copy `.env.example` to `.env.local` and adjust the values
 
 ## Azure deployment
 
-### Azure deploy button
+### Deployment configuration
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fninjapaw%2Fninjapaws-cloud-security-dojo%2Fmain%2Fazuredeploy.json)
+[config.json](config.json) is the canonical non-secret configuration for this repository. It contains Azure resource names, location, image defaults, training runtime values, and branch-to-environment mapping. [config.schema.json](config.schema.json) documents and validates its shape.
 
-The ARM template provisions an Azure Container Registry, Linux App Service Plan, App Service, user-assigned managed identity, and `AcrPull` role assignment. The App Service pulls from ACR through managed identity; registry admin credentials are disabled.
+All supported deployment paths load this file: [scripts/deploy.sh](scripts/deploy.sh), [infra/main.bicep](infra/main.bicep), [docker-compose.yml](docker-compose.yml) through [scripts/compose.sh](scripts/compose.sh), and [deploy.yml](.github/workflows/deploy.yml). This repository no longer maintains a parallel ARM JSON template or `.env.example` file.
+
+The Bicep deployment provisions an Azure Container Registry, Linux App Service Plan, App Service, user-assigned managed identity, and an RBAC-enabled Azure Key Vault. The App Service pulls from ACR through managed identity; registry admin credentials are disabled. Key Vault has purge protection enabled and grants the application identity `Key Vault Secrets User` for future App Service Key Vault references.
 
 ### Deployment script
 
@@ -130,49 +140,46 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-Optional arguments are resource group, location, registry name, and App Service name:
+Options are optional. Defaults come from [config.json](config.json):
 
 ```bash
-./scripts/deploy.sh NP-ninjapaws-dojo-CentralUS centralus ninjapawsdojo ninjapaws-dojo-app
+./scripts/deploy.sh \
+  --repository ninjapaw/ninjapaws-cloud-security-dojo \
+  --app-display-name ninjapaws-cloud-security-dojo-github-actions
 ```
 
-The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and fails if the public `/health` endpoint does not become healthy.
+Infrastructure names are intentionally configured only in `config.json`; `deploy.sh` does not accept conflicting resource-name flags. `config.json` supplies the default location locally. In GitHub Actions, an `AZURE_LOCATION` organization or environment variable overrides that default and is passed to Bicep. `CONFIG_FILE` can select an alternate file for local Compose tooling only. `deploy.sh` and Bicep always use the committed `config.json` on the branch being deployed.
 
-### Configure GitHub OIDC and Azure roles
+Each run checks whether the Entra app registration, service principal, GitHub OIDC federated credential, Azure role assignments (`Contributor`, `Role Based Access Control Administrator` on the resource group, `AcrPush` on the registry), and GitHub Actions workflow configuration already exist and match the expected configuration. Existing Azure resources are skipped; a federated credential whose subject has drifted is repaired in place. Nothing is duplicated or recreated by default. The script then creates the resource group if missing, deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and verifies the public `/health` endpoint.
 
-To create or reuse the Entra application, add the GitHub federated credential, assign the deployment roles, create the resource group, and deploy the infrastructure in one idempotent command:
+When `--branch` is omitted, the wizard uses the current Git branch; it falls back to the repository default branch when that is available and to `main` only when it cannot detect either. The selected branch becomes the OIDC federated-credential subject. `main` uses the `prod` GitHub environment; every other branch, including `dev`, uses `dev`.
+
+The wizard uses GitHub CLI (`gh`) to verify that the remote `deploy.yml` workflow is enabled and creates the `dev` and `prod` GitHub environments when missing. It first configures the three required OIDC bootstrap identifiers (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`) as organization secrets with selected-repository access; if organization policy or permissions prevent that, it falls back to repository secrets. These identifiers let GitHub obtain an Azure OIDC token before it can access Azure services. They are the only GitHub-held configuration required by this deployment and are never displayed. GitHub does not disclose secret values, so the script safely synchronizes them on each run to repair unknown drift without creating duplicate secrets. It pauses with a command to run manually only when GitHub CLI is unavailable, authentication/repository access is missing, an Azure permission is missing, or an automated action fails. No client secret is created or required.
+
+After the first successful run, `deploy.yml` is configured to work going forward. Re-running `./scripts/deploy.sh` remains safe: it checks and repairs configuration, redeploys the Bicep infrastructure, and refreshes the training image without duplicating resources.
+
+No other GitHub organization secrets or variables are required by the workflows in this repository.
+
+#### Recreate or delete everything
 
 ```bash
-chmod +x scripts/setup-azure-github-oidc.sh
-./scripts/setup-azure-github-oidc.sh
+# Delete and recreate the Entra app, federated credential, and resource group, then redeploy
+./scripts/deploy.sh --recreate
+
+# Permanently delete the resource group and Entra app registration, then exit
+./scripts/deploy.sh --delete
 ```
 
-Optional arguments are resource group, location, registry name, App Service name, repository, and Entra application display name:
-
-```bash
-./scripts/setup-azure-github-oidc.sh \
-  NP-ninjapaws-dojo-CentralUS \
-  centralus \
-  ninjapawsdojo \
-  ninjapaws-dojo-app \
-  ninjapaw/ninjapaws-cloud-security-dojo
-```
-
-The script prints the three non-secret values to add as organization secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. It creates no client secret. The executing identity must be allowed to create app registrations, assign Azure roles, and deploy the resource group infrastructure.
+Both `--recreate` and `--delete` are destructive and prompt for confirmation. Add `--yes` to skip the prompt for unattended/CI use. A recreation automatically synchronizes the repository Actions secrets with the new `AZURE_CLIENT_ID`.
 
 ### Manual Bicep deployment
 
 ```bash
 az login
-az group create --name NP-ninjapaws-dojo-CentralUS --location centralus
 az deployment group create \
   --name ninjapaws-dojo-deployment \
-  --resource-group NP-ninjapaws-dojo-CentralUS \
-  --template-file infra/main.bicep \
-  --parameters \
-    containerRegistryName=ninjapawsdojo \
-    appServiceName=ninjapaws-dojo-app \
-    location=centralus
+  --resource-group "$(jq -r '.deployment.resourceGroup' config.json)" \
+  --template-file infra/main.bicep
 ```
 
 ### Verify Azure deployment
@@ -188,11 +195,11 @@ curl "https://${APP_HOST}/api/status"
 az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
 ```
 
-The GitHub Actions deployment is manual-only and requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` organization secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad organization secret cannot fail every push.
+The GitHub Actions deployment is manual-only and requires the OIDC bootstrap identifiers `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. The wizard prefers organization secrets restricted to this repository, then falls back to repository secrets when organization sharing is not available. `deploy.yml` selects `prod` for `main` and `dev` for all other branches, then reads non-secret deployment configuration from [config.json](config.json). It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad configuration cannot fail every push.
 
-### GitHub organization secrets
+### GitHub Actions bootstrap and environments
 
-Add these organization secrets and allow the `ninjapaws-cloud-security-dojo` repository to use them:
+The wizard manages these organization secrets with selected-repository access when allowed, or repository secrets otherwise. It verifies names but never prints values:
 
 | Secret | Value |
 |---|---|
@@ -200,7 +207,7 @@ Add these organization secrets and allow the `ninjapaws-cloud-security-dojo` rep
 | `AZURE_TENANT_ID` | Microsoft Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID containing the dojo resources |
 
-Configure a federated credential on the Entra application for this GitHub repository's `main` branch. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow.
+Configure a federated credential on the Entra application for each branch that runs `deploy.yml`. The wizard creates the credential for its detected or explicitly supplied `--branch`. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow. GitHub has no branch-scoped repository secrets; `dev` and `prod` environments provide the deployment boundary and can enforce approval rules.
 
 The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the deployment identity needs Contributor plus permission to write role assignments at the deployment scope. The optional detection-workflow ACR publication also requires `AcrPush` on `ninjapawsdojo`.
 

@@ -4,17 +4,19 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NGINX_VERSION: ${NGINX_VERSION:-1.30.3}
-        NODE_MAJOR_VERSION: ${NODE_MAJOR_VERSION:-20}
-        VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:-vulnerable}
-        PORT: ${PORT:-3000}
+        UBUNTU_VERSION: ${UBUNTU_VERSION:?Run scripts/compose.sh so values load from config.json}
+        NGINX_VERSION: ${NGINX_VERSION:?Run scripts/compose.sh so values load from config.json}
+        NODE_MAJOR_VERSION: ${NODE_MAJOR_VERSION:?Run scripts/compose.sh so values load from config.json}
+        VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:?Run scripts/compose.sh so values load from config.json}
+        PORT: ${PORT:?Run scripts/compose.sh so values load from config.json}
     ports:
       - "8080:80"
       - "3000:3000"
     environment:
-      NGINX_VERSION: ${NGINX_VERSION:-1.30.3}
-      VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:-vulnerable}
-      PORT: ${PORT:-3000}
+      NGINX_VERSION: ${NGINX_VERSION:?Run scripts/compose.sh so values load from config.json}
+      VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:?Run scripts/compose.sh so values load from config.json}
+      PORT: ${PORT:?Run scripts/compose.sh so values load from config.json}
+      DEFENDER_ENABLED: ${DEFENDER_ENABLED:?Run scripts/compose.sh so values load from config.json}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s

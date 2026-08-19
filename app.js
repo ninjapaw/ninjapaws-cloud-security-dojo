@@ -2,11 +2,12 @@
 
 const express = require('express');
 const os = require('os');
+const config = require('./config.json');
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-const DEFAULT_NGINX_VERSION = '1.30.3';
-const DEFAULT_VULNERABILITY_STATUS = 'vulnerable';
+const PORT = Number(process.env.PORT) || config.runtime.port;
+const DEFAULT_NGINX_VERSION = config.runtime.nginxVersion;
+const DEFAULT_VULNERABILITY_STATUS = config.runtime.vulnerabilityStatus;
 const CVE_ID = 'CVE-2026-42533';
 const VULNERABILITY_DESCRIPTION = 'NGINX HTTP/2 CONTINUATION Frames Memory Corruption';
 
@@ -14,7 +15,7 @@ function getRuntimeStatus() {
   return {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
     vulnerabilityStatus: process.env.VULNERABILITY_STATUS || DEFAULT_VULNERABILITY_STATUS,
-    defenderEnabled: process.env.DEFENDER_ENABLED === 'true'
+    defenderEnabled: process.env.DEFENDER_ENABLED === 'true' || config.runtime.defenderEnabled
   };
 }
 
