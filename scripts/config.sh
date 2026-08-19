@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-CONFIG_FILE="${CONFIG_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config.json}"
+CONFIG_FILE="${CONFIG_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config/deployment.json}"
 
 require_config_tools() {
     if ! command -v jq >/dev/null 2>&1; then

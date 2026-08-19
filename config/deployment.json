@@ -1,5 +1,5 @@
 {
-  "$schema": "./config.schema.json",
+  "$schema": "./schema.json",
   "version": 1,
   "deployment": {
     "resourceGroup": "NP-ninjapaws-dojo-CentralUS",

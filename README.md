@@ -6,7 +6,6 @@ This repository is a public educational cloud security training environment for 
 
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
-- [Pull request template](pull_request_template.md)
 - [Deployment configuration](#deployment-configuration)
 - [GitHub issues](https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues)
 
@@ -69,10 +68,10 @@ curl http://localhost:3000/api/status
 ### Docker Compose
 
 ```bash
-docker compose up --build -d
+./scripts/compose.sh up --build -d
 curl http://localhost:8080/health
-docker compose logs -f dojo
-docker compose down
+./scripts/compose.sh logs -f dojo
+./scripts/compose.sh down
 ```
 
 The default ports are `8080` for NGINX and `3000` for the direct Node.js endpoint.
@@ -106,7 +105,7 @@ docker build \
   -t ninjapaws-dojo:remediated .
 ```
 
-For local Compose runs, use the shared configuration wrapper. Edit [config.json](config.json) for non-secret training settings, then run:
+For local Compose runs, use the shared configuration wrapper. Edit [config/deployment.json](config/deployment.json) for non-secret training settings, then run:
 
 ```bash
 ./scripts/compose.sh up --build -d
@@ -114,7 +113,20 @@ curl http://localhost:8080/health
 ./scripts/compose.sh down
 ```
 
-`config.json` is committed because it contains no credentials. Do not add secrets to it.
+`config/deployment.json` is committed because it contains no credentials. Do not add secrets to it.
+
+## Repository layout
+
+```text
+src/                 Node.js application source
+config/              Shared non-secret deployment and runtime configuration
+container/           NGINX container configuration
+scripts/             Deployment, Compose, configuration, and container runtime scripts
+infra/               Bicep infrastructure
+.github/workflows/   GitHub Actions workflows
+```
+
+`scripts/deploy.sh` writes Azure deployment results to a temporary file and removes it automatically. There is no repository-owned `deployment-output.json` because it is generated output, not source.
 
 ## Application endpoints
 
@@ -126,7 +138,7 @@ curl http://localhost:8080/health
 
 ### Deployment configuration
 
-[config.json](config.json) is the canonical non-secret configuration for this repository. It contains Azure resource names, location, image defaults, training runtime values, and branch-to-environment mapping. [config.schema.json](config.schema.json) documents and validates its shape.
+[config/deployment.json](config/deployment.json) is the canonical non-secret configuration for this repository. It contains Azure resource names, location, image defaults, training runtime values, and branch-to-environment mapping. [config/schema.json](config/schema.json) documents and validates its shape. [container/nginx.conf](container/nginx.conf) holds the NGINX reverse-proxy configuration.
 
 All supported deployment paths load this file: [scripts/deploy.sh](scripts/deploy.sh), [infra/main.bicep](infra/main.bicep), [docker-compose.yml](docker-compose.yml) through [scripts/compose.sh](scripts/compose.sh), and [deploy.yml](.github/workflows/deploy.yml). This repository no longer maintains a parallel ARM JSON template or `.env.example` file.
 
@@ -140,7 +152,7 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-Options are optional. Defaults come from [config.json](config.json):
+Options are optional. Defaults come from [config/deployment.json](config/deployment.json):
 
 ```bash
 ./scripts/deploy.sh \
@@ -148,7 +160,19 @@ Options are optional. Defaults come from [config.json](config.json):
   --app-display-name ninjapaws-cloud-security-dojo-github-actions
 ```
 
-Infrastructure names are intentionally configured only in `config.json`; `deploy.sh` does not accept conflicting resource-name flags. `config.json` supplies the default location locally. In GitHub Actions, an `AZURE_LOCATION` organization or environment variable overrides that default and is passed to Bicep. `CONFIG_FILE` can select an alternate file for local Compose tooling only. `deploy.sh` and Bicep always use the committed `config.json` on the branch being deployed.
+GitHub CLI is required only for the GitHub Actions setup portion. Install it automatically when needed with an interactive confirmation:
+
+```bash
+./scripts/deploy.sh --install-gh
+```
+
+For unattended use, accept the GitHub CLI package installation and other confirmations explicitly:
+
+```bash
+./scripts/deploy.sh --install-gh --yes
+```
+
+Infrastructure names are intentionally configured only in `config/deployment.json`; `deploy.sh` does not accept conflicting resource-name flags. It supplies the default location locally. In GitHub Actions, an `AZURE_LOCATION` organization or environment variable overrides that default and is passed to Bicep. `CONFIG_FILE` can select an alternate file for local Compose tooling only. `deploy.sh` and Bicep always use the committed `config/deployment.json` on the branch being deployed.
 
 Each run checks whether the Entra app registration, service principal, GitHub OIDC federated credential, Azure role assignments (`Contributor`, `Role Based Access Control Administrator` on the resource group, `AcrPush` on the registry), and GitHub Actions workflow configuration already exist and match the expected configuration. Existing Azure resources are skipped; a federated credential whose subject has drifted is repaired in place. Nothing is duplicated or recreated by default. The script then creates the resource group if missing, deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and verifies the public `/health` endpoint.
 
@@ -178,7 +202,7 @@ Both `--recreate` and `--delete` are destructive and prompt for confirmation. Ad
 az login
 az deployment group create \
   --name ninjapaws-dojo-deployment \
-  --resource-group "$(jq -r '.deployment.resourceGroup' config.json)" \
+  --resource-group "$(jq -r '.deployment.resourceGroup' config/deployment.json)" \
   --template-file infra/main.bicep
 ```
 
@@ -195,7 +219,7 @@ curl "https://${APP_HOST}/api/status"
 az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
 ```
 
-The GitHub Actions deployment is manual-only and requires the OIDC bootstrap identifiers `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. The wizard prefers organization secrets restricted to this repository, then falls back to repository secrets when organization sharing is not available. `deploy.yml` selects `prod` for `main` and `dev` for all other branches, then reads non-secret deployment configuration from [config.json](config.json). It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad configuration cannot fail every push.
+The GitHub Actions deployment is manual-only and requires the OIDC bootstrap identifiers `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. The wizard prefers organization secrets restricted to this repository, then falls back to repository secrets when organization sharing is not available. `deploy.yml` selects `prod` for `main` and `dev` for all other branches, then reads non-secret deployment configuration from [config/deployment.json](config/deployment.json). It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad configuration cannot fail every push.
 
 ### GitHub Actions bootstrap and environments
 

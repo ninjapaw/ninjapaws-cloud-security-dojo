@@ -7,8 +7,10 @@ on:
     paths:
       - 'Dockerfile'
       - 'package.json'
-      - 'app.js'
-      - 'nginx.conf'
+      - 'src/**'
+      - 'scripts/entrypoint.sh'
+      - 'config/**'
+      - 'container/nginx.conf'
 
 env:
   IMAGE_NAME: ninjapaws-dojo
@@ -99,6 +101,7 @@ jobs:
       - name: 📊 Extract NGINX version
         run: |
           docker run --rm \
+            --entrypoint nginx \
             ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \
             nginx -v 2>&1 | tee nginx-version.txt
           NGINX_VERSION=$(sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' nginx-version.txt)

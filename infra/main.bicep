@@ -1,6 +1,6 @@
 param location string
 
-var config = loadJsonContent('../config.json')
+var config = loadJsonContent('../config/deployment.json')
 var containerRegistryName = config.deployment.containerRegistryName
 var appServiceName = config.deployment.appServiceName
 var appServicePlanName = config.deployment.appServicePlanName
@@ -28,7 +28,7 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
   location: location
 }
 
-// Key Vault is reserved for genuine secrets; non-secret deployment settings stay in config.json.
+// Key Vault is reserved for genuine secrets; non-secret deployment settings stay in config/deployment.json.
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
   location: location

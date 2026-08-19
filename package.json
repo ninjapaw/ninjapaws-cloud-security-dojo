@@ -2,10 +2,10 @@
   "name": "ninjapaws-cloud-security-dojo",
   "version": "1.0.0",
   "description": "🥷 Ninja Paws Cloud Security Dojo - Master the art of cloud security one vulnerability at a time",
-  "main": "app.js",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js"
+    "start": "node src/app.js",
+    "dev": "node src/app.js"
   },
   "keywords": [
     "security",

@@ -15,6 +15,7 @@
 #   --repository OWNER/REPO     GitHub repository (default: ninjapaw/ninjapaws-cloud-security-dojo)
 #   --app-display-name NAME     Entra app registration display name
 #   --branch NAME                GitHub branch for OIDC federation (default: current branch)
+#   --install-gh                 Install GitHub CLI with apt-get when it is missing
 #   --recreate                   Delete and recreate the Entra app, service principal,
 #                                 federated credential, and resource group before deploying
 #   --delete                     Delete all resources created by this script and exit
@@ -32,8 +33,8 @@ NC='\033[0m'
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPOSITORY_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/config.sh"
-if [[ "$CONFIG_FILE" != "$REPOSITORY_ROOT/config.json" ]]; then
-    echo "deploy.sh requires the committed repository config: $REPOSITORY_ROOT/config.json" >&2
+if [[ "$CONFIG_FILE" != "$REPOSITORY_ROOT/config/deployment.json" ]]; then
+    echo "deploy.sh requires the committed repository config: $REPOSITORY_ROOT/config/deployment.json" >&2
     exit 2
 fi
 load_deployment_config
@@ -52,6 +53,7 @@ BRANCH=
 RECREATE=false
 DELETE=false
 ASSUME_YES=false
+INSTALL_GH=false
 
 print_help() {
     sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | grep '^#' | sed 's/^# \{0,1\}//'
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
         --repository) REPOSITORY="$2"; shift 2 ;;
         --app-display-name) APP_DISPLAY_NAME="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
+        --install-gh) INSTALL_GH=true; shift ;;
         --recreate) RECREATE=true; shift ;;
         --delete) DELETE=true; shift ;;
         --yes) ASSUME_YES=true; shift ;;
@@ -433,6 +436,8 @@ echo "  - Resource Group: $RESOURCE_GROUP"
 echo ""
 
 DEPLOYMENT_NAME="ninjapaws-dojo-$(date +%s)"
+DEPLOYMENT_OUTPUT=$(mktemp "${TMPDIR:-/tmp}/ninjapaws-deployment-output.XXXXXX")
+trap 'rm -f "$DEPLOYMENT_OUTPUT"' EXIT
 
 deploy_infrastructure() {
     az deployment group create \
@@ -440,7 +445,7 @@ deploy_infrastructure() {
         --resource-group "$RESOURCE_GROUP" \
         --template-file infra/main.bicep \
         --parameters location="$LOCATION" \
-        --output json > deployment-output.json
+        --output json > "$DEPLOYMENT_OUTPUT"
 }
 run_or_pause \
     "Deploy infra/main.bicep to resource group '$RESOURCE_GROUP' (may be blocked by Azure Policy or missing permissions)" \
@@ -452,11 +457,11 @@ echo ""
 
 echo -e "${YELLOW}Deployment Outputs:${NC}"
 if command -v jq &> /dev/null; then
-    REGISTRY_LOGIN=$(jq -r '.properties.outputs.containerRegistryLoginServer.value // empty' deployment-output.json)
-    APP_URL=$(jq -r '.properties.outputs.appServiceUrl.value // empty' deployment-output.json)
+    REGISTRY_LOGIN=$(jq -r '.properties.outputs.containerRegistryLoginServer.value // empty' "$DEPLOYMENT_OUTPUT")
+    APP_URL=$(jq -r '.properties.outputs.appServiceUrl.value // empty' "$DEPLOYMENT_OUTPUT")
 else
-    REGISTRY_LOGIN=$(grep -oP '"containerRegistryLoginServer"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' deployment-output.json || true)
-    APP_URL=$(grep -oP '"appServiceUrl"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' deployment-output.json || true)
+    REGISTRY_LOGIN=$(grep -oP '"containerRegistryLoginServer"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' "$DEPLOYMENT_OUTPUT" || true)
+    APP_URL=$(grep -oP '"appServiceUrl"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' "$DEPLOYMENT_OUTPUT" || true)
 fi
 
 echo -e "  ${BLUE}Container Registry:${NC} ${REGISTRY_LOGIN:-$ACR_NAME.azurecr.io}"
@@ -471,6 +476,29 @@ echo ""
 # --- GitHub Actions: make deploy.yml runnable with the OIDC identity above ---
 check_github_cli() {
     command -v gh >/dev/null 2>&1
+}
+install_github_cli() {
+    local -a elevated=()
+
+    if check_github_cli; then
+        return 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "Automatic GitHub CLI installation is supported only on Debian-based systems." >&2
+        return 1
+    fi
+    if [[ "$EUID" -ne 0 ]]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo "sudo is required to install GitHub CLI as the current user." >&2
+            return 1
+        fi
+        elevated=(sudo)
+    fi
+    if [[ "$ASSUME_YES" != true ]] && ! confirm "GitHub CLI is missing. Install it with apt-get"; then
+        return 1
+    fi
+
+    "${elevated[@]}" apt-get update && "${elevated[@]}" apt-get install -y gh
 }
 check_github_auth() {
     gh auth status --hostname github.com >/dev/null 2>&1
@@ -532,6 +560,10 @@ ensure_github_environment() {
 }
 
 echo -e "${YELLOW}Checking GitHub Actions deployment access...${NC}"
+if ! check_github_cli && [[ "$INSTALL_GH" == true ]]; then
+    echo "  GitHub CLI is missing; attempting installation..."
+    install_github_cli || true
+fi
 wait_for_prerequisite \
     "Install GitHub CLI (gh) so this script can configure repository Actions secrets" \
     "sudo apt-get update && sudo apt-get install -y gh" \
@@ -640,7 +672,7 @@ echo -e "${BLUE}🔑 GitHub Actions configuration:${NC}"
 echo "  Environment: $GITHUB_ENVIRONMENT (branch: $BRANCH)"
 echo "  OIDC secret names verified without displaying values"
 echo "  OIDC bootstrap identifier scope: ${GITHUB_SECRET_SCOPE:-unknown}"
-echo "  Non-secret deployment settings: config.json"
+echo "  Non-secret deployment settings: config/deployment.json"
 echo ""
 echo -e "${BLUE}📚 Resources:${NC}"
 echo "  - GitHub: https://github.com/$REPOSITORY"

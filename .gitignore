@@ -37,6 +37,7 @@ build/
 # Temporary files
 temp/
 tmp/
+deployment-output.json
 
 # Credentials and secrets
 *.pem

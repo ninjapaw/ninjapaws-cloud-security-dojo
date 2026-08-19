@@ -26,20 +26,20 @@ jobs:
 
       - name: ⚙️ Load shared configuration
         run: |
-          jq -e . config.json > /dev/null
-          echo "RESOURCE_GROUP=$(jq -r '.deployment.resourceGroup' config.json)" >> "$GITHUB_ENV"
-          CONFIG_LOCATION=$(jq -r '.deployment.location' config.json)
+          jq -e . config/deployment.json > /dev/null
+          echo "RESOURCE_GROUP=$(jq -r '.deployment.resourceGroup' config/deployment.json)" >> "$GITHUB_ENV"
+          CONFIG_LOCATION=$(jq -r '.deployment.location' config/deployment.json)
           echo "LOCATION=${AZURE_LOCATION:-$CONFIG_LOCATION}" >> "$GITHUB_ENV"
-          echo "CONTAINER_REGISTRY_NAME=$(jq -r '.deployment.containerRegistryName' config.json)" >> "$GITHUB_ENV"
-          echo "APP_SERVICE_NAME=$(jq -r '.deployment.appServiceName' config.json)" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=$(jq -r '.image.name' config.json)" >> "$GITHUB_ENV"
+          echo "CONTAINER_REGISTRY_NAME=$(jq -r '.deployment.containerRegistryName' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "APP_SERVICE_NAME=$(jq -r '.deployment.appServiceName' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$(jq -r '.image.name' config/deployment.json)" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=${{ github.event.inputs.image_tag || github.sha }}" >> "$GITHUB_ENV"
-          echo "UBUNTU_VERSION=$(jq -r '.image.ubuntuVersion' config.json)" >> "$GITHUB_ENV"
-          echo "NODE_MAJOR_VERSION=$(jq -r '.image.nodeMajorVersion' config.json)" >> "$GITHUB_ENV"
-          echo "NGINX_VERSION=$(jq -r '.runtime.nginxVersion' config.json)" >> "$GITHUB_ENV"
-          echo "VULNERABILITY_STATUS=$(jq -r '.runtime.vulnerabilityStatus' config.json)" >> "$GITHUB_ENV"
-          echo "APP_PORT=$(jq -r '.runtime.port' config.json)" >> "$GITHUB_ENV"
-          echo "DEFENDER_ENABLED=$(jq -r '.runtime.defenderEnabled' config.json)" >> "$GITHUB_ENV"
+          echo "UBUNTU_VERSION=$(jq -r '.image.ubuntuVersion' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "NODE_MAJOR_VERSION=$(jq -r '.image.nodeMajorVersion' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "NGINX_VERSION=$(jq -r '.runtime.nginxVersion' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "VULNERABILITY_STATUS=$(jq -r '.runtime.vulnerabilityStatus' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "APP_PORT=$(jq -r '.runtime.port' config/deployment.json)" >> "$GITHUB_ENV"
+          echo "DEFENDER_ENABLED=$(jq -r '.runtime.defenderEnabled' config/deployment.json)" >> "$GITHUB_ENV"
 
       - name: 🔐 Azure Login
         uses: azure/login@v2

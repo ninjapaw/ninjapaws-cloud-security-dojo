@@ -36,10 +36,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY app.js ./
-COPY config.json ./
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY entrypoint.sh /entrypoint.sh
+COPY src ./src
+COPY config/deployment.json ./config/deployment.json
+COPY container/nginx.conf /etc/nginx/nginx.conf
+COPY scripts/entrypoint.sh /entrypoint.sh
 
 # Create nginx directories
 RUN mkdir -p /var/run/nginx /var/log/nginx

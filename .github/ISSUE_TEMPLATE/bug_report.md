@@ -26,7 +26,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce the issue?
       placeholder: |
-        1. Run `docker-compose up`
+        1. Run `./scripts/compose.sh up`
         2. Navigate to `http://localhost:8080`
         3. ...
     validations:
