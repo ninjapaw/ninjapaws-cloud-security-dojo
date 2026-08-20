@@ -1,7 +1,6 @@
 .git
 .github
 .gitignore
-.devcontainer
 node_modules
 npm-debug.log*
 docs
