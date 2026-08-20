@@ -52,8 +52,10 @@ docker compose down
 
 All Docker build arguments are non-secret configuration. Defaults are safe fallbacks; GitHub Environment variables are the source of truth for `dev` and `prod` deployments.
 
+Branch isolation is explicit: `dev` deploys to `NP-ninjapaws-dojo-Dev-CentralUS`, ACR `ninjapawsdojodev`, and App Service `ninjapaws-dojo-app-dev`; `main` deploys to `NP-ninjapaws-dojo-Prod-CentralUS`, ACR `ninjapawsdojoprod`, and App Service `ninjapaws-dojo-app-prod`.
+
 | Variable | Default | Purpose |
-|---|---:|---|
+| --- | ---: | --- |
 | `BASE_OS_IMAGE` | `ubuntu` | Base OS image repository |
 | `BASE_OS_VERSION` | `24.04` | Ubuntu image version |
 | `NGINX_VERSION` | `1.30.3` | Pinned NGINX package |
@@ -202,6 +204,8 @@ When the run reaches 100% the page rewrites itself as a **final executive report
 ### Content-addressed builds
 
 Every build first computes a **fingerprint**: a SHA-256 over each file the Dockerfile copies (`Dockerfile`, `package.json`, `package-lock.json`, `app.js`, `nginx.conf`, `entrypoint.sh`) plus every build argument. That fingerprint is pushed as an extra tag (`fp-<hash>`) alongside the immutable Git-SHA tag.
+
+Use the Git-SHA tag or image digest for deployments. `latest`, `vulnerable`, and `remediated` are convenience aliases for demos and must not be used as production rollout selectors. Separate ACRs provide the dev/prod image boundary; separate image names are unnecessary.
 
 On the next run the script looks up `fp-<hash>` in ACR:
 

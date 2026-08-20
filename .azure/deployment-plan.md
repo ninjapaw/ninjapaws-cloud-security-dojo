@@ -1,12 +1,15 @@
 # Deployment Plan
 
 ## Status
+
 Validated
 
 ## Scope
+
 Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI, recovery, uninstall, and secret-handling gaps for the Ninja Paws Cloud Security Dojo.
 
 ## Decisions
+
 - Keep GitHub OIDC bootstrap separate from routine deployment.
 - Make `scripts/deploy.sh` support interactive setup, non-interactive deployment, and verification.
 - Parameterize the container image name, image tag, and training settings in Bicep.
@@ -16,6 +19,7 @@ Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI
 - Use a separately protected manual workflow for destructive uninstall.
 
 ## Planned Changes
+
 - Add staged `plan`, `doctor`, `provision`, `build`, `deploy`, `verify`, `repair`, and guarded `uninstall` commands.
 - Persist resumable non-secret deployment metadata and tag owned resource groups.
 - Route GitHub Actions infrastructure and application updates through the same staged script.
@@ -27,6 +31,7 @@ Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI
 - Validate Bash syntax, Bicep syntax, and documentation/script consistency.
 
 ## Validation Proof
+
 - `bash -n scripts/deploy.sh` passed.
 - `bash -n scripts/setup-azure-github-oidc.sh` passed.
 - `node` parsed `infra/main.json` and `azuredeploy.json` successfully.
@@ -60,4 +65,7 @@ Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI
 - Dev `provision` test completed successfully with live `[10%]`, `[95%]`, and `state=Succeeded` progress output.
 - Mutating lifecycle commands are now branch-locked: `dev` can only target `dev`, and `main` can only target `prod`.
 - Azure what-if preview: 4 resources to create and 2 resources to update in `NP-ninjapaws-dojo-Prod-CentralUS`.
-- No Azure deployment or destructive operation was executed during validation.
+- Production replacement completed on 2026-08-20: old `NP-ninjapaws-dojo-CentralUS` was removed and the validated baseline was deployed to `NP-ninjapaws-dojo-Prod-CentralUS`.
+- Production resources are isolated in ACR `ninjapawsdojoprod` and App Service `ninjapaws-dojo-app-prod`; the live image was verified with an immutable Git-SHA tag and digest.
+- GitHub `dev` and `prod` Environments have OIDC federated credentials, routing variables, and resource-group deployment roles configured.
+- Live production verification passed for `/health`, `/api/status`, NGINX `1.30.3`, and the affected Scenario 1 map/regex evidence.
