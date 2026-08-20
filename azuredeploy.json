@@ -43,6 +43,20 @@
       "metadata": {
         "description": "Docker image tag used by App Service"
       }
+    },
+    "nginxVersion": {
+      "type": "string",
+      "defaultValue": "1.30.3",
+      "metadata": {
+        "description": "NGINX version reported by the training application"
+      }
+    },
+    "vulnerabilityStatus": {
+      "type": "string",
+      "defaultValue": "vulnerable",
+      "metadata": {
+        "description": "Training status reported by the application"
+      }
     }
   },
   "variables": {
@@ -136,11 +150,11 @@
             },
             {
               "name": "NGINX_VERSION",
-              "value": "1.30.3"
+              "value": "[parameters('nginxVersion')]"
             },
             {
               "name": "VULNERABILITY_STATUS",
-              "value": "vulnerable"
+              "value": "[parameters('vulnerabilityStatus')]"
             },
             {
               "name": "PORT",

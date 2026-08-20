@@ -2,6 +2,10 @@ param location string = 'centralus'
 param containerRegistryName string = 'ninjapawsdojo'
 param appServiceName string = 'ninjapaws-dojo-app'
 param appServicePlanName string = 'ninjapaws-dojo-plan'
+param imageName string = 'ninjapaws-dojo'
+param imageTag string = 'latest'
+param nginxVersion string = '1.30.3'
+param vulnerabilityStatus string = 'vulnerable'
 
 module infrastructure './main.bicep' = {
   name: 'ninjapaws-dojo-infrastructure'
@@ -10,6 +14,10 @@ module infrastructure './main.bicep' = {
     containerRegistryName: containerRegistryName
     appServiceName: appServiceName
     appServicePlanName: appServicePlanName
+    imageName: imageName
+    imageTag: imageTag
+    nginxVersion: nginxVersion
+    vulnerabilityStatus: vulnerabilityStatus
   }
 }
 

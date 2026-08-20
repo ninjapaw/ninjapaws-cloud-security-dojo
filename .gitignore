@@ -24,8 +24,11 @@ Thumbs.db
 dist/
 build/
 
-# Azure CLI
-.azure/
+# Azure CLI and local deployment state
+.azure/*
+!.azure/
+!.azure/deployment-plan.md
+appservice-logs.zip
 
 # Docker
 .docker/

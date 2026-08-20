@@ -5,17 +5,17 @@ on:
     branches: [main, dev]
   workflow_dispatch:
     inputs:
-      environment:
-        description: GitHub Environment to deploy (leave as auto-detect to infer from the branch)
-        required: false
-        default: auto-detect
-        type: choice
-        options: [auto-detect, dev, prod]
       image_tag:
         description: 'Docker image tag to deploy'
         required: false
-        default: 'latest'
+        default: ''
         type: string
+      stage:
+        description: Deployment stage
+        required: false
+        default: full
+        type: choice
+        options: [full, doctor, provision, build, deploy, verify, repair]
 
 permissions:
   contents: read
@@ -23,21 +23,27 @@ permissions:
 
 # Branch dev uses the dev environment, branch main uses the prod environment.
 concurrency:
-  group: deploy-${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
+  group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    environment: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
     env:
-      DEPLOY_ENVIRONMENT: ${{ (inputs.environment != '' && inputs.environment != 'auto-detect' && inputs.environment) || (github.ref_name == 'main' && 'prod' || 'dev') }}
-      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || (github.ref_name == 'main' && 'NP-ninjapaws-dojo-CentralUS' || '') }}
+      DEPLOY_ENVIRONMENT: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
-      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME || (github.ref_name == 'main' && 'ninjapawsdojo' || '') }}
-      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME || (github.ref_name == 'main' && 'ninjapaws-dojo-app' || '') }}
-      IMAGE_NAME: ninjapaws-dojo
+      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
+      IMAGE_NAME: ${{ vars.AZURE_IMAGE_NAME || 'ninjapaws-dojo' }}
+      NGINX_VERSION: ${{ vars.NGINX_VERSION || '1.30.3' }}
+      VULNERABILITY_STATUS: ${{ vars.VULNERABILITY_STATUS || 'vulnerable' }}
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+      DEPLOY_STAGE: ${{ inputs.stage || 'full' }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: 🥷 Checkout repository
@@ -61,10 +67,18 @@ jobs:
             exit 1
           fi
 
+          if [[ "$DEPLOY_ENVIRONMENT" == unsupported ]]; then
+            echo "::error title=Unsupported deployment branch::Only 'dev' and 'main' deploy automatically."
+            exit 1
+          fi
+
           # Non-production targets have no implicit resource names, so nothing is provisioned by accident.
           : "${RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in the $DEPLOY_ENVIRONMENT Environment}"
           : "${CONTAINER_REGISTRY_NAME:?Set AZURE_CONTAINER_REGISTRY_NAME in the $DEPLOY_ENVIRONMENT Environment}"
           : "${APP_SERVICE_NAME:?Set AZURE_APP_SERVICE_NAME in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
 
           echo "Deploying '$SOURCE_REF' to the $DEPLOY_ENVIRONMENT environment." >> "$GITHUB_STEP_SUMMARY"
 
@@ -72,87 +86,41 @@ jobs:
         uses: azure/login@v2
         with:
           auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.SUBSCRIPTION_ID }}
 
-      - name: 🏗️ Create/validate Azure resource group
+      - name: 🧪 Validate Bicep and preview changes
+        if: env.DEPLOY_STAGE != 'verify' && env.DEPLOY_STAGE != 'build'
         run: |
-          az group create \
-            --name "$RESOURCE_GROUP" \
+          scripts/deploy.sh doctor \
+            --environment "$DEPLOY_ENVIRONMENT" \
+            --subscription "$SUBSCRIPTION_ID" \
             --location "$LOCATION" \
-            --output table
-
-      - name: 🧱 Deploy Azure infrastructure
-        run: |
-          az deployment group create \
-            --name "ninjapaws-${{ github.run_id }}" \
             --resource-group "$RESOURCE_GROUP" \
-            --template-file infra/main.bicep \
-            --parameters \
-              location="$LOCATION" \
-              containerRegistryName="$CONTAINER_REGISTRY_NAME" \
-              appServiceName="$APP_SERVICE_NAME" \
-            --output table
+            --registry-name "$CONTAINER_REGISTRY_NAME" \
+            --app-service-name "$APP_SERVICE_NAME" \
+            --image-name "$IMAGE_NAME"
 
-      - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔑 Get ACR login server
+      - name: 🧭 Run staged deployment wizard
+        env:
+          DEPLOY_STAGE: ${{ env.DEPLOY_STAGE }}
         run: |
-          ACR_LOGIN_SERVER=$(az acr show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_REGISTRY_NAME" --query loginServer -o tsv)
-          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> "$GITHUB_ENV"
-
-      - name: 🐳 Build and push image to ACR
-        run: |
-          az acr login --name "$CONTAINER_REGISTRY_NAME"
-          docker build \
-            --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
-            --tag "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest" \
-            .
-          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG"
-          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:latest"
-
-      - name: 🚀 Configure App Service container image
-        run: |
-          az webapp config container set \
-            --name "$APP_SERVICE_NAME" \
+          case "$DEPLOY_STAGE" in
+            full) stage=deploy ;;
+            doctor|provision|build|deploy|verify|repair) stage="$DEPLOY_STAGE" ;;
+            *) echo "Unsupported deployment stage: $DEPLOY_STAGE" >&2; exit 1 ;;
+          esac
+          scripts/deploy.sh "$stage" \
+            --environment "$DEPLOY_ENVIRONMENT" \
+            --subscription "$SUBSCRIPTION_ID" \
+            --location "$LOCATION" \
             --resource-group "$RESOURCE_GROUP" \
-            --docker-custom-image-name "$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
-            --docker-registry-server-url "https://$ACR_LOGIN_SERVER"
-
-      - name: ⚙️ Set app settings
-        run: |
-          az webapp config appsettings set \
-            --resource-group "$RESOURCE_GROUP" \
-            --name "$APP_SERVICE_NAME" \
-            --settings \
-              WEBSITES_PORT=80 \
-              WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
-              NGINX_VERSION=1.30.3 \
-              VULNERABILITY_STATUS=vulnerable \
-              PORT=3000 \
-              DOCKER_REGISTRY_SERVER_URL="https://$ACR_LOGIN_SERVER"
-
-      - name: ♻️ Restart the app
-        run: |
-          az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME"
-
-      - name: 🏥 Health check
-        run: |
-          HEALTH_ENDPOINT="https://${APP_SERVICE_NAME}.azurewebsites.net/health"
-          echo "Checking health endpoint: $HEALTH_ENDPOINT"
-          for i in {1..12}; do
-            if curl -fsS "$HEALTH_ENDPOINT" > /dev/null; then
-              echo "✅ Application is healthy"
-              curl -fsS "$HEALTH_ENDPOINT"
-              exit 0
-            fi
-            echo "Attempt $i/12 - waiting for the app to respond..."
-            sleep 10
-          done
-          echo "❌ Application health check failed"
-          exit 1
+            --registry-name "$CONTAINER_REGISTRY_NAME" \
+            --app-service-name "$APP_SERVICE_NAME" \
+            --image-name "$IMAGE_NAME" \
+            --image-tag "$IMAGE_TAG" \
+            --yes
 
       - name: 📊 Deployment summary
         run: |
@@ -162,7 +130,7 @@ jobs:
           echo "**Resource group:** $RESOURCE_GROUP" >> "$GITHUB_STEP_SUMMARY"
           echo "**App Service:** $APP_SERVICE_NAME" >> "$GITHUB_STEP_SUMMARY"
           echo "**Container registry:** $CONTAINER_REGISTRY_NAME" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Image:** $ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Image:** $CONTAINER_REGISTRY_NAME.azurecr.io/$IMAGE_NAME:$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "**URL:** https://${APP_SERVICE_NAME}.azurewebsites.net" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 📢 Deployment status comment

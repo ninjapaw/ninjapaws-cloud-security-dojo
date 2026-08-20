@@ -30,6 +30,14 @@
     "imageTag": {
       "type": "string",
       "defaultValue": "latest"
+    },
+    "nginxVersion": {
+      "type": "string",
+      "defaultValue": "1.30.3"
+    },
+    "vulnerabilityStatus": {
+      "type": "string",
+      "defaultValue": "vulnerable"
     }
   },
   "resources": [
@@ -59,7 +67,7 @@
       "scope": "[resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', ''))]",
       "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), 'acrPull')]",
       "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-e8e2c1d662d4')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
         "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').principalId]",
         "principalType": "ServicePrincipal"
       },
@@ -118,11 +126,11 @@
             },
             {
               "name": "NGINX_VERSION",
-              "value": "1.30.3"
+              "value": "[parameters('nginxVersion')]"
             },
             {
               "name": "VULNERABILITY_STATUS",
-              "value": "vulnerable"
+              "value": "[parameters('vulnerabilityStatus')]"
             },
             {
               "name": "PORT",
@@ -173,6 +181,10 @@
     "managedIdentityClientId": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').clientId]"
+    },
+    "image": {
+      "type": "string",
+      "value": "[format('{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer, parameters('imageName'), parameters('imageTag'))]"
     }
   }
 }

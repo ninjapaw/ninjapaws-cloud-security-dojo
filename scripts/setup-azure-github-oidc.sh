@@ -5,6 +5,18 @@
 
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+AZURE_REPO_ROOT="$REPO_ROOT"
+if command -v wslpath >/dev/null 2>&1; then
+  AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
+fi
+
+# Windows az.cmd emits CRLF output when called from WSL/Git Bash.
+az() {
+  command az "$@" | tr -d '\r'
+}
+
 environment_name=dev
 resource_group=""
 location=centralus
@@ -13,6 +25,7 @@ app_service_name=""
 repository=""
 subscription_id="${AZURE_SUBSCRIPTION_ID:-}"
 provision=false
+use_defaults=false
 
 usage() {
   cat <<'EOF'
@@ -28,7 +41,8 @@ Options:
   --location <region>        Azure region (default: centralus)
   --subscription <id>        Azure subscription (default: current az account)
   --repository <owner/name>  GitHub repository (default: current repository)
-  --provision                Also deploy infra/main.bicep and grant AcrPush
+  --provision                Also deploy infra/main.bicep and grant ACR build/push roles
+  --defaults                 Accept built-in environment defaults without prompts
   --help                     Show this help
 
 Defaults for --environment prod match the existing production resources.
@@ -45,12 +59,13 @@ while (($# > 0)); do
     --subscription) subscription_id="$2"; shift 2 ;;
     --repository) repository="$2"; shift 2 ;;
     --provision) provision=true; shift ;;
+    --defaults) use_defaults=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
   esac
 done
 
-for command_name in az gh; do
+for command_name in az gh tr; do
   command -v "$command_name" >/dev/null || { printf "ERROR: '%s' is required.\n" "$command_name" >&2; exit 1; }
 done
 
@@ -72,6 +87,20 @@ case "$environment_name" in
     exit 1
     ;;
 esac
+
+acr_name="${registry_name//-/}"
+
+if [[ -t 0 && "$use_defaults" == false ]]; then
+  read -r -p "Azure region [$location]: " answer
+  location="${answer:-$location}"
+  read -r -p "Resource group [$resource_group]: " answer
+  resource_group="${answer:-$resource_group}"
+  read -r -p "Container Registry [$registry_name]: " answer
+  registry_name="${answer:-$registry_name}"
+  acr_name="${registry_name//-/}"
+  read -r -p "App Service [$app_service_name]: " answer
+  app_service_name="${answer:-$app_service_name}"
+fi
 
 az account show >/dev/null 2>&1 || { printf "%s\n" "Azure CLI is not authenticated. Run 'az login' and retry." >&2; exit 1; }
 if [[ -n "$subscription_id" ]]; then
@@ -112,7 +141,7 @@ az ad app federated-credential create --id "$app_object_id" --parameters "$(
 az group create --name "$resource_group" --location "$location" >/dev/null
 
 resource_group_scope="/subscriptions/$subscription_id/resourceGroups/$resource_group"
-acr_scope="$resource_group_scope/providers/Microsoft.ContainerRegistry/registries/$registry_name"
+acr_scope="$resource_group_scope/providers/Microsoft.ContainerRegistry/registries/$acr_name"
 
 ensure_role() {
   local role="$1"
@@ -141,17 +170,19 @@ if [[ "$provision" == true ]]; then
   az deployment group create \
     --name "ninjapaws-oidc-$(date +%s)" \
     --resource-group "$resource_group" \
-    --template-file infra/main.bicep \
+    --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
     --parameters \
       location="$location" \
-      containerRegistryName="$registry_name" \
+      containerRegistryName="$acr_name" \
       appServiceName="$app_service_name" \
     --output table
 
   # The registry exists after Bicep completes, so assign image-push access now.
   ensure_role AcrPush "$acr_scope"
-elif az acr show --name "$registry_name" --resource-group "$resource_group" --output none 2>/dev/null; then
+  ensure_role AcrBuild "$acr_scope"
+elif az acr show --name "$acr_name" --resource-group "$resource_group" --output none 2>/dev/null; then
   ensure_role AcrPush "$acr_scope"
+  ensure_role AcrBuild "$acr_scope"
 fi
 
 gh api --method PUT "repos/${repository}/environments/${environment_name}" --input - --silent <<'JSON'
@@ -165,19 +196,24 @@ if [[ "$branch_policy_count" == 0 ]]; then
     --field name="$deployment_branch" --silent
 fi
 
-printf '%s' "$app_client_id" | gh secret set AZURE_CLIENT_ID --env "$environment_name" --repo "$repository"
-printf '%s' "$tenant_id" | gh secret set AZURE_TENANT_ID --env "$environment_name" --repo "$repository"
-printf '%s' "$subscription_id" | gh secret set AZURE_SUBSCRIPTION_ID --env "$environment_name" --repo "$repository"
+gh variable set AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --body "$app_client_id"
+gh variable set AZURE_TENANT_ID --env "$environment_name" --repo "$repository" --body "$tenant_id"
+gh variable set AZURE_SUBSCRIPTION_ID --env "$environment_name" --repo "$repository" --body "$subscription_id"
 gh variable set AZURE_LOCATION --env "$environment_name" --repo "$repository" --body "$location"
 gh variable set AZURE_RESOURCE_GROUP --env "$environment_name" --repo "$repository" --body "$resource_group"
-gh variable set AZURE_CONTAINER_REGISTRY_NAME --env "$environment_name" --repo "$repository" --body "$registry_name"
+gh variable set AZURE_CONTAINER_REGISTRY_NAME --env "$environment_name" --repo "$repository" --body "$acr_name"
 gh variable set AZURE_APP_SERVICE_NAME --env "$environment_name" --repo "$repository" --body "$app_service_name"
+gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body 'ninjapaws-dojo'
+gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body '1.30.3'
+gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body 'vulnerable'
+# Migrate and remove any legacy copy created by older bootstrap versions.
+gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 
 printf '\nConfigured GitHub Environment %s for %s.\n' "$environment_name" "$repository"
 printf 'OIDC subject: %s\n' "$credential_subject"
 printf 'Deployment branch: %s\n' "$deployment_branch"
 printf 'Resource group: %s\n' "$resource_group"
-printf 'No client secret was created.\n'
+printf 'No client secret was created; Azure identifiers and deployment settings were saved as Environment variables.\n'
 if [[ "$provision" != true ]]; then
-  printf 'Rerun with --provision to deploy infra/main.bicep and grant AcrPush.\n'
+  printf 'Rerun with --provision to deploy infra/main.bicep and grant ACR build/push roles.\n'
 fi

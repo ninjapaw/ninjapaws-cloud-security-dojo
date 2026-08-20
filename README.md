@@ -124,41 +124,54 @@ The ARM template provisions an Azure Container Registry, Linux App Service Plan,
 
 ### Deployment script
 
+The deployment wizard supports initial setup, repeat deployments, repair, preflight checks, safe uninstall, and verification. It discovers the repository root, selects the Azure subscription explicitly when requested, provisions [infra/main.bicep](infra/main.bicep), builds an immutable image tag, configures App Service to use that tag, records non-secret deployment state under `.azure/`, and verifies Azure configuration plus the public `/health` and `/api/status` endpoints.
+
 ```bash
-az login
 chmod +x scripts/deploy.sh
-./scripts/deploy.sh
+scripts/deploy.sh setup
 ```
 
-Optional arguments are resource group, location, registry name, and App Service name:
+With no `--environment`, the wizard detects the current Git branch: `dev` selects the development environment and `main` selects production. Detached HEADs and other branches require an explicit `--environment dev` or `--environment prod`.
+
+The lifecycle stages are independently resumable:
 
 ```bash
-./scripts/deploy.sh NP-ninjapaws-dojo-CentralUS centralus ninjapawsdojo ninjapaws-dojo-app
+scripts/deploy.sh plan --environment prod
+scripts/deploy.sh doctor --environment prod --subscription <subscription-id>
+scripts/deploy.sh provision --environment prod --subscription <subscription-id>
+scripts/deploy.sh build --environment prod --subscription <subscription-id> --image-tag <tag>
+scripts/deploy.sh deploy --environment prod --subscription <subscription-id>
+scripts/deploy.sh repair --environment prod --subscription <subscription-id>
+scripts/deploy.sh verify --environment prod
+scripts/deploy.sh uninstall --environment prod --subscription <subscription-id> --wait
 ```
 
-The script deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and fails if the public `/health` endpoint does not become healthy.
+Use `--yes` for automation and `--defaults` when you explicitly want all built-in values accepted without prompts. In an interactive terminal, setup displays each default and waits for Enter or an override. Uninstall also requires the resource group to carry the deployment ownership tags unless `--force` is deliberately supplied. Override `--location`, `--resource-group`, `--registry-name`, `--app-service-name`, `--image-name`, or `--image-tag` when needed. The default image tag is the current Git commit SHA; `latest` remains published as a convenience tag but is not used as the final App Service target.
 
 ### Configure GitHub OIDC and Azure roles
 
 To create or reuse the Entra application, add the GitHub federated credential, assign the deployment roles, create the resource group, and deploy the infrastructure in one idempotent command:
 
+Run this separately as a one-time bootstrap per GitHub Environment. It creates or reuses the Entra application, configures the environment-scoped federated credential, saves non-secret Azure identifiers and deployment settings as Environment variables, grants the deployment identity its Azure roles, and can optionally provision the resource group infrastructure.
+
 ```bash
 chmod +x scripts/setup-azure-github-oidc.sh
-./scripts/setup-azure-github-oidc.sh
+scripts/setup-azure-github-oidc.sh --environment prod --provision
+scripts/setup-azure-github-oidc.sh --environment dev --provision
 ```
 
-Optional arguments are resource group, location, registry name, App Service name, repository, and Entra application display name:
+The script uses named options such as `--resource-group`, `--location`, `--registry-name`, `--app-service-name`, `--repository`, and `--subscription`. It creates no client secret. The executing identity must be allowed to create app registrations, assign Azure roles, and deploy the resource group infrastructure. Routine deployments should use the deployment workflow or `scripts/deploy.sh`, not rerun OIDC bootstrap.
+
+For first provision, run OIDC bootstrap, then run the deployment wizard:
 
 ```bash
-./scripts/setup-azure-github-oidc.sh \
-  NP-ninjapaws-dojo-CentralUS \
-  centralus \
-  ninjapawsdojo \
-  ninjapaws-dojo-app \
-  ninjapaw/ninjapaws-cloud-security-dojo
+az login
+gh auth login
+scripts/setup-azure-github-oidc.sh --environment prod --subscription <subscription-id> --provision
+scripts/deploy.sh deploy --environment prod --subscription <subscription-id>
 ```
 
-The script prints the three non-secret values to add as organization secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. It creates no client secret. The executing identity must be allowed to create app registrations, assign Azure roles, and deploy the resource group infrastructure.
+The bootstrap command automatically writes the Azure login identifiers and deployment variables to the selected GitHub Environment. Manually configure required reviewers and branch restrictions under **Repository Settings > Environments > dev/prod**. No application secret exists today, so no Key Vault secret is required for this repository.
 
 ### Manual Bicep deployment
 
@@ -188,29 +201,81 @@ curl "https://${APP_HOST}/api/status"
 az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
 ```
 
-The GitHub Actions deployment is manual-only and requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` organization secrets for OIDC login. It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad organization secret cannot fail every push.
+The GitHub Actions deployment derives the target exclusively from the Git ref: `dev` always deploys to the `dev` GitHub Environment and `main` always deploys to `prod`. There is no environment override in the workflow, preventing an accidental cross-environment deployment. Workflow dispatch uses the branch selected in GitHub; other branches fail before Azure login. It requires the Azure identifier variables and deployment variables created by the OIDC setup script. It calls the same staged wizard used locally, so pushes update both Bicep-managed infrastructure and the application image. Manual dispatch supports `doctor`, `provision`, `build`, `deploy`, `verify`, and `repair`; the separate uninstall workflow requires exact resource-group confirmation and environment protection.
 
-### GitHub organization secrets
+### Dev-to-main promotion
 
-Add these organization secrets and allow the `ninjapaws-cloud-security-dojo` repository to use them:
+Use this promotion path for code and infrastructure changes:
 
-| Secret | Value |
+1. Create a feature branch from `dev` and open a pull request into `dev`.
+2. Merge only after validation, remediation tests, infrastructure checks, and the `dev` deployment pass.
+3. Run **Actions > Promote dev to main > Run workflow** with the branch set to `dev`.
+4. The workflow creates or reuses a `dev` to `main` pull request.
+5. Review the promotion diff and merge it through the protected `main` branch.
+6. The merge to `main` automatically deploys the exact `main` commit to the `prod` Environment.
+
+The promotion workflow never merges or deploys production itself. Configure branch protection for `main` with required pull request review, required status checks (`Validate deployment assets` and applicable remediation checks), and required reviewers on the `prod` Environment. This keeps development deployment automatic while making production promotion deliberate and auditable.
+
+### Configuration and secret placement
+
+The OIDC setup script writes these non-secret values to each GitHub Environment as **variables** and owns their lifecycle. `AZURE_CLIENT_ID` is explicitly migrated out of any legacy Environment secret and is removed in both variable and secret form during uninstall.
+
+| Variable | Value |
 |---|---|
 | `AZURE_CLIENT_ID` | Client ID of the Microsoft Entra application used by GitHub Actions |
 | `AZURE_TENANT_ID` | Microsoft Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID containing the dojo resources |
+| `AZURE_LOCATION` | Azure region |
+| `AZURE_RESOURCE_GROUP` | Environment resource group |
+| `AZURE_CONTAINER_REGISTRY_NAME` | ACR name |
+| `AZURE_APP_SERVICE_NAME` | App Service name |
+| `AZURE_IMAGE_NAME` | Container image repository |
+| `NGINX_VERSION` | Training image NGINX version |
+| `VULNERABILITY_STATUS` | Training status reported by the app |
 
-Configure a federated credential on the Entra application for this GitHub repository's `main` branch. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow.
+The federated credential subject is `repo:ninjapaw/ninjapaws-cloud-security-dojo:environment:<environment>`, matching the workflow's declared environment. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow.
 
-The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the deployment identity needs Contributor plus permission to write role assignments at the deployment scope. The optional detection-workflow ACR publication also requires `AcrPush` on `ninjapawsdojo`.
+Use this placement policy:
+
+- **GitHub Environment variables:** non-secret deployment coordinates and feature/configuration values that CI needs before Azure login, separated for `dev` and `prod`.
+- **Azure Key Vault:** application/runtime secrets such as API keys, database passwords, signing keys, certificates, and connection strings. App Service should read them through managed-identity Key Vault references; secret values should never be written to Bicep parameters, GitHub variables, workflow logs, or committed files.
+- **GitHub Environment secrets:** only values that GitHub itself must keep confidential and cannot obtain through OIDC or Key Vault. This repository currently requires none because OIDC uses identifiers, not a client secret.
+
+Use **organization-level GitHub variables** only for truly shared, non-secret values that should be identical across repositories, such as a common image namespace, default Azure region, or organization-wide policy label. Environment variables take precedence when a repository needs a different `dev` or `prod` value. For shared values that legitimately differ by environment, keep them as Environment variables (`AZURE_LOCATION_DEV`, `AZURE_LOCATION_PROD`, for example) or, preferably, use the separate `dev` and `prod` Environments so workflow names stay stable. Do not put secrets in organization variables; use Key Vault or the narrowly scoped GitHub Environment secret fallback.
+
+The uninstall workflow removes the Environment variables created by this repository. It does not delete organization-level variables because those may be shared by other repositories; organization-variable ownership and cleanup must remain an organization administrator's responsibility.
+
+Key Vault is not a replacement for ordinary configuration: putting resource names and regions there would make bootstrap harder without improving confidentiality. When the application gains its first runtime secret, add a Key Vault resource and managed-identity `Key Vault Secrets User` assignment in Bicep, then reference the secret from App Service using a Key Vault reference.
+
+The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the bootstrap identity needs Contributor plus permission to write role assignments at the deployment scope. The staged wizard uses server-side `az acr build`, so the GitHub Environment identity also receives `AcrPush` and `AcrBuild` on the registry.
+
+There are currently no application secrets in this repository. Do not create a Key Vault merely to hold empty configuration. If a future runtime secret is introduced, store it in Azure Key Vault and reference it from App Service using managed identity; keep GitHub OIDC identifiers as GitHub Environment variables because they are not secret values.
+
+On Windows, run the Bash scripts from WSL, Git Bash, or another Bash-compatible environment. The repository enforces LF line endings for shell scripts.
+
+### Cross-platform tests
+
+Run the shared Bash test wrapper from Linux, macOS, WSL, or Git Bash:
+
+```bash
+bash scripts/test.sh
+```
+
+When Azure CLI is unavailable, run the local-only checks with `bash scripts/test.sh --skip-azure`. CI runs the full wrapper and Bicep compilation on Ubuntu. PowerShell is not required for the deployment path; keep it only for Windows-specific administration outside this repository.
 
 ### Azure cleanup
 
-Training resources incur charges while running. Delete the resource group when finished:
+Training resources incur charges while running. Use the guarded uninstall stage when finished:
 
 ```bash
-az group delete --name NP-ninjapaws-dojo-CentralUS --yes --no-wait
+scripts/deploy.sh uninstall \
+  --environment prod \
+  --subscription <subscription-id> \
+  --resource-group NP-ninjapaws-dojo-CentralUS \
+  --wait
 ```
+
+The GitHub uninstall workflow is manual-only and should use a protected `prod` Environment with required reviewers. It requires typing the exact resource-group name before Azure deletion is attempted.
 
 ## Detection and remediation workflow
 

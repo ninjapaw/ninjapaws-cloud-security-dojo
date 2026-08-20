@@ -4,6 +4,8 @@ param appServiceName string
 param appServicePlanName string = '${appServiceName}-plan'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
+param nginxVersion string = '1.30.3'
+param vulnerabilityStatus string = 'vulnerable'
 
 // Azure Container Registry
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -85,11 +87,11 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
         }
         {
           name: 'NGINX_VERSION'
-          value: '1.30.3'
+          value: nginxVersion
         }
         {
           name: 'VULNERABILITY_STATUS'
-          value: 'vulnerable'
+          value: vulnerabilityStatus
         }
         {
           name: 'PORT'
@@ -116,3 +118,4 @@ output appServiceUrl string = 'https://${appService.properties.defaultHostName}'
 output appServiceName string = appService.name
 output managedIdentityId string = managedIdentity.id
 output managedIdentityClientId string = managedIdentity.properties.clientId
+output image string = '${containerRegistry.properties.loginServer}/${imageName}:${imageTag}'
