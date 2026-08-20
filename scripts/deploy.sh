@@ -17,13 +17,22 @@ cd "$REPO_ROOT"
 AZURE_REPO_ROOT="$REPO_ROOT"
 if command -v wslpath >/dev/null 2>&1; then
     AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
+elif command -v cygpath >/dev/null 2>&1; then
+    AZURE_REPO_ROOT="$(cygpath -w "$REPO_ROOT")"
 fi
-for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin"; do
-    if [[ ! -x "$azure_cli_dir/az.cmd" && -f "$azure_cli_dir/az.cmd" ]]; then
-        export PATH="$azure_cli_dir:$PATH"
-        break
-    fi
-done
+# The Azure CLI installer does not always add itself to the PATH seen by Git Bash or WSL.
+if ! command -v az >/dev/null 2>&1; then
+    for azure_cli_dir in \
+        "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/mnt/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/wbin"; do
+        if [[ -f "$azure_cli_dir/az" || -f "$azure_cli_dir/az.cmd" ]]; then
+            export PATH="$azure_cli_dir:$PATH"
+            break
+        fi
+    done
+fi
 if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
     windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
@@ -32,9 +41,10 @@ if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && comm
     fi
 fi
 
-# Windows az.cmd emits CRLF output when called from WSL/Git Bash.
+# Windows az.cmd emits CRLF output when called from WSL/Git Bash. MSYS also rewrites arguments that
+# look like Unix paths, which would corrupt resource IDs and role-assignment scopes, so exclude those.
 az() {
-    command az "$@" | tr -d '\r'
+    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
 }
 
 COMMAND="deploy"
