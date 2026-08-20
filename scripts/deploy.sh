@@ -117,6 +117,7 @@ config_lookup() {
         BEGIN { depth = 0 }
         {
             line = $0
+            gsub(/\r/, "", line)
             gsub(/^[ \t]+|[ \t]+$/, "", line)
             if (line ~ /^"[^"]+"[ \t]*:[ \t]*\{/) {
                 key = line; sub(/^"/, "", key); sub(/".*/, "", key)
