@@ -352,7 +352,7 @@ app.get('/', (req, res) => {
         <li><code>/</code> - Human-readable training dashboard</li>
         <li><code>/health</code> - JSON health probe used by App Service and rollout checks</li>
         <li><code>/api/status</code> - JSON CVE metadata and runtime package/config evidence</li>
-        <li><strong>Internal NGINX evidence:</strong> <code>map</code> is not an HTTP route; inspect <code>runtime_verification.map_regex_enabled</code> in <code>/api/status</code>.</li>
+        <li><strong>Internal NGINX evidence:</strong> inspect the <code>map</code> configuration through <code>runtime_verification.map_regex_enabled</code> in <code>/api/status</code>.</li>
       </ul>
     </div>
 
