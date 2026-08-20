@@ -6,10 +6,10 @@
       "value": "centralus"
     },
     "containerRegistryName": {
-      "value": "ninjapawsdojo"
+      "value": "ninjapawsdojoprod"
     },
     "appServiceName": {
-      "value": "ninjapaws-dojo-app"
+      "value": "ninjapaws-dojo-app-prod"
     },
     "appServicePlanName": {
       "value": "ninjapaws-dojo-plan"

@@ -1,6 +1,6 @@
 param location string = 'centralus'
-param containerRegistryName string = 'ninjapawsdojo'
-param appServiceName string = 'ninjapaws-dojo-app'
+param containerRegistryName string = 'ninjapawsdojoprod'
+param appServiceName string = 'ninjapaws-dojo-app-prod'
 param appServicePlanName string = 'ninjapaws-dojo-plan'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'

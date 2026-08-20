@@ -59,5 +59,5 @@ Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI
 - Added live Bicep progress reporting with percentage estimates, resource-operation details, and a persistent deployment log.
 - Dev `provision` test completed successfully with live `[10%]`, `[95%]`, and `state=Succeeded` progress output.
 - Mutating lifecycle commands are now branch-locked: `dev` can only target `dev`, and `main` can only target `prod`.
-- Azure what-if preview: 4 resources to create and 2 resources to update in `NP-ninjapaws-dojo-CentralUS`.
+- Azure what-if preview: 4 resources to create and 2 resources to update in `NP-ninjapaws-dojo-Prod-CentralUS`.
 - No Azure deployment or destructive operation was executed during validation.

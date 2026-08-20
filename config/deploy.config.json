@@ -63,9 +63,9 @@
     "prod": {
       "branch": "main",
       "location": "centralus",
-      "resourceGroup": "NP-ninjapaws-dojo-CentralUS",
-      "registryName": "ninjapawsdojo",
-      "appServiceName": "ninjapaws-dojo-app",
+      "resourceGroup": "NP-ninjapaws-dojo-Prod-CentralUS",
+      "registryName": "ninjapawsdojoprod",
+      "appServiceName": "ninjapaws-dojo-app-prod",
       "vulnerabilityStatus": "vulnerable",
       "defenderEnabled": "true",
       "npmRegistryUrl": "https://registry.npmjs.org",
