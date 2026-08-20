@@ -349,9 +349,10 @@ app.get('/', (req, res) => {
     <div class="endpoints">
       <h3>Available Endpoints</h3>
       <ul class="endpoint-list">
-        <li><code>/</code> - This homepage</li>
-        <li><code>/health</code> - Health check endpoint (JSON)</li>
-        <li><code>/api/status</code> - Detailed status information (JSON)</li>
+        <li><code>/</code> - Human-readable training dashboard</li>
+        <li><code>/health</code> - JSON health probe used by App Service and rollout checks</li>
+        <li><code>/api/status</code> - JSON CVE metadata and runtime package/config evidence</li>
+        <li><strong>Internal NGINX evidence:</strong> <code>map</code> is not an HTTP route; inspect <code>runtime_verification.map_regex_enabled</code> in <code>/api/status</code>.</li>
       </ul>
     </div>
 
