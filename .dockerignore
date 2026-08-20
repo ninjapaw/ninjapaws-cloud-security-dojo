@@ -11,3 +11,6 @@ scripts
 .env
 .env.*
 deployment-output.json
+output
+docker-compose.yml
+azuredeploy.json

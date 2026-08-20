@@ -75,9 +75,40 @@ Use `--defaults` to accept built-in values and `--yes` for non-interactive confi
 
 Each lifecycle run also writes an auto-refreshing HTML status dashboard to `output/<environment>/deployment-<environment>.html`. Open that local file in a browser while the command runs to see the latest stage, percentage, environment coordinates, image, and links to detailed logs/state. No web server is required; the terminal remains the authoritative live stream. Use `--no-status-html` when a file report is not wanted.
 
+While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as *Not started*, *In progress* (animated spinner), *Success*, *Failure*, *Skipped*, or *Not applicable*, each with its own duration and a one-line detail. A failed stage shows the reason inline.
+
+The task list is built dynamically from the command you ran, so it always reflects the real work:
+
+| Command | Tasks after preflight and planning |
+| --- | --- |
+| `plan` | dry run only; preflight is marked *Not applicable* |
+| `doctor` | compile Bicep, what-if against the resource group |
+| `provision` | create and tag the resource group, deploy the Bicep infrastructure |
+| `build` | fingerprint the build context, build or reuse the image |
+| `rollout` | configure App Service, restart and wait for health, verify |
+| `verify` | verify only |
+| `deploy` / `setup` / `update` / `repair` | all seven stages end to end |
+| `uninstall` | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
+
+Overall progress is derived from that list rather than hardcoded, so the percentage is meaningful for every command. Each stage also contributes its own rows to the verification matrix and its own tailored **Next steps**, so `uninstall`, `doctor`, and `plan` produce a genuine executive report instead of a deployment-shaped one.
+
+When the run reaches 100% the page rewrites itself as a **final executive report** with auto-refresh disabled. It adds a verification matrix where every check is recorded as **Pass**, **Failure**, **Not sure**, or **Not applicable** together with the evidence used to decide, an **Environment access** panel with clickable links to the live application, its `/api/status` and `/health` endpoints, and the Azure portal blades for the resource group, App Service, and container registry — annotated with whether the site actually responded — and a **Next steps** section tailored to whether the run succeeded or failed.
+
+### Content-addressed builds
+
+Every build first computes a **fingerprint**: a SHA-256 over each file the Dockerfile copies (`Dockerfile`, `package.json`, `package-lock.json`, `app.js`, `nginx.conf`, `entrypoint.sh`) plus every build argument. That fingerprint is pushed as an extra tag (`fp-<hash>`) alongside the immutable Git-SHA tag.
+
+On the next run the script looks up `fp-<hash>` in ACR:
+
+- **Hash already present** — nothing changed. The build and upload are skipped entirely; the Git-SHA, `latest`, and training-status tags are aliased to the existing manifest digest server-side with `az acr import`, which transfers no layers.
+- **App Service already configured for that exact image and passing `/health`** — the rollout and restart are skipped too, so a no-op deploy causes no downtime.
+- **Hash absent** — the content genuinely changed, so a full `az acr build` runs.
+
+The report shows the resolved manifest digest, the fingerprint, and whether the image was *Unchanged (rebuild and upload skipped)* or *Changed (rebuilt and pushed)*. Verification asserts that the deployed tag and the current source fingerprint resolve to the same digest, so drift between the working tree and the running container is caught. Use `--force-rebuild` to bypass both skips.
+
 Every run starts with a clean environment output directory. The previous run is archived under `output/archive/<timestamp>-<environment>/` by default, preserving troubleshooting history without allowing stale files to affect the current run. Use `--no-archive` only when automatic deletion of the previous output is explicitly preferred.
 
-The dashboard includes a live console panel. During interactive setup it shows **Waiting for your input** while the terminal prompts for values; after each answer it updates with the resolved stage and deployment messages. The console history is also saved in `output/<environment>/deployment-<environment>.console`.
+The dashboard includes one **Live Console** artifact at `output/<environment>/deployment-<environment>.console.html`. During interactive setup it shows **Waiting for your input** while the terminal prompts for values; after each answer it updates with the resolved stage and deployment messages. Raw capture is kept only as hidden per-run staging data while the HTML is regenerated.
 
 When possible, the wizard opens the dashboard in the default browser automatically and prints both the absolute path and a clickable `file://` link. Use `--no-open-status` in headless terminals or CI.
 
