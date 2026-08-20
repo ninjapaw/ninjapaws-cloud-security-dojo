@@ -29,6 +29,7 @@ build/
 !.azure/
 !.azure/deployment-plan.md
 appservice-logs.zip
+deployment-output.json
 
 # Docker
 .docker/

@@ -10,6 +10,12 @@ AZURE_REPO_ROOT="$REPO_ROOT"
 if command -v wslpath >/dev/null 2>&1; then
     AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
 fi
+for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin"; do
+    if [[ ! -x "$azure_cli_dir/az.cmd" && -f "$azure_cli_dir/az.cmd" ]]; then
+        export PATH="$azure_cli_dir:$PATH"
+        break
+    fi
+done
 SKIP_AZURE=false
 NODE_COMMAND=""
 
