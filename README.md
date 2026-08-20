@@ -37,7 +37,19 @@ npm test
 npm start
 ```
 
-The direct application listens on `http://localhost:3000`. Health and status endpoints are `/health` and `/api/status`.
+The direct application listens on `http://localhost:3000`.
+
+### Endpoint surface
+
+| Route | Purpose | Exposure |
+| --- | ---: | --- |
+| `/` | Human-readable training dashboard | Public application route |
+| `/health` | Lightweight JSON health probe | Public application route; used by App Service and rollout checks |
+| `/api/status` | JSON CVE metadata, package/config evidence, image host, and runtime state | Public evidence route for the demo |
+
+There is no `/map` HTTP endpoint. `map` is an internal NGINX configuration directive rendered by `entrypoint.sh` into `/etc/nginx/scenario.conf`. In the affected image it combines regex matching and captures; the detector reports this as `runtime_verification.map_regex_enabled: true`. The `/api/status` response is the safe way to inspect that evidence without adding a route that exercises the vulnerable configuration.
+
+The current production deployment is available at [ninjapaws-dojo-app-prod.azurewebsites.net](https://ninjapaws-dojo-app-prod.azurewebsites.net/). Its [health endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/health) is suitable for probes; its [status endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/api/status) is the authoritative demo evidence surface.
 
 Run the containerized stack:
 
