@@ -87,7 +87,10 @@ RUN_STARTED_AT="$(date +%s)"
 RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_ENDED_ISO=""
 RUN_ID=""
-RUN_INVOCATION="$*"
+RUN_INVOCATION="${*:-$COMMAND}"
+AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
+AZURE_ACCOUNT_NAME=""
+SUBSCRIPTION_NAME=""
 
 # Read a dotted path of string values out of the config file without requiring jq.
 config_lookup() {
@@ -816,7 +819,7 @@ write_state_js() {
 render_audit_facts() {
     local ended="${RUN_ENDED_ISO:-in progress}"
     printf '<div class="item"><div class="label">Run ID</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$RUN_ID")"
-    printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$COMMAND $RUN_INVOCATION")"
+    printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$RUN_INVOCATION")"
     printf '<div class="item"><div class="label">Started (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$RUN_STARTED_ISO")"
     printf '<div class="item"><div class="label">Ended (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$ended")"
     printf '<div class="item"><div class="label">Duration</div><div class="value">%s</div></div>' "$(format_duration "$(( $(date +%s) - RUN_STARTED_AT ))")"
@@ -827,7 +830,9 @@ render_audit_facts() {
     printf '<div class="item"><div class="label">Working tree</div><div class="value">%s</div></div>' "$(html_escape "$GIT_DIRTY")"
     printf '<div class="item"><div class="label">Tool version</div><div class="value">v%s (config v%s)</div></div>' "$(html_escape "$APP_VERSION")" "$(html_escape "$CONFIG_VERSION")"
     printf '<div class="item"><div class="label">Config source</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(basename "$CONFIG_FILE")")"
-    printf '<div class="item"><div class="label">Tenant / subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${AZURE_TENANT_ID:-not recorded} / ${SUBSCRIPTION_ID:-unknown}")"
+    printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${AZURE_TENANT_ID:-not recorded}")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "${SUBSCRIPTION_ID:-unknown}")"
+    printf '<div class="item"><div class="label">Azure identity</div><div class="value">%s</div></div>' "$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")"
 }
 
 command_noun() {
@@ -1500,6 +1505,7 @@ require_commands() {
 }
 
 authenticate() {
+    local account_info
     if ! az account show >/dev/null 2>&1; then
         echo -e "${YELLOW}Azure CLI is not authenticated. Starting device-code login.${NC}"
         az login --use-device-code >/dev/null
@@ -1507,7 +1513,12 @@ authenticate() {
     if [[ -n "$SUBSCRIPTION_ID" ]]; then
         az account set --subscription "$SUBSCRIPTION_ID" || fail "Unable to select subscription '$SUBSCRIPTION_ID'."
     fi
-    SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+    # One call for every identity fact the audit trail needs; tsv returns one field per line.
+    account_info="$(az account show --query "[id,tenantId,name,user.name]" -o tsv)"
+    SUBSCRIPTION_ID="$(printf '%s\n' "$account_info" | sed -n 1p)"
+    AZURE_TENANT_ID="${AZURE_TENANT_ID:-$(printf '%s\n' "$account_info" | sed -n 2p)}"
+    SUBSCRIPTION_NAME="$(printf '%s\n' "$account_info" | sed -n 3p)"
+    AZURE_ACCOUNT_NAME="$(printf '%s\n' "$account_info" | sed -n 4p)"
 }
 
 print_plan() {
@@ -1656,6 +1667,18 @@ acr_tag_digest() {
     az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$1" --query digest -o tsv 2>/dev/null || true
 }
 
+# One registry round trip returns every tag on a manifest, instead of one lookup per tag.
+# tsv renders a JSON array one element per line, so flatten to a single space-delimited string.
+acr_tags_for_digest() {
+    az acr manifest list-metadata --registry "$ACR_NAME" --name "$IMAGE_NAME" \
+        --query "[?digest=='$1'].tags | [0]" -o tsv 2>/dev/null \
+        | tr '\r\n\t' '   ' | tr -s ' ' || true
+}
+
+acr_digest_has_tag() {
+    [[ " $1 " == *" $2 "* ]]
+}
+
 # Server-side retag so an unchanged image gains the new tag without a rebuild.
 acr_alias_tag() {
     local digest="$1" tag="$2" registry_login="$3"
@@ -1668,7 +1691,7 @@ acr_alias_tag() {
 }
 
 build_image() {
-    local registry_login existing_digest tag aliased=0
+    local registry_login existing_digest tag aliased=0 existing_tags
     local build_log build_pid build_elapsed build_lines build_tail build_percent build_started
     set_task fingerprint in_progress "Hashing the build context and build arguments."
     registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv)" || fail "ACR '$ACR_NAME' was not found. Run provision first."
@@ -1700,9 +1723,10 @@ build_image() {
         set_task image in_progress "Aliasing the existing digest onto the release tags instead of rebuilding."
         IMAGE_DIGEST="$existing_digest"
         echo -e "${GREEN}Identical image content already in ACR ($IMAGE_DIGEST). Skipping the build.${NC}"
+        existing_tags="$(acr_tags_for_digest "$IMAGE_DIGEST")"
+        write_status_html building running "$(auto_percent 50)" "Digest already carries tags: ${existing_tags:-none}. Aliasing anything missing."
         for tag in "$IMAGE_TAG" latest "$VULNERABILITY_STATUS"; do
-            write_status_html building running "$(auto_percent 50)" "Checking whether tag $tag already points at $IMAGE_DIGEST."
-            if [[ "$(acr_tag_digest "$tag")" != "$IMAGE_DIGEST" ]]; then
+            if ! acr_digest_has_tag "$existing_tags" "$tag"; then
                 acr_alias_tag "$IMAGE_DIGEST" "$tag" "$registry_login" || fail "Could not alias tag '$tag' to digest $IMAGE_DIGEST. Re-run with --force-rebuild."
                 echo "  aliased $IMAGE_NAME:$tag -> $IMAGE_DIGEST"
                 aliased=$((aliased + 1))
@@ -1869,7 +1893,7 @@ wait_for_app_ready() {
 
 verify() {
     local app_host registry_login configured_image expected_image identity_name identity_principal role_count
-    local status_json probe fingerprint_digest settle_attempts failures=0
+    local status_json probe settle_attempts deployed_tags failures=0
     set_task verify in_progress "Running the Azure configuration, identity, and endpoint verification matrix."
     write_status_html verifying running "$(auto_percent 10)" "Checking image configuration, ACR pull permissions, and application endpoints."
 
@@ -1902,13 +1926,13 @@ verify() {
         FINGERPRINT_TAG="fp-$BUILD_FINGERPRINT"
     fi
     [[ -n "$IMAGE_DIGEST" ]] || IMAGE_DIGEST="$(acr_tag_digest "$IMAGE_TAG")"
-    fingerprint_digest="$(acr_tag_digest "$FINGERPRINT_TAG")"
-    if [[ -z "$IMAGE_DIGEST" || -z "$fingerprint_digest" ]]; then
-        record_check "Deployed image matches the current source fingerprint" unknown "Digest for $IMAGE_TAG or $FINGERPRINT_TAG could not be read from ACR, so content equivalence is undetermined."
-    elif [[ "$IMAGE_DIGEST" == "$fingerprint_digest" ]]; then
-        record_check "Deployed image matches the current source fingerprint" pass "$IMAGE_TAG and $FINGERPRINT_TAG both resolve to $IMAGE_DIGEST."
+    deployed_tags="$(acr_tags_for_digest "$IMAGE_DIGEST")"
+    if [[ -z "$IMAGE_DIGEST" || -z "$deployed_tags" ]]; then
+        record_check "Deployed image matches the current source fingerprint" unknown "Tags for $IMAGE_TAG could not be read from ACR, so content equivalence is undetermined."
+    elif acr_digest_has_tag "$deployed_tags" "$FINGERPRINT_TAG"; then
+        record_check "Deployed image matches the current source fingerprint" pass "Digest $IMAGE_DIGEST carries both $IMAGE_TAG and $FINGERPRINT_TAG (tags: $deployed_tags)."
     else
-        record_check "Deployed image matches the current source fingerprint" fail "Tag $IMAGE_TAG is $IMAGE_DIGEST but the current source fingerprint $FINGERPRINT_TAG is $fingerprint_digest. The running image does not match the working tree."
+        record_check "Deployed image matches the current source fingerprint" fail "Digest $IMAGE_DIGEST carries tags [$deployed_tags] but not $FINGERPRINT_TAG. The running image does not match the working tree."
         failures=$((failures + 1))
     fi
 
