@@ -1,10 +1,16 @@
 # Ninja Paws Cloud Security Dojo
 
-> **Unofficial community helper.** Ninja Paws is a fictional demo organization used by this repository. This independent community project is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Contributions from Microsoft employees, if any, are made in an individual capacity and do not imply Microsoft endorsement or sponsorship. Use this public demo at your own risk.
+> **Independent community project.** This repository is maintained by Dr Bill Mcilhargey for Ninja Paw. It is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft product names and trademarks remain the property of Microsoft Corporation. Use this public demo at your own risk.
 >
 > Microsoft, Azure, GitHub, Defender, and related names and marks are owned by their respective owners. This repository is not an approved or authorized Microsoft project unless separately stated by Microsoft in writing.
 
 A defensive cloud-security training environment demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
+
+## Defender for Cloud - Scenario 1
+
+**NGINX CVE Detection and Remediation** is the default scenario. It deploys the intentionally affected NGINX `1.30.3` workload and advisory-relevant `map`/regex configuration to Azure App Service with Azure Container Registry, Defender for App Service, Defender for Containers, and Defender CSPM coverage. The demo proves the running package and configuration, reviews Defender findings, then swaps to fixed NGINX `1.30.4` with the affected configuration removed.
+
+Scenarios are registered in `config/deploy.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
 
 ## What It Demonstrates
 
@@ -15,7 +21,9 @@ A defensive cloud-security training environment demonstrating container vulnerab
 - Bicep infrastructure with managed identity and ACR pull access
 - Microsoft Defender for Cloud integration points
 
-The default training state intentionally uses NGINX `1.30.3` and reports `CVE-2026-42533` as vulnerable. Do not expose the training deployment to untrusted users or use it with real data.
+The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
+
+For a customer-facing, self-guided run-through, start with [DEMO.md](DEMO.md). It walks through baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
 
 ## Quick Start
 
@@ -50,13 +58,45 @@ All Docker build arguments are non-secret configuration. Defaults are safe fallb
 | `BASE_OS_VERSION` | `24.04` | Ubuntu image version |
 | `NGINX_VERSION` | `1.30.3` | Pinned NGINX package |
 | `NODE_MAJOR_VERSION` | `20` | NodeSource major version |
-| `VULNERABILITY_STATUS` | `vulnerable` | Training state reported by the app |
-| `PORT` | `3000` | Internal Node.js port |
-| `DEFENDER_ENABLED` | `false` | Training dashboard flag |
+| `VULNERABILITY_STATUS` | `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
+| `PORT` | `3000` | Internal Node.js port behind NGINX |
+| `WEBSITES_PORT` | `80` | Port exposed by the container to Azure App Service |
+| `DEFENDER_ENABLED` | `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans |
 
-`entrypoint.sh` generates NGINX from `nginx.conf` at startup, replacing `__APP_PORT__` with `PORT`. NGINX continues to listen on port 80; `PORT` controls the internal Node.js upstream.
+Defender for Cloud settings live under the `defender` object in `config/deploy.config.json`. The checked-in defaults are intentionally suited to this vulnerable App Service container scenario:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `defender.scanAfterVerify` | `true` | Adds a post-verification Defender scan task to `deploy`, `rollout`, `repair`, and `verify` |
+| `defender.managePlans` | `true` | Allows the lifecycle to activate the configured Microsoft Security pricing tiers |
+| `defender.targetCve` | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload |
+| `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
+| `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
+| `defender.plans.CloudPosture` | `Free` | Foundational Defender CSPM posture visibility |
+
+These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_TARGET_CVE`, `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, and `DEFENDER_CSPM_TIER`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
+
+The lifecycle does **not** automatically deactivate an already-enabled Defender plan when a workload is set to `disabled`; pricing plans apply at subscription scope, so silently turning off protection from an application deployment would be unsafe. The report instead records unrequested plans as **Not applicable** and leaves subscription-wide deactivation to an explicit Defender for Cloud administrator action.
+
+`entrypoint.sh` generates NGINX from `nginx.conf` at startup, replacing `__APP_PORT__` with `PORT`. This is a deliberate dual-port design: **WEBSITES_PORT=80** tells Azure App Service which container port accepts traffic, while **PORT=3000** is the Node.js upstream behind NGINX. Changing `PORT` changes the NGINX upstream automatically; changing `WEBSITES_PORT` requires changing the container listener and App Service configuration together. Startup also records the actual NGINX binary and Debian package versions, which `/api/status` exposes under `runtime_verification` and the deployment report verifies.
 
 Never put credentials in these variables. Runtime secrets belong in Azure Key Vault with managed identity. GitHub Environment secrets are reserved for values GitHub itself must keep confidential when OIDC or Key Vault cannot provide them.
+
+### Subscription, tenant, and region setup
+
+On the first interactive deployment, the lifecycle obtains the current Azure context with `az account show`. If more than one enabled subscription is available and no `--subscription` was supplied, it presents a numbered list so you can choose the subscription by number or ID. If no region was supplied, it presents a numbered region list with **Central US (`centralus`)** as the default; pressing Enter accepts that default. `--defaults` uses the current Azure subscription and Central US without prompting. GitHub Actions is non-interactive and uses the GitHub Environment values.
+
+The OIDC bootstrap command stores `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, and `AZURE_LOCATION` as GitHub **Environment variables**. Subscription and tenant IDs are identifiers, not credentials, so GitHub variables are the correct storage class; putting them in Key Vault would add complexity without protecting a secret. The bootstrap creates no client secret and deploys through short-lived GitHub OIDC tokens. Any actual client secret, API key, connection string, or runtime password belongs in an Azure Key Vault reference or GitHub Environment secret, never in this repository.
+
+Deployment state and audit fields mask subscription and tenant IDs before writing them to JSON, HTML, or report text. Direct Azure portal links may still contain the full subscription ID because Azure requires it for a resource deep link. The full ID and tenant remain in process memory for Azure CLI operations and are never intentionally written as credential material.
+
+Bootstrap or refresh the GitHub Environment configuration with:
+
+```bash
+bash scripts/setup-azure-github-oidc.sh --environment dev
+```
+
+Use `--defaults` for Central US and the current Azure subscription, or choose a numbered region and subscription during the interactive prompts. Review the generated GitHub Environment variables before enabling `--provision`; Defender plan tiers can incur subscription charges.
 
 ## Azure Deployment
 
@@ -90,13 +130,35 @@ The task list is built dynamically from the command you ran, so it always reflec
 | `provision` | create and tag the resource group, deploy the Bicep infrastructure |
 | `build` | fingerprint the build context, build or reuse the image |
 | `rollout` | configure App Service, restart and wait for health, verify |
-| `verify` | verify only |
-| `deploy` / `setup` / `update` / `repair` | all seven stages end to end |
+| `verify` | verify Azure resources, then run the Defender scan and workload-coverage task |
+| `deploy` / `setup` / `update` / `repair` | all stages end to end, followed by the Defender scan and workload-coverage task |
 | `uninstall` | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
 
 Overall progress is derived from that list rather than hardcoded, so the percentage is meaningful for every command. Each stage also contributes its own rows to the verification matrix and its own tailored **Next steps**, so `uninstall`, `doctor`, and `plan` produce a genuine executive report instead of a deployment-shaped one.
 
-When the run reaches 100% the page rewrites itself as a **final executive report** with auto-refresh disabled. It adds a verification matrix where every check is recorded as **Pass**, **Failure**, **Not sure**, or **Not applicable** together with the evidence used to decide, an **Environment access** panel with clickable links to the live application, its `/api/status` and `/health` endpoints, and the Azure portal blades for the resource group, App Service, and container registry — annotated with whether the site actually responded — and a **Next steps** section tailored to whether the run succeeded or failed.
+### Defender for Cloud scan and workload coverage
+
+For deployment-shaped commands, the report runs a Defender task **after** App Service and endpoint verification. The task performs these actions and records each result in the verification matrix:
+
+1. Activates or verifies the configured Defender for App Service, Defender for Containers, and Defender CSPM pricing tiers.
+2. Reads the latest Defender for Cloud assessment inventory for the target resource group.
+3. Searches the assessment payload for the configured target CVE.
+4. Verifies that App Service attack detection and ACR image vulnerability assessment are covered.
+5. Explicitly records Kubernetes runtime coverage and unrelated Defender plans as **Not applicable** because this project deploys a custom Linux container to Azure App Service, not AKS, SQL, Storage, Key Vault, DNS, or Resource Manager workloads.
+
+The scan task is deliberately honest about timing. Defender vulnerability assessment is asynchronous and its engines continuously rescan or rescan on their service schedule; the Azure CLI does not provide a supported synchronous "scan this image now" operation for this deployment shape. The task therefore forces a fresh post-deployment assessment inventory read and reports **Not sure** when the target CVE is not yet present, rather than treating an empty or still-initializing result as proof that the image is clean.
+
+**What the plans monitor here:**
+
+- **Defender for App Service:** requests and responses to the app, App Service internal logs, the hosting sandbox, and the underlying platform VM/management surface for attack detection and security recommendations.
+- **Defender for Containers:** the Azure Container Registry image supply chain and known image vulnerabilities, including CVE findings. It does not turn this App Service deployment into an AKS workload and does not provide Kubernetes sensor coverage here.
+- **Defender CSPM:** foundational posture and recommendation visibility for the subscription and deployed Azure resources.
+
+The report's Environment access panel links directly to App Service Metrics/diagnostics and the Defender for Cloud Recommendations blade. When the scan returns **Not sure**, open the linked Recommendations blade and filter by the target image or CVE after Defender has finished processing the image.
+
+Official references: [What is Microsoft Defender for Cloud?](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction), [Defender for App Service](https://learn.microsoft.com/azure/defender-for-cloud/tutorial-enable-app-service-plan), [Defender for Containers](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction), and [view vulnerabilities for running containers](https://learn.microsoft.com/azure/defender-for-cloud/view-and-remediate-vulnerabilities-containers).
+
+When the run reaches 100% the page rewrites itself as a **final executive report** with auto-refresh disabled. It adds a verification matrix where every check is recorded as **Pass**, **Failure**, **Not sure**, or **Not applicable** together with the evidence used to decide, an **Environment access** panel with clickable links to the live application, its `/api/status` and `/health` endpoints, App Service Metrics and diagnostics, Defender for Cloud Recommendations, and the Azure portal blades for the resource group, App Service, and container registry — annotated with whether the site actually responded — and a **Next steps** section tailored to whether the run succeeded or failed.
 
 ### Content-addressed builds
 

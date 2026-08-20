@@ -2,19 +2,37 @@
 
 const express = require('express');
 const os = require('os');
+const fs = require('fs');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const DEFAULT_NGINX_VERSION = '1.30.3';
 const DEFAULT_VULNERABILITY_STATUS = 'vulnerable';
 const CVE_ID = 'CVE-2026-42533';
-const VULNERABILITY_DESCRIPTION = 'NGINX HTTP/2 CONTINUATION Frames Memory Corruption';
+const VULNERABILITY_DESCRIPTION = 'NGINX map directive and regex matching heap buffer overflow';
+const ADVISORY_URL = 'https://my.f5.com/manage/s/article/K000162097';
+const AFFECTED_VERSIONS = 'NGINX Open Source 1.30.0-1.30.3';
+const FIXED_VERSION = '1.30.4';
+
+function getRuntimeVerification() {
+  try {
+    return JSON.parse(fs.readFileSync('/run/ninja-paws-runtime.json', 'utf8'));
+  } catch (_error) {
+    return {
+      nginx_binary_version: null,
+      nginx_package_version: null
+    };
+  }
+}
 
 function getRuntimeStatus() {
+  const runtimeVerification = getRuntimeVerification();
   return {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
-    vulnerabilityStatus: process.env.VULNERABILITY_STATUS || DEFAULT_VULNERABILITY_STATUS,
-    defenderEnabled: process.env.DEFENDER_ENABLED === 'true'
+    vulnerabilityStatus: runtimeVerification.vulnerability_detected === true ? 'vulnerable' : 'not_detected',
+    vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
+    defenderEnabled: process.env.DEFENDER_ENABLED === 'true',
+    detectionReason: runtimeVerification.detection_reason || 'Runtime detection evidence is unavailable.'
   };
 }
 
@@ -30,6 +48,8 @@ app.get('/health', (req, res) => {
 // API status endpoint
 app.get('/api/status', (req, res) => {
   const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
+  const runtimeVerification = getRuntimeVerification();
+  const vulnerabilityDetected = runtimeVerification.vulnerability_detected === true;
   
   res.json({
     environment: 'Ninja Paws Cloud Security Dojo',
@@ -38,8 +58,13 @@ app.get('/api/status', (req, res) => {
     vulnerability: {
       cve_id: CVE_ID,
       status: vulnerabilityStatus,
-      description: VULNERABILITY_DESCRIPTION
+      detected: vulnerabilityDetected,
+      description: VULNERABILITY_DESCRIPTION,
+      advisory_url: ADVISORY_URL,
+      affected_versions: AFFECTED_VERSIONS,
+      fixed_version: FIXED_VERSION
     },
+    runtime_verification: runtimeVerification,
     host: os.hostname(),
     platform: os.platform(),
     arch: os.arch(),

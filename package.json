@@ -24,7 +24,7 @@
     "training",
     "education"
   ],
-  "author": "Ninja Paws",
+  "author": "Dr Bill Mcilhargey / Ninja Paw",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2"

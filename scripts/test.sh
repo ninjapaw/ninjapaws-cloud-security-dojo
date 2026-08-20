@@ -67,6 +67,8 @@ bash -n "$REPO_ROOT/scripts/deploy.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
 bash -n "$REPO_ROOT/scripts/test.sh"
 bash -n "$REPO_ROOT/entrypoint.sh"
+echo "Checking Node.js runtime syntax..."
+"$NODE_COMMAND" --check "$REPO_ROOT/app.js"
 
 contains_text() {
     local text="$1"
@@ -111,7 +113,28 @@ file_contains "$REPO_ROOT/docker-compose.yml" 'NODE_MAJOR_VERSION:'
 file_contains "$REPO_ROOT/entrypoint.sh" 'Base OS:'
 file_contains "$REPO_ROOT/entrypoint.sh" 'Node.js Major:'
 file_contains "$REPO_ROOT/entrypoint.sh" 'Generating NGINX upstream configuration'
+file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_binary_version'
+file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_package_version'
+file_contains "$REPO_ROOT/app.js" 'runtime_verification'
+file_contains "$REPO_ROOT/app.js" 'advisory_url: ADVISORY_URL'
+file_contains "$REPO_ROOT/app.js" 'fixed_version: FIXED_VERSION'
+file_contains "$REPO_ROOT/app.js" 'runtimeVerification.vulnerability_detected === true'
+file_contains "$REPO_ROOT/entrypoint.sh" 'VULNERABILITY_DETECTED=false'
+file_contains "$REPO_ROOT/entrypoint.sh" 'detection_reason'
 file_contains "$REPO_ROOT/nginx.conf" '127.0.0.1:__APP_PORT__'
+file_contains "$REPO_ROOT/nginx.conf" 'include /etc/nginx/scenario.conf'
+file_contains "$REPO_ROOT/entrypoint.sh" 'scenario_config_state'
+file_contains "$REPO_ROOT/entrypoint.sh" 'map_regex_enabled'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Scenario 1 vulnerable map/regex configuration'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Select a region by number or name'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure subscriptions available to this account:'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'mask_identifier'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
+file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
+file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation'
+file_contains "$REPO_ROOT/DEMO.md" 'Customer Demo Walkthrough'
+file_contains "$REPO_ROOT/DEMO.md" 'real NGINX vulnerability'
+file_contains "$REPO_ROOT/DEMO.md" 'Patched-State Demonstration'
 rendered_nginx="$(mktemp)"
 test_output="$(mktemp -d)"
 trap 'rm -f "$rendered_nginx"; rm -rf "$test_output"' EXIT
@@ -140,7 +163,7 @@ if bash "$REPO_ROOT/scripts/deploy.sh" provision --environment prod --defaults -
     echo "ERROR: dev branch was allowed to target prod." >&2
     exit 1
 fi
-for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT DEFENDER_ENABLED; do
+for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER; do
     file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" "gh variable set $variable_name"
     file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "$variable_name"
 done

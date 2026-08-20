@@ -1,6 +1,6 @@
 # Security Policy
 
-This repository is an unofficial, fictional Ninja Paws cloud-security training demo. It is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation.
+This repository is an independent Ninja Paw cloud-security training demo maintained by Dr Bill Mcilhargey. It is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation.
 
 ## Safe Use
 

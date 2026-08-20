@@ -52,6 +52,8 @@ COMMAND="deploy"
 # The workflow exports the unprefixed names, so both spellings are accepted.
 CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
 ENVIRONMENT="${DEPLOY_ENVIRONMENT:-auto}"
+SCENARIO_ID="${DEPLOY_SCENARIO:-}"
+ALL_SCENARIOS=false
 SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-${SUBSCRIPTION_ID:-}}"
 LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
@@ -66,6 +68,19 @@ VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-}"
 PORT="${PORT:-}"
 DEFENDER_ENABLED="${DEFENDER_ENABLED:-}"
+DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-}"
+DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-}"
+DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-}"
+DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-}"
+DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-}"
+DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-}"
+SCENARIO_NAME=""
+SCENARIO_SHORT_NAME=""
+SCENARIO_CVE=""
+SCENARIO_ADVISORY_URL=""
+SCENARIO_AFFECTED_VERSION=""
+SCENARIO_FIXED_VERSION=""
+SCENARIO_WORKLOADS=""
 ASSUME_YES=false
 FORCE=false
 FORCE_REBUILD=false
@@ -129,6 +144,24 @@ project_meta() {
     local value
     value="$(config_lookup "project.$1")"
     printf '%s' "${value:-$2}"
+}
+
+resolve_scenario() {
+    local configured_ids
+    configured_ids="$(config_lookup defaults.scenarioIds)"
+    if [[ "$ALL_SCENARIOS" == true ]]; then
+        SCENARIO_ID="$configured_ids"
+    fi
+    SCENARIO_ID="${SCENARIO_ID:-$(config_setting scenario defender-cloud-scenario-1)}"
+    [[ "$SCENARIO_ID" != *,* ]] || fail "Multiple scenarios are not yet supported in a single deployment invocation. Use --scenario with one ID; the registry is ready for future --all-scenarios orchestration."
+    SCENARIO_NAME="$(config_lookup "scenarios.$SCENARIO_ID.name")"
+    SCENARIO_SHORT_NAME="$(config_lookup "scenarios.$SCENARIO_ID.shortName")"
+    SCENARIO_CVE="$(config_lookup "scenarios.$SCENARIO_ID.cve")"
+    SCENARIO_ADVISORY_URL="$(config_lookup "scenarios.$SCENARIO_ID.advisoryUrl")"
+    SCENARIO_AFFECTED_VERSION="$(config_lookup "scenarios.$SCENARIO_ID.affectedVersion")"
+    SCENARIO_FIXED_VERSION="$(config_lookup "scenarios.$SCENARIO_ID.fixedVersion")"
+    SCENARIO_WORKLOADS="$(config_lookup "scenarios.$SCENARIO_ID.workloads")"
+    [[ -n "$SCENARIO_NAME" && -n "$SCENARIO_CVE" ]] || fail "Unknown scenario '$SCENARIO_ID'. Use --help or inspect the scenarios registry in $CONFIG_FILE."
 }
 
 resolve_audit_context() {
@@ -248,6 +281,7 @@ register_lifecycle_tasks() {
             register_task appconfig "Point App Service at the immutable image with managed-identity pull"
             register_task restart "Restart App Service and wait for the container to answer"
             register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
             ;;
         provision)
             register_task resourcegroup "Create and tag the resource group"
@@ -261,9 +295,11 @@ register_lifecycle_tasks() {
             register_task appconfig "Point App Service at the immutable image with managed-identity pull"
             register_task restart "Restart App Service and wait for the container to answer"
             register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
             ;;
         verify)
             register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
             ;;
         doctor)
             register_task bicep "Compile the Bicep template"
@@ -337,6 +373,8 @@ Options:
   --app-service-name <name> App Service name
   --image-name <name>      Container image repository (default: ninjapaws-dojo)
   --image-tag <tag>        Image tag (default: current Git SHA)
+    --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
+    --all-scenarios          Deploy all configured scenarios (currently one scenario)
     --yes                    Skip confirmation; required for non-interactive uninstall
     --defaults               Accept built-in defaults without interactive prompts
   --force                  Allow uninstall of an untagged resource group
@@ -345,7 +383,7 @@ Options:
     --no-status-html         Disable the auto-refreshing HTML status report
     --no-open-status         Keep the report on disk without opening a browser
     --no-archive             Delete the previous environment output instead of archiving it
-  --help                   Show this help
+    --help                   Show this help
 
 OIDC bootstrap is separate and should be run once per GitHub Environment:
   scripts/setup-azure-github-oidc.sh --environment <dev|prod> --provision
@@ -359,6 +397,38 @@ fail() {
 }
 
 prompt_default() {
+
+    prompt_region() {
+        local default_region="$1" answer index region
+        local regions=(centralus eastus eastus2 westus2 westus3 southcentralus westcentralus northeurope westeurope uksouth southeastasia australiaeast)
+        if [[ ! -t 0 ]]; then
+            printf '%s' "$default_region"
+            return 0
+        fi
+        printf '\nAzure region (default: %s)\n' "$default_region"
+        for index in "${!regions[@]}"; do
+            printf '  %2d) %s\n' "$((index + 1))" "${regions[$index]}"
+        done
+        while true; do
+            read -r -p "Select a region by number or name [$default_region]: " answer
+            answer="${answer:-$default_region}"
+            if [[ "$answer" =~ ^[0-9]+$ ]]; then
+                index=$((answer - 1))
+                if ((index >= 0 && index < ${#regions[@]})); then
+                    printf '%s' "${regions[$index]}"
+                    return 0
+                fi
+            else
+                for region in "${regions[@]}"; do
+                    if [[ "$answer" == "$region" ]]; then
+                        printf '%s' "$region"
+                        return 0
+                    fi
+                done
+            fi
+            printf 'Please choose one of the listed region numbers or names.\n' >&2
+        done
+    }
     local prompt="$1"
     local default_value="$2"
     local answer
@@ -383,6 +453,19 @@ confirm() {
 
 html_escape() {
         printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+mask_identifier() {
+    local value="${1:-}"
+    if [[ "$value" == "current Azure subscription" ]]; then
+        printf '%s' "$value"
+        return 0
+    fi
+    if [[ ${#value} -le 8 ]]; then
+        printf '%s' "${value:-not recorded}"
+    else
+        printf '%s...%s' "${value:0:4}" "${value: -4}"
+    fi
 }
 
 # The browser reloads these files every 3s, so never leave a half-written page on disk.
@@ -698,10 +781,13 @@ portal_link() {
 }
 
 render_environment_links() {
-    local rg_url app_url_portal acr_url reachable
+    local rg_url app_url_portal acr_url app_metrics_url app_diagnostics_url defender_url reachable
     rg_url="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview"
     app_url_portal="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME")"
     acr_url="$(portal_link "/providers/Microsoft.ContainerRegistry/registries/$ACR_NAME")"
+    app_metrics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/metrics")"
+    app_diagnostics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/diagnostics")"
+    defender_url='https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade'
 
     if [[ "$COMMAND" == uninstall ]]; then
         printf '        <div class="item"><div class="label">Environment state</div><div class="value"><span class="pill na">Teardown requested</span><br>The dojo is being removed; its public URL will stop resolving.</div></div>\n'
@@ -736,6 +822,10 @@ render_environment_links() {
         "$(html_escape "$app_url_portal")" "$(html_escape "$APP_SERVICE_NAME")"
     printf '        <div class="item"><div class="label">Container registry (portal)</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a></div></div>\n' \
         "$(html_escape "$acr_url")" "$(html_escape "$ACR_NAME")"
+    printf '        <div class="item"><div class="label">Monitoring (App Service)</div><div class="value"><a href="%s" target="_blank" rel="noopener">Metrics</a> &middot; <a href="%s" target="_blank" rel="noopener">Diagnose and solve problems</a><br><span class="hint">Runtime health, response time, failures, and platform diagnostics.</span></div></div>\n' \
+        "$(html_escape "$app_metrics_url")" "$(html_escape "$app_diagnostics_url")"
+    printf '        <div class="item"><div class="label">Defender for Cloud</div><div class="value"><a href="%s" target="_blank" rel="noopener">Security recommendations</a><br><span class="hint">Posture, vulnerabilities, and security findings for the subscription.</span></div></div>\n' \
+        "$(html_escape "$defender_url")"
 }
 
 render_summary_counts() {
@@ -746,8 +836,9 @@ render_summary_counts() {
 }
 
 render_run_facts() {
+    printf '<div class="item"><div class="label">Scenario</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "$SCENARIO_NAME")" "$(html_escape "$SCENARIO_ID")"
     printf '<div class="item"><div class="label">Environment</div><div class="value">%s</div></div>' "$(html_escape "$ENVIRONMENT")"
-    printf '<div class="item"><div class="label">Subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$SUBSCRIPTION_ID")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
     printf '<div class="item"><div class="label">Resource group</div><div class="value">%s</div></div>' "$(html_escape "$RESOURCE_GROUP")"
     printf '<div class="item"><div class="label">Region</div><div class="value">%s</div></div>' "$(html_escape "$LOCATION")"
     printf '<div class="item"><div class="label">Registry</div><div class="value">%s</div></div>' "$(html_escape "$ACR_NAME")"
@@ -830,8 +921,8 @@ render_audit_facts() {
     printf '<div class="item"><div class="label">Working tree</div><div class="value">%s</div></div>' "$(html_escape "$GIT_DIRTY")"
     printf '<div class="item"><div class="label">Tool version</div><div class="value">v%s (config v%s)</div></div>' "$(html_escape "$APP_VERSION")" "$(html_escape "$CONFIG_VERSION")"
     printf '<div class="item"><div class="label">Config source</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(basename "$CONFIG_FILE")")"
-    printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${AZURE_TENANT_ID:-not recorded}")"
-    printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "${SUBSCRIPTION_ID:-unknown}")"
+    printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$AZURE_TENANT_ID")")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
     printf '<div class="item"><div class="label">Azure identity</div><div class="value">%s</div></div>' "$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")"
 }
 
@@ -850,7 +941,8 @@ command_noun() {
 }
 
 render_next_steps() {
-    local outcome="$1"
+    local outcome="$1" app_metrics_url
+    app_metrics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/metrics")"
     if [[ "$outcome" == failure ]]; then
         cat <<EOF
         <li><strong>Read the failure detail above</strong>, then open the <a href="deployment-$ENVIRONMENT.console.html">full console stream</a> and <a href="deployment-$ENVIRONMENT.log"><code>deployment-$ENVIRONMENT.log</code></a> for the raw Azure CLI error.</li>
@@ -925,7 +1017,8 @@ EOF
         *)
             cat <<EOF
         <li><strong>Open the dojo</strong> at <a href="${APP_URL:-#}" target="_blank" rel="noopener">${APP_URL:-the App Service URL}</a> and confirm the landing page renders.</li>
-        <li><strong>Exercise the training scenario</strong>: the image was built with training status <code>$(html_escape "$VULNERABILITY_STATUS")</code> on NGINX <code>$(html_escape "$NGINX_VERSION")</code>. Compare <code>/api/status</code> against those values before running an exercise.</li>
+        <li><strong>Monitor the environment</strong> from <a href="$(html_escape "$app_metrics_url")" target="_blank" rel="noopener">App Service Metrics</a> and review security findings in <a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Defender for Cloud</a>.</li>
+        <li><strong>Exercise the CVE scenario</strong>: query <code>/api/status</code> and use <code>vulnerability.detected</code>, <code>detection_reason</code>, and <code>runtime_verification</code> as the authoritative evidence for CVE-2026-42533.</li>
         <li><strong>Run the automated smoke tests</strong>: <code>scripts/test.sh</code></li>
         <li><strong>Re-verify at any time without redeploying</strong>: <code>scripts/deploy.sh verify --environment $ENVIRONMENT --defaults</code></li>
         <li><strong>Re-running deploy is cheap</strong>: the build context is fingerprinted, so an unchanged image is neither rebuilt nor re-uploaded and a healthy App Service is not restarted. Force a full rebuild with <code>--force-rebuild</code>.</li>
@@ -1174,7 +1267,7 @@ write_status_html() {
         <p>Azure lifecycle command <code>$(html_escape "$COMMAND")</code> targeting environment <strong>$(html_escape "$ENVIRONMENT")</strong>.</p>
         <p><span class="pill $verdict_class verdict" id="verdict-pill">$(html_escape "$verdict")</span></p>
         <p id="verdict-note">$verdict_note</p>
-        <p class="print-only">Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) &middot; subscription $(html_escape "$SUBSCRIPTION_ID")</p>
+        <p class="print-only">Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) &middot; subscription $(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")</p>
     </header>
 
     <section>
@@ -1380,8 +1473,11 @@ write_state() {
     mkdir -p "$OUTPUT_DIR"
     cat > "$STATE_FILE" <<EOF
 {
-  "environment": "$ENVIRONMENT",
-  "subscriptionId": "$SUBSCRIPTION_ID",
+    "environment": "$ENVIRONMENT",
+    "scenarioId": "$SCENARIO_ID",
+    "scenarioName": "$SCENARIO_NAME",
+    "subscriptionId": "$(mask_identifier "$SUBSCRIPTION_ID")",
+    "tenantId": "$(mask_identifier "$AZURE_TENANT_ID")",
   "resourceGroup": "$RESOURCE_GROUP",
   "location": "$LOCATION",
   "registryName": "$ACR_NAME",
@@ -1401,6 +1497,7 @@ EOF
 }
 
 resolve_settings() {
+    resolve_scenario
     if [[ "$ENVIRONMENT" == auto ]]; then
         local branch_name
         branch_name="$(git branch --show-current 2>/dev/null || true)"
@@ -1426,13 +1523,19 @@ resolve_settings() {
     NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-$(config_setting nodeMajorVersion 20)}"
     VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-$(config_setting vulnerabilityStatus vulnerable)}"
     PORT="${PORT:-$(config_setting port 3000)}"
-    DEFENDER_ENABLED="${DEFENDER_ENABLED:-$(config_setting defenderEnabled false)}"
+    DEFENDER_ENABLED="${DEFENDER_ENABLED:-$(config_setting defenderEnabled true)}"
+    DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-$(config_setting defender.scanAfterVerify true)}"
+    DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-$(config_setting defender.managePlans true)}"
+    DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-$SCENARIO_CVE}"
+    DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-$(config_setting defender.plans.AppServices Standard)}"
+    DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-$(config_setting defender.plans.Containers Standard)}"
+    DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-$(config_setting defender.plans.CloudPosture Free)}"
     [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
     [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
     [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
 
     if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
-        LOCATION="$(prompt_default 'Azure region' "$LOCATION")"
+        LOCATION="$(prompt_region "$LOCATION")"
         RESOURCE_GROUP="$(prompt_default 'Resource group' "$RESOURCE_GROUP")"
         REGISTRY_NAME="$(prompt_default 'Container Registry' "$REGISTRY_NAME")"
         APP_SERVICE_NAME="$(prompt_default 'App Service' "$APP_SERVICE_NAME")"
@@ -1505,10 +1608,44 @@ require_commands() {
 }
 
 authenticate() {
-    local account_info
+    local account_info subscription_rows selected_subscription subscription_index subscription_id subscription_name
     if ! az account show >/dev/null 2>&1; then
         echo -e "${YELLOW}Azure CLI is not authenticated. Starting device-code login.${NC}"
         az login --use-device-code >/dev/null
+    fi
+    if [[ -z "$SUBSCRIPTION_ID" && -t 0 && "$USE_DEFAULTS" == false ]]; then
+        subscription_rows="$(az account list --query "[?state=='Enabled'].[id,name]" -o tsv 2>/dev/null || true)"
+        if [[ -n "$subscription_rows" ]]; then
+            echo
+            echo "Azure subscriptions available to this account:"
+            subscription_index=0
+            while IFS=$'\t' read -r subscription_id subscription_name; do
+                [[ -n "$subscription_id" ]] || continue
+                subscription_index=$((subscription_index + 1))
+                printf '  %2d) %s (%s)\n' "$subscription_index" "$subscription_name" "$subscription_id"
+            done <<< "$subscription_rows"
+            while true; do
+                read -r -p "Select a subscription by number or ID [current]: " selected_subscription
+                if [[ -z "$selected_subscription" ]]; then
+                    break
+                fi
+                if [[ "$selected_subscription" =~ ^[0-9]+$ ]]; then
+                    subscription_index=0
+                    while IFS=$'\t' read -r subscription_id subscription_name; do
+                        [[ -n "$subscription_id" ]] || continue
+                        subscription_index=$((subscription_index + 1))
+                        if ((subscription_index == selected_subscription)); then
+                            SUBSCRIPTION_ID="$subscription_id"
+                            break 2
+                        fi
+                    done <<< "$subscription_rows"
+                elif [[ "$subscription_rows" == *"$selected_subscription"* ]]; then
+                    SUBSCRIPTION_ID="$selected_subscription"
+                    break
+                fi
+                echo "Please choose one of the listed subscription numbers or enter an exact subscription ID." >&2
+            done
+        fi
     fi
     if [[ -n "$SUBSCRIPTION_ID" ]]; then
         az account set --subscription "$SUBSCRIPTION_ID" || fail "Unable to select subscription '$SUBSCRIPTION_ID'."
@@ -1524,7 +1661,8 @@ authenticate() {
 print_plan() {
     echo -e "${BLUE}Deployment plan${NC}"
     echo "Environment: $ENVIRONMENT"
-    echo "Subscription: ${SUBSCRIPTION_ID:-current Azure subscription}"
+    echo "Scenario: $SCENARIO_NAME ($SCENARIO_ID)"
+    echo "Subscription: $(mask_identifier "${SUBSCRIPTION_ID:-current Azure subscription}")"
     echo "Resource group: $RESOURCE_GROUP"
     echo "Location: $LOCATION"
     echo "Registry: $ACR_NAME"
@@ -1864,7 +2002,8 @@ status_field() {
 # nothing. Wait until a *different* container reports the build we just published.
 wait_for_app_ready() {
     local host="$1" previous_container="${2:-}" max_attempts="${3:-24}"
-    local attempt=0 body container probe
+    local attempt=0 body container probe expected_detected=false
+    [[ "$VULNERABILITY_STATUS" == vulnerable ]] && expected_detected=true
     APP_READY_ATTEMPTS=0
     APP_CONTAINER_ID=""
     while ((attempt < max_attempts)); do
@@ -1877,7 +2016,7 @@ wait_for_app_ready() {
             container="$(status_field host "$body")"
             if [[ -n "$body" \
                 && "$body" == *"\"$NGINX_VERSION\""* \
-                && "$body" == *"\"$VULNERABILITY_STATUS\""* \
+                && "$body" == *"\"detected\":$expected_detected"* \
                 && ( -z "$previous_container" || "$container" != "$previous_container" ) ]]; then
                 APP_CONTAINER_ID="$container"
                 APP_STATUS_BODY="$body"
@@ -1891,9 +2030,95 @@ wait_for_app_ready() {
     return 1
 }
 
+defender_plan_tier() {
+    az security pricing show --name "$1" --query pricingTier -o tsv 2>/dev/null || true
+}
+
+run_defender_scan() {
+    local appservices_tier containers_tier cspm_tier assessment_json target_found=1 failures=0
+    local plan_name desired_tier current_tier plan_label
+    set_task defender in_progress "Activating configured Defender plans and requesting the latest assessment inventory."
+    write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service and Defender for Containers coverage, then scanning for $DEFENDER_TARGET_CVE."
+
+    if [[ "$DEFENDER_SCAN_ENABLED" != true ]]; then
+        record_check "Defender for Cloud post-verification scan" not_applicable "Disabled by configuration (defender.scanAfterVerify=$DEFENDER_SCAN_ENABLED)."
+        record_check "Defender workload coverage" not_applicable "Defender plan management and scanning were disabled for this run."
+        set_task defender skipped "Defender scan skipped by configuration."
+        return 0
+    fi
+
+    appservices_tier="$DEFENDER_APPSERVICES_TIER"
+    containers_tier="$DEFENDER_CONTAINERS_TIER"
+    cspm_tier="$DEFENDER_CSPM_TIER"
+    while IFS='|' read -r plan_name desired_tier plan_label; do
+        [[ -n "$plan_name" ]] || continue
+        if [[ "$desired_tier" == disabled || "$desired_tier" == off ]]; then
+            record_check "Defender plan: $plan_label" not_applicable "Disabled by configuration; this workload is not requesting $plan_label coverage."
+            continue
+        fi
+        current_tier="$(defender_plan_tier "$plan_name")"
+        if [[ "$DEFENDER_MANAGE_PLANS" == true && "$current_tier" != "$desired_tier" ]]; then
+            if az security pricing create --name "$plan_name" --tier "$desired_tier" --output none 2>/dev/null; then
+                current_tier="$(defender_plan_tier "$plan_name")"
+                record_check "Defender plan: $plan_label" pass "Requested $desired_tier tier; Azure reports the plan at ${current_tier:-pending} tier."
+            else
+                record_check "Defender plan: $plan_label" fail "Could not activate the requested $desired_tier tier. Check Microsoft.Security/pricings permissions and subscription eligibility."
+                failures=$((failures + 1))
+            fi
+        elif [[ "$current_tier" == "$desired_tier" ]]; then
+            record_check "Defender plan: $plan_label" pass "Azure reports the configured $desired_tier tier."
+        else
+            record_check "Defender plan: $plan_label" unknown "Azure reports '${current_tier:-not available}', while configuration requests $desired_tier and plan management is disabled."
+        fi
+    done <<EOF
+AppServices|$appservices_tier|Defender for App Service
+Containers|$containers_tier|Defender for Containers
+CloudPosture|$cspm_tier|Defender CSPM
+EOF
+
+    write_status_html defender running "$(auto_percent 55)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
+    assessment_json="$(az security assessment list --resource-group "$RESOURCE_GROUP" -o json 2>/dev/null || true)"
+    if [[ -z "$assessment_json" ]]; then
+        record_check "Defender assessment inventory returned data" unknown "The assessment query returned no payload. Defender may still be initializing, or the account may lack Microsoft.Security/assessments/read."
+    else
+        record_check "Defender assessment inventory returned data" pass "Retrieved the latest Defender assessment inventory for $RESOURCE_GROUP."
+        if [[ "$assessment_json" == *"$DEFENDER_TARGET_CVE"* ]]; then
+            target_found=0
+            record_check "Target CVE appears in Defender findings" pass "$DEFENDER_TARGET_CVE was present in the latest Defender assessment payload."
+        else
+            record_check "Target CVE appears in Defender findings" unknown "$DEFENDER_TARGET_CVE was not present in this payload. Vulnerability assessment is asynchronous and may require the image scan to complete."
+        fi
+    fi
+
+    if [[ "$appservices_tier" == Standard ]]; then
+        record_check "App Service workload is covered for attack detection" pass "Defender for App Service monitors App Service requests/responses, platform logs, sandboxes, and hosting VMs."
+    else
+        record_check "App Service workload is covered for attack detection" not_applicable "Defender for App Service is not enabled at the configured tier."
+    fi
+    if [[ "$containers_tier" == Standard ]]; then
+        record_check "ACR image workload is covered for vulnerability assessment" pass "Defender for Containers is configured to scan Azure Container Registry images for known vulnerabilities, including CVEs."
+    else
+        record_check "ACR image workload is covered for vulnerability assessment" not_applicable "Defender for Containers is not enabled at the configured tier."
+    fi
+    record_check "Kubernetes runtime workload coverage" not_applicable "This deployment runs a custom container on App Service; it does not deploy AKS/Kubernetes nodes or workloads."
+    record_check "Unrequested Defender workload plans" not_applicable "Defender for Servers, SQL, Storage, Key Vault, DNS, and Resource Manager are not activated because this scenario does not deploy those workloads."
+
+    if ((failures > 0)); then
+        set_task defender failure "$failures Defender plan activation check(s) failed. See the verification matrix for details."
+        FAILURE_MESSAGE="$failures Defender plan activation check(s) failed."
+        fail "$FAILURE_MESSAGE"
+    fi
+    if ((target_found != 0)); then
+        set_task defender success "Defender plans and workload coverage were verified; CVE findings remain asynchronous and are recorded as Not sure when absent."
+    else
+        set_task defender success "Defender plans and workload coverage were verified; $DEFENDER_TARGET_CVE was found in the assessment payload."
+    fi
+    write_status_html defender success "$(auto_percent)" "Defender for Cloud scan and workload coverage verification completed."
+}
+
 verify() {
     local app_host registry_login configured_image expected_image identity_name identity_principal role_count
-    local status_json probe settle_attempts deployed_tags failures=0
+    local status_json probe settle_attempts deployed_tags runtime_binary_version runtime_package_version failures=0
     set_task verify in_progress "Running the Azure configuration, identity, and endpoint verification matrix."
     write_status_html verifying running "$(auto_percent 10)" "Checking image configuration, ACR pull permissions, and application endpoints."
 
@@ -1969,7 +2194,7 @@ verify() {
         record_check "Health endpoint responds over HTTPS" not_applicable "No public hostname is available yet."
         record_check "Runtime status API is serving JSON" not_applicable "No public hostname is available yet."
         record_check "Runtime reports the expected NGINX version" not_applicable "No public hostname is available yet."
-        record_check "Runtime reports the expected training status" not_applicable "No public hostname is available yet."
+        record_check "CVE detection API reports the expected result" not_applicable "No public hostname is available yet."
     else
         # A container that is still swapping answers 502 for a few seconds; retry before judging it.
         settle_attempts=0
@@ -2009,7 +2234,7 @@ verify() {
             record_check "Runtime status API is serving JSON" fail "GET $APP_URL/api/status returned no body; the container is not serving the application."
             failures=$((failures + 1))
             record_check "Runtime reports the expected NGINX version" unknown "The status payload was unavailable, so the running NGINX version could not be confirmed."
-            record_check "Runtime reports the expected training status" unknown "The status payload was unavailable, so the training status could not be confirmed."
+            record_check "CVE detection API reports the expected result" unknown "The status payload was unavailable, so advisory-condition detection could not be confirmed."
         else
             echo "$status_json"
             record_check "Runtime status API is serving JSON" pass "GET $APP_URL/api/status returned a payload of ${#status_json} bytes from container $(status_field host "$status_json")."
@@ -2018,10 +2243,26 @@ verify() {
             else
                 record_check "Runtime reports the expected NGINX version" unknown "Status payload does not contain NGINX $NGINX_VERSION. The running image may predate the current build arguments."
             fi
-            if [[ "$status_json" == *"\"${VULNERABILITY_STATUS}\""* ]]; then
-                record_check "Runtime reports the expected training status" pass "Status payload reports training status $VULNERABILITY_STATUS."
+            if [[ "$VULNERABILITY_STATUS" == vulnerable && "$status_json" == *'"detected":true'* ]]; then
+                record_check "CVE detection API reports the expected result" pass "The API detected CVE-2026-42533 from actual NGINX version and affected map/regex configuration evidence."
+            elif [[ "$VULNERABILITY_STATUS" != vulnerable && "$status_json" == *'"detected":false'* ]]; then
+                record_check "CVE detection API reports the expected result" pass "The API did not detect CVE-2026-42533 because the fixed NGINX/configuration conditions are not present."
             else
-                record_check "Runtime reports the expected training status" unknown "Status payload does not report training status $VULNERABILITY_STATUS. Confirm which scenario image is live before running an exercise."
+                record_check "CVE detection API reports the expected result" unknown "The API result did not match the requested scenario state; inspect detection_reason and runtime evidence."
+            fi
+            runtime_binary_version="$(status_field nginx_binary_version "$status_json")"
+            runtime_package_version="$(status_field nginx_package_version "$status_json")"
+            if [[ "$runtime_binary_version" == "$NGINX_VERSION" && -n "$runtime_package_version" ]]; then
+                record_check "NGINX binary and package provenance is verified" pass "Container startup measured nginx/$runtime_binary_version from the binary and package version $runtime_package_version from dpkg-query."
+            else
+                record_check "NGINX binary and package provenance is verified" unknown "Container provenance evidence was incomplete (binary=${runtime_binary_version:-missing}, package=${runtime_package_version:-missing}); the API may be from an older image."
+            fi
+            if [[ "$VULNERABILITY_STATUS" == vulnerable && "$status_json" == *'"scenario_config_state":"affected"'* && "$status_json" == *'"map_regex_enabled":true'* ]]; then
+                record_check "Scenario 1 vulnerable map/regex configuration is active" pass "Runtime evidence confirms the affected map directive with regex matching is enabled for the vulnerable image."
+            elif [[ "$VULNERABILITY_STATUS" != vulnerable && "$status_json" == *'"scenario_config_state":"remediated"'* && "$status_json" == *'"map_regex_enabled":false'* ]]; then
+                record_check "Scenario 1 vulnerable map/regex configuration is removed" pass "Runtime evidence confirms the affected map directive with regex matching is disabled in the remediated image."
+            else
+                record_check "Scenario 1 map/regex configuration state is verified" unknown "Runtime configuration evidence did not match the expected $VULNERABILITY_STATUS state; the running image may predate Scenario 1 configuration evidence."
             fi
         fi
     fi
@@ -2145,7 +2386,7 @@ while (($# > 0)); do
             COMMAND="$1"
             shift
             ;;
-        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag)
+        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario)
             (($# >= 2)) || fail "$1 requires a value."
             case "$1" in
                 --environment) ENVIRONMENT="$2" ;;
@@ -2156,6 +2397,7 @@ while (($# > 0)); do
                 --app-service-name) APP_SERVICE_NAME="$2" ;;
                 --image-name) IMAGE_NAME="$2" ;;
                 --image-tag) IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=true ;;
+                --scenario) SCENARIO_ID="$2" ;;
             esac
             shift 2
             ;;
@@ -2163,6 +2405,7 @@ while (($# > 0)); do
         --defaults) USE_DEFAULTS=true; shift ;;
         --force) FORCE=true; shift ;;
         --force-rebuild) FORCE_REBUILD=true; shift ;;
+        --all-scenarios) ALL_SCENARIOS=true; shift ;;
         --wait) WAIT_FOR_DELETE=true; shift ;;
         --no-status-html) NO_STATUS_HTML=true; shift ;;
         --no-open-status) OPEN_STATUS_HTML=false; shift ;;
@@ -2213,6 +2456,7 @@ case "$COMMAND" in
         build_image
         rollout_image
         verify
+        run_defender_scan
         finalize_report success "Full lifecycle completed and verified at ${APP_URL:-the App Service URL}."
         ;;
     repair)
@@ -2221,16 +2465,19 @@ case "$COMMAND" in
         build_image
         rollout_image
         verify
+        run_defender_scan
         finalize_report success "Repair completed and verified at ${APP_URL:-the App Service URL}."
         ;;
     rollout)
         confirm "Roll out the already-built image to Azure App Service?"
         rollout_image
         verify
+        run_defender_scan
         finalize_report success "Rollout completed and verified at ${APP_URL:-the App Service URL}."
         ;;
     verify)
         verify
+        run_defender_scan
         finalize_report success "Verification completed for ${APP_URL:-the App Service URL}."
         ;;
     uninstall)

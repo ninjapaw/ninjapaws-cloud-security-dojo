@@ -62,6 +62,34 @@ Defaults for --environment prod match the existing production resources.
 EOF
 }
 
+prompt_region() {
+  local default_region="$1" answer index region
+  local regions=(centralus eastus eastus2 westus2 westus3 southcentralus westcentralus northeurope westeurope uksouth southeastasia australiaeast)
+  printf '\nAzure region (default: %s)\n' "$default_region"
+  for index in "${!regions[@]}"; do
+    printf '  %2d) %s\n' "$((index + 1))" "${regions[$index]}"
+  done
+  while true; do
+    read -r -p "Select a region by number or name [$default_region]: " answer
+    answer="${answer:-$default_region}"
+    if [[ "$answer" =~ ^[0-9]+$ ]]; then
+      index=$((answer - 1))
+      if ((index >= 0 && index < ${#regions[@]})); then
+        printf '%s' "${regions[$index]}"
+        return 0
+      fi
+    else
+      for region in "${regions[@]}"; do
+        if [[ "$answer" == "$region" ]]; then
+          printf '%s' "$region"
+          return 0
+        fi
+      done
+    fi
+    printf 'Please choose one of the listed region numbers or names.\n' >&2
+  done
+}
+
 while (($# > 0)); do
   case "$1" in
     --environment) environment_name="$2"; shift 2 ;;
@@ -104,8 +132,7 @@ esac
 acr_name="${registry_name//-/}"
 
 if [[ -t 0 && "$use_defaults" == false ]]; then
-  read -r -p "Azure region [$location]: " answer
-  location="${answer:-$location}"
+  location="$(prompt_region "$location")"
   read -r -p "Resource group [$resource_group]: " answer
   resource_group="${answer:-$resource_group}"
   read -r -p "Container Registry [$registry_name]: " answer
@@ -223,7 +250,13 @@ gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --b
 gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body 'vulnerable'
 gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body '20'
 gh variable set PORT --env "$environment_name" --repo "$repository" --body '3000'
-gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_SCAN_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_TARGET_CVE --env "$environment_name" --repo "$repository" --body 'CVE-2026-42533'
+gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Free'
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 

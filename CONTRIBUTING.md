@@ -1,6 +1,6 @@
 # Contributing
 
-Ninja Paws is a fictional, unofficial community demo organization. This repository is independent, educational, and not affiliated with or endorsed by Microsoft Corporation. Contributions from Microsoft employees, if any, are individual contributions and do not imply Microsoft authorization.
+Ninja Paw is an independent community project maintained by Dr Bill Mcilhargey. It is educational and not affiliated with or endorsed by Microsoft Corporation. Microsoft product names and trademarks remain the property of Microsoft Corporation.
 
 ## Development
 
