@@ -4,26 +4,30 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        UBUNTU_VERSION: ${UBUNTU_VERSION:?Run scripts/compose.sh so values load from config/deployment.json}
-        NGINX_VERSION: ${NGINX_VERSION:?Run scripts/compose.sh so values load from config/deployment.json}
-        NODE_MAJOR_VERSION: ${NODE_MAJOR_VERSION:?Run scripts/compose.sh so values load from config/deployment.json}
-        VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:?Run scripts/compose.sh so values load from config/deployment.json}
-        PORT: ${PORT:?Run scripts/compose.sh so values load from config/deployment.json}
+        BASE_OS_IMAGE: ${BASE_OS_IMAGE:-ubuntu}
+        BASE_OS_VERSION: ${BASE_OS_VERSION:-24.04}
+        NGINX_VERSION: ${NGINX_VERSION:-1.30.3}
+        NODE_MAJOR_VERSION: ${NODE_MAJOR_VERSION:-20}
+        VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:-vulnerable}
+        PORT: ${PORT:-3000}
     ports:
       - "8080:80"
       - "3000:3000"
     environment:
-      NGINX_VERSION: ${NGINX_VERSION:?Run scripts/compose.sh so values load from config/deployment.json}
-      VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:?Run scripts/compose.sh so values load from config/deployment.json}
-      PORT: ${PORT:?Run scripts/compose.sh so values load from config/deployment.json}
-      DEFENDER_ENABLED: ${DEFENDER_ENABLED:?Run scripts/compose.sh so values load from config/deployment.json}
+      BASE_OS_IMAGE: ${BASE_OS_IMAGE:-ubuntu}
+      BASE_OS_VERSION: ${BASE_OS_VERSION:-24.04}
+      NGINX_VERSION: ${NGINX_VERSION:-1.30.3}
+      NODE_MAJOR_VERSION: ${NODE_MAJOR_VERSION:-20}
+      VULNERABILITY_STATUS: ${VULNERABILITY_STATUS:-vulnerable}
+      PORT: ${PORT:-3000}
+      DEFENDER_ENABLED: ${DEFENDER_ENABLED:-false}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:$${PORT:-3000}/health || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
     restart: unless-stopped
     volumes:
-      - ./container/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./src/app.js:/app/src/app.js:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - ./app.js:/app/app.js:ro

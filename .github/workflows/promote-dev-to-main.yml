@@ -1,0 +1,60 @@
+name: Promote dev to main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: promote-dev-to-main
+  cancel-in-progress: false
+
+jobs:
+  open-promotion-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify promotion source branch
+        run: |
+          if [[ "${GITHUB_REF_NAME}" != "dev" ]]; then
+            echo "Run this workflow from the dev branch. Current ref: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Create or reuse dev-to-main pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          existing_pr=$(gh pr list \
+            --repo "$GH_REPO" \
+            --base main \
+            --head dev \
+            --state open \
+            --json url \
+            --jq '.[0].url')
+
+          if [[ -n "$existing_pr" ]]; then
+            echo "An open promotion PR already exists: $existing_pr"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$GH_REPO" \
+            --base main \
+            --head dev \
+            --title "Promote dev to main" \
+            --body-file - <<'EOF'
+## Promotion checklist
+
+This pull request promotes the validated `dev` branch to production on `main`.
+
+- [ ] Review the complete diff from `dev` to `main`.
+- [ ] Confirm the `dev` deployment and health checks passed.
+- [ ] Confirm infrastructure validation and Bicep checks passed.
+- [ ] Confirm remediation/security checks passed where applicable.
+- [ ] Confirm production Environment reviewers are configured.
+
+Merging this PR updates `main`; the deployment workflow then targets the `prod` GitHub Environment automatically.
+EOF

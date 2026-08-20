@@ -1,5 +1,6 @@
 # Environment variables
 .env
+.env.example
 .env.local
 .env.*.local
 
@@ -24,8 +25,11 @@ Thumbs.db
 dist/
 build/
 
-# Azure CLI
-.azure/
+# Generated deployment outputs
+.azure/*
+!.azure/
+!.azure/deployment-plan.md
+output/
 
 # Docker
 .docker/
@@ -37,7 +41,6 @@ build/
 # Temporary files
 temp/
 tmp/
-deployment-output.json
 
 # Credentials and secrets
 *.pem

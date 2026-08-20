@@ -1,0 +1,143 @@
+name: Publish main release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-main-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
+      IMAGE_NAME: ${{ vars.AZURE_IMAGE_NAME || 'ninjapaws-dojo' }}
+      BASE_OS_IMAGE: ${{ vars.BASE_OS_IMAGE || 'ubuntu' }}
+      BASE_OS_VERSION: ${{ vars.BASE_OS_VERSION || '24.04' }}
+      NGINX_VERSION: ${{ vars.NGINX_VERSION || '1.30.3' }}
+      NODE_MAJOR_VERSION: ${{ vars.NODE_MAJOR_VERSION || '20' }}
+      VULNERABILITY_STATUS: ${{ vars.VULNERABILITY_STATUS || 'vulnerable' }}
+      PORT: ${{ vars.PORT || '3000' }}
+      NPM_REGISTRY_URL: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
+      NPM_USE_MIRROR: ${{ vars.NPM_USE_MIRROR || 'true' }}
+      NPM_NETWORK_MODE: ${{ vars.NPM_NETWORK_MODE || 'online' }}
+      DEFENDER_ENABLED: ${{ vars.DEFENDER_ENABLED || 'true' }}
+      DEFENDER_SCAN_ENABLED: ${{ vars.DEFENDER_SCAN_ENABLED || 'true' }}
+      DEFENDER_MANAGE_PLANS: ${{ vars.DEFENDER_MANAGE_PLANS || 'true' }}
+      DEFENDER_TARGET_CVE: ${{ vars.DEFENDER_TARGET_CVE || 'CVE-2026-42533' }}
+      DEFENDER_APPSERVICES_TIER: ${{ vars.DEFENDER_APPSERVICES_TIER || 'Standard' }}
+      DEFENDER_CONTAINERS_TIER: ${{ vars.DEFENDER_CONTAINERS_TIER || 'Standard' }}
+      DEFENDER_CSPM_TIER: ${{ vars.DEFENDER_CSPM_TIER || 'Free' }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ vars.NODE_MAJOR_VERSION || '20' }}
+          cache: npm
+
+      - name: Validate package metadata and determine release
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : "${RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in the prod Environment}"
+          : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID in the prod Environment}"
+          : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID in the prod Environment}"
+          : "${SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in the prod Environment}"
+
+          repository_name="${GITHUB_REPOSITORY##*/}"
+          package_name=$(node -p "require('./package.json').name")
+          package_version=$(node -p "require('./package.json').version")
+          package_description=$(node -p "require('./package.json').description")
+          repository_description=$(gh api "repos/$GITHUB_REPOSITORY" --jq .description)
+
+          [[ "$package_name" == "$repository_name" ]] || { echo "package.name '$package_name' does not match '$repository_name'." >&2; exit 1; }
+          [[ "$package_description" == "$repository_description" ]] || { echo "package.description does not match the GitHub repository description." >&2; exit 1; }
+          node - <<'NODE'
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json').packages[''];
+          if (pkg.license !== 'MIT') throw new Error('package.license must remain MIT');
+          if (!pkg.author || !Array.isArray(pkg.keywords) || pkg.keywords.length === 0) throw new Error('package author/keywords are required');
+          if (!lock || lock.name !== pkg.name || lock.version !== pkg.version) throw new Error('package-lock.json is out of sync');
+          if (!pkg.repository || pkg.repository.url !== `https://github.com/${process.env.GITHUB_REPOSITORY}.git`) throw new Error('package.repository is out of sync');
+          NODE
+
+          release_tag="v$package_version"
+          if git rev-parse "$release_tag" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null 2>&1; then
+            echo "Release $release_tag already exists; no duplicate release will be published."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+          if [[ -n "$latest_tag" ]]; then
+            latest_version="${latest_tag#v}"
+            node -e "const a=process.argv[1].split('.').map(Number), b=process.argv[2].split('.').map(Number); if (a[0]<b[0] || (a[0]===b[0] && a[1]<b[1]) || (a[0]===b[0] && a[1]===b[1] && a[2]<=b[2])) process.exit(1);" "$package_version" "$latest_version" || { echo "package.version must be newer than $latest_version." >&2; exit 1; }
+          fi
+
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate application and infrastructure
+        if: steps.metadata.outputs.should_release == 'true'
+        run: |
+          npm ci
+          npm test
+          bash scripts/test.sh --skip-azure
+
+      - name: Azure Login
+        if: steps.metadata.outputs.should_release == 'true'
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.SUBSCRIPTION_ID }}
+
+      - name: Build and push versioned/latest images
+        if: steps.metadata.outputs.should_release == 'true'
+        run: |
+          scripts/deploy.sh build \
+            --environment prod \
+            --subscription "$SUBSCRIPTION_ID" \
+            --location "$LOCATION" \
+            --resource-group "$RESOURCE_GROUP" \
+            --registry-name "$CONTAINER_REGISTRY_NAME" \
+            --app-service-name "$APP_SERVICE_NAME" \
+            --image-name "$IMAGE_NAME" \
+            --image-tag "${{ steps.metadata.outputs.version }}" \
+            --yes
+
+      - name: Create tag and GitHub Release
+        if: steps.metadata.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -a "${{ steps.metadata.outputs.tag }}" -m "Release ${{ steps.metadata.outputs.tag }}"
+          git push origin "${{ steps.metadata.outputs.tag }}"
+          gh release create "${{ steps.metadata.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.metadata.outputs.tag }}" \
+            --generate-notes

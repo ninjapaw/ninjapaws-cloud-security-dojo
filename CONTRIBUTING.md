@@ -1,72 +1,45 @@
-# Contributing to Ninja Paws Cloud Security Dojo
+# Contributing
 
-Thank you for contributing to the Ninja Paws Cloud Security Dojo. This project is designed for defensive security training, learning, and demonstration.
+Ninja Paw is an independent community project maintained by Dr Bill Mcilhargey. It is educational and not affiliated with or endorsed by Microsoft Corporation. Microsoft product names and trademarks remain the property of Microsoft Corporation.
 
-## Contributing guidance
+## Development
 
-We welcome thoughtful contributions that improve the training value, clarity, or security guidance in this project.
-
-When contributing, please keep changes focused, actionable, and aligned with the educational purpose of the repository.
-
-## Reporting issues
-
-Before opening an issue or pull request, please:
-
-1. Check whether the issue already exists.
-2. Include a clear title and summary.
-3. Provide reproducible steps when applicable.
-4. Mention any environment or configuration details.
-
-## Pull request expectations
-
-Please keep pull requests narrow and clear.
-
-Every pull request should include:
-
-- a concise summary and reason for the change
-- validation performed, including relevant commands or workflow runs
-- security impact, if the change affects dependencies, containers, infrastructure, or identity
-- follow-up work or deployment considerations
-
-For remediation exercises, state the affected CVE, the previous and patched dependency versions, and evidence that the runtime reports the expected remediation state.
-
-## Local validation
+Use Node.js 20+, Docker, Docker Compose, and Bash. Run the shared checks before opening a pull request:
 
 ```bash
 npm ci
-npm start
-curl http://localhost:3000/health
-
-./scripts/compose.sh up --build -d
-curl http://localhost:8080/health
-./scripts/compose.sh down
+npm test
+bash scripts/test.sh --skip-azure
 ```
 
-Use [config/deployment.json](config/deployment.json) for non-secret local configuration. Never add credentials, generated Azure output, or `.env` files to the repository.
+Do not commit `.env` files, secrets, customer data, production credentials, generated Azure deployment output, or private infrastructure details.
 
-## Security and safe use
+## Branch Flow
 
-This repository is intentionally educational and should not be used for offensive or harmful activity.
+- Feature branches merge into `dev`.
+- `dev` is the development deployment environment.
+- Use **Promote dev to main** to create the promotion pull request.
+- `main` is production and must remain protected.
+- Production deployment occurs after the reviewed promotion PR merges.
 
-Contributors must avoid adding:
+## Pull Requests
 
-- production secrets or credentials
-- customer or business-sensitive data
-- exploitation code or weaponized examples
-- unauthorized or unsafe deployment guidance
+Include:
 
-## Documentation standards
+- What changed and why
+- Validation commands and results
+- Security or infrastructure impact
+- Configuration or GitHub Environment variable changes
+- Rollback or follow-up considerations
 
-Please keep documentation accurate, concise, and easy to follow for learners.
+Required checks depend on the change and may include infrastructure validation, remediation validation, package metadata checks, and deployment verification. Do not bypass branch protection or environment approvals.
 
-Use simple examples, clear steps, and safe, placeholder values when describing environment settings.
+## Releases
 
-## Code of conduct
+Use **Request release from dev** to select a patch, minor, major, or custom SemVer release. The workflow creates a release PR and synchronizes `package.json` and `package-lock.json`. Merging it into `main` allows **Publish main release** to validate metadata, create the version tag and GitHub Release, and publish versioned/latest container images.
 
-Contributions should be respectful, constructive, and educational. Please do not use the repository to promote unsafe or harmful behavior.
+## Legal and Trademark Notice
 
-## Legal and license
+Microsoft, Azure, GitHub, Defender, and related marks belong to their respective owners. This project is not an approved or authorized Microsoft project and must not imply Microsoft sponsorship, endorsement, or ownership without written authorization.
 
-This project is an independent community project and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names remain the property of Microsoft Corporation.
-
-By contributing to this project, you agree that your contributions will be licensed under the terms of the [MIT License](LICENSE).
+Security reports belong in the private process described in [SECURITY.md](SECURITY.md).

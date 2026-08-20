@@ -1,313 +1,266 @@
 # Ninja Paws Cloud Security Dojo
 
-This repository is a public educational cloud security training environment for demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
+> **Independent community project.** This repository is maintained by Dr Bill Mcilhargey for Ninja Paw. It is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft product names and trademarks remain the property of Microsoft Corporation. Use this public demo at your own risk.
+>
+> Microsoft, Azure, GitHub, Defender, and related names and marks are owned by their respective owners. This repository is not an approved or authorized Microsoft project unless separately stated by Microsoft in writing.
 
-## Quicklinks
+A defensive cloud-security training environment demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
 
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
-- [Deployment configuration](#deployment-configuration)
-- [GitHub issues](https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues)
+## Defender for Cloud - Scenario 1
 
-## Overview
+**NGINX CVE Detection and Remediation** is the default scenario. It deploys the intentionally affected NGINX `1.30.3` workload and advisory-relevant `map`/regex configuration to Azure App Service with Azure Container Registry, Defender for App Service, Defender for Containers, and Defender CSPM coverage. The demo proves the running package and configuration, reviews Defender findings, then swaps to fixed NGINX `1.30.4` with the affected configuration removed.
 
-The dojo demonstrates a defensive security workflow using:
+Scenarios are registered in `config/deploy.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
 
-- Node.js and Express for the application and status API
-- NGINX as a reverse proxy
-- Docker and Docker Compose for local training
-- GitHub Actions for image scanning and remediation validation
-- Azure Container Registry for image storage
-- Azure App Service for container hosting
-- Bicep and managed identity for Azure infrastructure
-- Microsoft Defender for Cloud for container security monitoring
+## What It Demonstrates
 
-```text
-GitHub Repository
-  |
-GitHub Actions
-  |
-Azure Container Registry
-  |
-Azure App Service Linux Container
-  |
-Microsoft Defender for Cloud
-```
+- Node.js and Express application with NGINX reverse proxy
+- Docker and Docker Compose local execution
+- GitHub Actions validation, promotion, release, and deployment
+- Azure Container Registry and App Service for Linux containers
+- Bicep infrastructure with managed identity and ACR pull access
+- Microsoft Defender for Cloud integration points
 
-## Intentional training vulnerability
+The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
 
-The default `main` branch intentionally pins NGINX `1.30.3` and reports `CVE-2026-42533` as vulnerable for authorized training and scanner demonstrations. This state is not suitable for production.
+For a customer-facing, self-guided run-through, start with [DEMO.md](DEMO.md). It walks through baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
 
-The remediation exercise updates the Docker build argument to NGINX `1.30.4` or newer, changes the training status to `remediated`, rebuilds the image, and verifies the actual package and runtime state. The remediation workflow does not inject fake version or status values.
+## Quick Start
 
-## Getting started
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Node.js 18 or newer for direct local development
-- Git
-- Azure CLI for Azure deployment
-
-### Local development
+Prerequisites: Git, Node.js 20+, Docker/Docker Compose, and Bash. Azure deployment additionally requires Azure CLI; GitHub OIDC bootstrap requires GitHub CLI.
 
 ```bash
 git clone https://github.com/ninjapaw/ninjapaws-cloud-security-dojo.git
 cd ninjapaws-cloud-security-dojo
-npm install
+npm ci
+npm test
 npm start
 ```
 
-Open `http://localhost:3000/`, or query the endpoints:
+The direct application listens on `http://localhost:3000`. Health and status endpoints are `/health` and `/api/status`.
+
+Run the containerized stack:
 
 ```bash
-curl http://localhost:3000/health
-curl http://localhost:3000/api/status
-```
-
-### Docker Compose
-
-```bash
-./scripts/compose.sh up --build -d
+docker compose up --build -d
 curl http://localhost:8080/health
-./scripts/compose.sh logs -f dojo
-./scripts/compose.sh down
+docker compose logs -f dojo
+docker compose down
 ```
 
-The default ports are `8080` for NGINX and `3000` for the direct Node.js endpoint.
+## Configuration
 
-### Docker image
+All Docker build arguments are non-secret configuration. Defaults are safe fallbacks; GitHub Environment variables are the source of truth for `dev` and `prod` deployments.
 
-```bash
-docker build -t ninjapaws-dojo:vulnerable .
-docker run --rm \
-  -p 8080:80 \
-  -p 3000:3000 \
-  ninjapaws-dojo:vulnerable
-```
-
-The Docker build accepts these arguments:
-
-| Argument | Default | Purpose |
+| Variable | Default | Purpose |
 |---|---:|---|
-| `UBUNTU_VERSION` | `24.04` | Ubuntu base image tag |
-| `NGINX_VERSION` | `1.30.3` | Pinned NGINX package version |
-| `NODE_MAJOR_VERSION` | `20` | NodeSource major release stream |
-| `VULNERABILITY_STATUS` | `vulnerable` | Training state reported by the app |
-| `PORT` | `3000` | Node.js listening port |
+| `BASE_OS_IMAGE` | `ubuntu` | Base OS image repository |
+| `BASE_OS_VERSION` | `24.04` | Ubuntu image version |
+| `NGINX_VERSION` | `1.30.3` | Pinned NGINX package |
+| `NODE_MAJOR_VERSION` | `20` | NodeSource major version |
+| `VULNERABILITY_STATUS` | `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
+| `PORT` | `3000` | Internal Node.js port behind NGINX |
+| `WEBSITES_PORT` | `80` | Port exposed by the container to Azure App Service |
+| `NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry or approved enterprise mirror used during the image build |
+| `NPM_USE_MIRROR` | `true` | Use `NPM_REGISTRY_URL` when true; use npm's direct default when false |
+| `NPM_NETWORK_MODE` | `online` | `online` downloads dependencies; `offline` disables npm network access and requires a populated npm cache |
+| `DEFENDER_ENABLED` | `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans |
 
-Example override for a remediation build:
+Defender for Cloud settings live under the `defender` object in `config/deploy.config.json`. The checked-in defaults are intentionally suited to this vulnerable App Service container scenario:
 
-```bash
-docker build \
-  --build-arg NGINX_VERSION=1.30.4 \
-  --build-arg VULNERABILITY_STATUS=remediated \
-  -t ninjapaws-dojo:remediated .
-```
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `defender.scanAfterVerify` | `true` | Adds a post-verification Defender scan task to `deploy`, `rollout`, `repair`, and `verify` |
+| `defender.managePlans` | `true` | Allows the lifecycle to activate the configured Microsoft Security pricing tiers |
+| `defender.targetCve` | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload |
+| `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
+| `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
+| `defender.plans.CloudPosture` | `Free` | Foundational Defender CSPM posture visibility |
 
-For local Compose runs, use the shared configuration wrapper. Edit [config/deployment.json](config/deployment.json) for non-secret training settings, then run:
+These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_TARGET_CVE`, `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, and `DEFENDER_CSPM_TIER`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
 
-```bash
-./scripts/compose.sh up --build -d
-curl http://localhost:8080/health
-./scripts/compose.sh down
-```
+The lifecycle does **not** automatically deactivate an already-enabled Defender plan when a workload is set to `disabled`; pricing plans apply at subscription scope, so silently turning off protection from an application deployment would be unsafe. The report instead records unrequested plans as **Not applicable** and leaves subscription-wide deactivation to an explicit Defender for Cloud administrator action.
 
-`config/deployment.json` is committed because it contains no credentials. Do not add secrets to it.
+`entrypoint.sh` generates NGINX from `nginx.conf` at startup, replacing `__APP_PORT__` with `PORT`. This is a deliberate dual-port design: **WEBSITES_PORT=80** tells Azure App Service which container port accepts traffic, while **PORT=3000** is the Node.js upstream behind NGINX. Changing `PORT` changes the NGINX upstream automatically; changing `WEBSITES_PORT` requires changing the container listener and App Service configuration together. Startup also records the actual NGINX binary and Debian package versions, which `/api/status` exposes under `runtime_verification` and the deployment report verifies.
 
-## Repository layout
+Never put credentials in these variables. Runtime secrets belong in Azure Key Vault with managed identity. GitHub Environment secrets are reserved for values GitHub itself must keep confidential when OIDC or Key Vault cannot provide them.
+
+### Defender endpoint blocks during npm builds
+
+On Windows hosts managed by Microsoft Defender Exploit Guard, the Docker build may be blocked before npm can download dependencies. The relevant host event is Windows Defender Operational Event `1126`, typically showing:
 
 ```text
-src/                 Node.js application source
-config/              Shared non-secret deployment and runtime configuration
-container/           NGINX container configuration
-scripts/             Deployment, Compose, configuration, and container runtime scripts
-infra/               Bicep infrastructure
-.github/workflows/   GitHub Actions workflows
+Destination: https://registry.npmjs.org
+Process Name: com.docker.backend.exe
 ```
 
-`scripts/deploy.sh` writes Azure deployment results to a temporary file and removes it automatically. There is no repository-owned `deployment-output.json` because it is generated output, not source.
+That is a network-policy block on Docker Desktop, not a malicious npm path and not a reason to skip dependency installation. The preferred resolution is for the endpoint administrator to allow the approved registry, or to point `NPM_REGISTRY_URL` at the organization’s approved npm mirror/cache:
 
-## Application endpoints
+```powershell
+$env:NPM_REGISTRY_URL = 'https://npm-mirror.contoso.example/repository/npm-group/'
+docker build --build-arg NPM_REGISTRY_URL=$env:NPM_REGISTRY_URL -t ninja-paws-dojo .
+```
 
-- `/` displays the training dashboard.
-- `/health` returns the health state used by container and App Service checks.
-- `/api/status` returns the NGINX version, training state, CVE identifier, platform, and runtime details.
+For enterprise builds, I recommend an **Azure Artifacts npm feed** configured with an npmjs.org upstream source. It provides organizational access control, retention, auditability, and caching while preserving package provenance. Set `NPM_REGISTRY_URL` to that feed URL and allow the endpoint to reach the approved feed.
 
-## Azure deployment
+To skip mirror configuration for a diagnostic comparison:
 
-### Deployment configuration
+```powershell
+$env:NPM_USE_MIRROR = 'false'
+docker build --build-arg NPM_USE_MIRROR=$env:NPM_USE_MIRROR -t ninja-paws-dojo .
+```
 
-[config/deployment.json](config/deployment.json) is the canonical non-secret configuration for this repository. It contains Azure resource names, location, image defaults, training runtime values, and branch-to-environment mapping. [config/schema.json](config/schema.json) documents and validates its shape. [container/nginx.conf](container/nginx.conf) holds the NGINX reverse-proxy configuration.
+When `NPM_USE_MIRROR=false`, npm uses its direct default registry. This does not bypass Defender Exploit Guard; a host policy that blocks `registry.npmjs.org` will still block the build. The same variables can be stored as non-secret GitHub Environment variables. Do not put credentials in the URL. There is intentionally no `SKIP_NPM_INSTALL` option because it would create an incomplete image and bypass dependency integrity checks.
 
-All supported deployment paths load this file: [scripts/deploy.sh](scripts/deploy.sh), [infra/main.bicep](infra/main.bicep), [docker-compose.yml](docker-compose.yml) through [scripts/compose.sh](scripts/compose.sh), and [deploy.yml](.github/workflows/deploy.yml). This repository no longer maintains a parallel ARM JSON template or `.env.example` file.
+To disable npm network access entirely:
 
-The Bicep deployment provisions an Azure Container Registry, Linux App Service Plan, App Service, user-assigned managed identity, and an RBAC-enabled Azure Key Vault. The App Service pulls from ACR through managed identity; registry admin credentials are disabled. Key Vault has purge protection enabled and grants the application identity `Key Vault Secrets User` for future App Service Key Vault references.
+```powershell
+$env:NPM_NETWORK_MODE = 'offline'
+docker build --build-arg NPM_NETWORK_MODE=$env:NPM_NETWORK_MODE -t ninja-paws-dojo .
+```
 
-### Deployment script
+Offline mode still runs `npm ci --offline --ignore-scripts`; it does not skip dependency installation. It succeeds only when the required package tarballs are already in the npm cache or supplied by a prebuilt dependency image/build layer. On a clean Docker builder, offline mode will fail with a missing-cache error, which is intentional and safer than silently omitting dependencies.
+
+### Subscription, tenant, and region setup
+
+On the first interactive deployment, the lifecycle obtains the current Azure context with `az account show`. If more than one enabled subscription is available and no `--subscription` was supplied, it presents a numbered list so you can choose the subscription by number or ID. If no region was supplied, it presents a numbered region list with **Central US (`centralus`)** as the default; pressing Enter accepts that default. `--defaults` uses the current Azure subscription and Central US without prompting. GitHub Actions is non-interactive and uses the GitHub Environment values.
+
+The OIDC bootstrap command stores `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, and `AZURE_LOCATION` as GitHub **Environment variables**. Subscription and tenant IDs are identifiers, not credentials, so GitHub variables are the correct storage class; putting them in Key Vault would add complexity without protecting a secret. The bootstrap creates no client secret and deploys through short-lived GitHub OIDC tokens. Any actual client secret, API key, connection string, or runtime password belongs in an Azure Key Vault reference or GitHub Environment secret, never in this repository.
+
+Deployment state and audit fields mask subscription and tenant IDs before writing them to JSON, HTML, or report text. Direct Azure portal links may still contain the full subscription ID because Azure requires it for a resource deep link. The full ID and tenant remain in process memory for Azure CLI operations and are never intentionally written as credential material.
+
+Bootstrap or refresh the GitHub Environment configuration with:
+
+```bash
+bash scripts/setup-azure-github-oidc.sh --environment dev
+```
+
+Use `--defaults` for Central US and the current Azure subscription, or choose a numbered region and subscription during the interactive prompts. Review the generated GitHub Environment variables before enabling `--provision`; Defender plan tiers can incur subscription charges.
+
+## Azure Deployment
+
+The local lifecycle wizard detects `dev` or `main` from the current Git branch. It supports `plan`, `doctor`, `provision`, `build`, `deploy`, `verify`, `repair`, and guarded `uninstall` stages.
+
+Mutating stages are branch-locked: a `dev` checkout can only target the `dev` Environment, and a `main` checkout can only target `prod`. `plan`, `doctor`, and `verify` remain read-only diagnostic stages and may be pointed at either environment explicitly.
+
+```bash
+bash scripts/test.sh --skip-azure
+bash scripts/deploy.sh plan
+bash scripts/deploy.sh doctor
+bash scripts/deploy.sh deploy
+```
+
+Use `--defaults` to accept built-in values and `--yes` for non-interactive confirmation. The wizard shows Bicep progress, resource operations, and writes fresh per-run artifacts under `output/<environment>/`, relative to the directory where the script was launched.
+
+Each lifecycle run also writes an auto-refreshing HTML status dashboard to `output/<environment>/deployment-<environment>.html`. Open that local file in a browser while the command runs to see the latest stage, percentage, environment coordinates, image, and links to detailed logs/state. No web server is required; the terminal remains the authoritative live stream. Use `--no-status-html` when a file report is not wanted.
+
+While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as *Not started*, *In progress* (animated spinner), *Success*, *Failure*, *Skipped*, or *Not applicable*, each with its own duration and a one-line detail. A failed stage shows the reason inline.
+
+The page never reloads itself. It polls a small state feed (`deployment-<environment>.state.js`) every 2 seconds and patches the DOM in place, so the progress bar, task list, verification matrix, run facts, next steps, and live console all update without flicker and without losing your scroll position. `fetch()` is blocked on `file://` origins, so the feed is loaded by injecting a `<script>` tag, which `file://` does permit.
+
+A **Generate PDF** button at the bottom renders the report through a dedicated print stylesheet (A4, page-break-safe sections and table rows, repeated table headers, preserved status colours) and opens the browser's print dialog — choose *Save as PDF*. It always reflects whatever is on screen at that moment, so you can take a snapshot mid-run or after completion. The raw console is excluded from the PDF to keep it to the executive content.
+
+The task list is built dynamically from the command you ran, so it always reflects the real work:
+
+| Command | Tasks after preflight and planning |
+| --- | --- |
+| `plan` | dry run only; preflight is marked *Not applicable* |
+| `doctor` | compile Bicep, what-if against the resource group |
+| `provision` | create and tag the resource group, deploy the Bicep infrastructure |
+| `build` | fingerprint the build context, build or reuse the image |
+| `rollout` | configure App Service, restart and wait for health, verify |
+| `verify` | verify Azure resources, then run the Defender scan and workload-coverage task |
+| `deploy` / `setup` / `update` / `repair` | all stages end to end, followed by the Defender scan and workload-coverage task |
+| `uninstall` | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
+
+Overall progress is derived from that list rather than hardcoded, so the percentage is meaningful for every command. Each stage also contributes its own rows to the verification matrix and its own tailored **Next steps**, so `uninstall`, `doctor`, and `plan` produce a genuine executive report instead of a deployment-shaped one.
+
+### Defender for Cloud scan and workload coverage
+
+For deployment-shaped commands, the report runs a Defender task **after** App Service and endpoint verification. The task performs these actions and records each result in the verification matrix:
+
+1. Activates or verifies the configured Defender for App Service, Defender for Containers, and Defender CSPM pricing tiers.
+2. Reads the latest Defender for Cloud assessment inventory for the target resource group.
+3. Searches the assessment payload for the configured target CVE.
+4. Verifies that App Service attack detection and ACR image vulnerability assessment are covered.
+5. Explicitly records Kubernetes runtime coverage and unrelated Defender plans as **Not applicable** because this project deploys a custom Linux container to Azure App Service, not AKS, SQL, Storage, Key Vault, DNS, or Resource Manager workloads.
+
+The scan task is deliberately honest about timing. Defender vulnerability assessment is asynchronous and its engines continuously rescan or rescan on their service schedule; the Azure CLI does not provide a supported synchronous "scan this image now" operation for this deployment shape. The task therefore forces a fresh post-deployment assessment inventory read and reports **Not sure** when the target CVE is not yet present, rather than treating an empty or still-initializing result as proof that the image is clean.
+
+**What the plans monitor here:**
+
+- **Defender for App Service:** requests and responses to the app, App Service internal logs, the hosting sandbox, and the underlying platform VM/management surface for attack detection and security recommendations.
+- **Defender for Containers:** the Azure Container Registry image supply chain and known image vulnerabilities, including CVE findings. It does not turn this App Service deployment into an AKS workload and does not provide Kubernetes sensor coverage here.
+- **Defender CSPM:** foundational posture and recommendation visibility for the subscription and deployed Azure resources.
+
+The report's Environment access panel links directly to App Service Metrics/diagnostics and the Defender for Cloud Recommendations blade. When the scan returns **Not sure**, open the linked Recommendations blade and filter by the target image or CVE after Defender has finished processing the image.
+
+Official references: [What is Microsoft Defender for Cloud?](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction), [Defender for App Service](https://learn.microsoft.com/azure/defender-for-cloud/tutorial-enable-app-service-plan), [Defender for Containers](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction), and [view vulnerabilities for running containers](https://learn.microsoft.com/azure/defender-for-cloud/view-and-remediate-vulnerabilities-containers).
+
+When the run reaches 100% the page rewrites itself as a **final executive report** with auto-refresh disabled. It adds a verification matrix where every check is recorded as **Pass**, **Failure**, **Not sure**, or **Not applicable** together with the evidence used to decide, an **Environment access** panel with clickable links to the live application, its `/api/status` and `/health` endpoints, App Service Metrics and diagnostics, Defender for Cloud Recommendations, and the Azure portal blades for the resource group, App Service, and container registry — annotated with whether the site actually responded — and a **Next steps** section tailored to whether the run succeeded or failed.
+
+### Content-addressed builds
+
+Every build first computes a **fingerprint**: a SHA-256 over each file the Dockerfile copies (`Dockerfile`, `package.json`, `package-lock.json`, `app.js`, `nginx.conf`, `entrypoint.sh`) plus every build argument. That fingerprint is pushed as an extra tag (`fp-<hash>`) alongside the immutable Git-SHA tag.
+
+On the next run the script looks up `fp-<hash>` in ACR:
+
+- **Hash already present** — nothing changed. The build and upload are skipped entirely; the Git-SHA, `latest`, and training-status tags are aliased to the existing manifest digest server-side with `az acr import`, which transfers no layers.
+- **App Service already configured for that exact image and passing `/health`** — the rollout and restart are skipped too, so a no-op deploy causes no downtime.
+- **Hash absent** — the content genuinely changed, so a full `az acr build` runs.
+
+The report shows the resolved manifest digest, the fingerprint, and whether the image was *Unchanged (rebuild and upload skipped)* or *Changed (rebuilt and pushed)*. Verification asserts that the deployed tag and the current source fingerprint resolve to the same digest, so drift between the working tree and the running container is caught. Use `--force-rebuild` to bypass both skips.
+
+Every run starts with a clean environment output directory. The previous run is archived under `output/archive/<timestamp>-<environment>/` by default, preserving troubleshooting history without allowing stale files to affect the current run. Use `--no-archive` only when automatic deletion of the previous output is explicitly preferred.
+
+The dashboard includes one **Live Console** artifact at `output/<environment>/deployment-<environment>.console.html`. During interactive setup it shows **Waiting for your input** while the terminal prompts for values; after each answer it updates with the resolved stage and deployment messages. Raw capture is kept only as hidden per-run staging data while the HTML is regenerated.
+
+When possible, the wizard opens the dashboard in the default browser automatically and prints both the absolute path and a clickable `file://` link. Use `--no-open-status` in headless terminals or CI.
+
+Initial GitHub OIDC setup is separate and runs once per Environment:
 
 ```bash
 az login
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
+gh auth login
+bash scripts/setup-azure-github-oidc.sh --environment dev --provision
+bash scripts/setup-azure-github-oidc.sh --environment prod --provision
 ```
 
-Options are optional. Defaults come from [config/deployment.json](config/deployment.json):
+The bootstrap creates the Entra federated credential, assigns deployment roles, and writes non-secret identifiers/configuration to GitHub Environment variables. It does not create a client secret.
+
+## Promotion and Releases
+
+1. Develop on feature branches and merge into `dev` after validation.
+2. Run **Deploy to Azure** manually from `dev` when the `dev` GitHub Environment is ready.
+3. Run **Promote dev to main** from `dev` to open a promotion PR.
+4. Review and merge that PR through protected `main`.
+5. Run **Deploy to Azure** manually from `main` to promote the stable baseline to the `prod` GitHub Environment.
+
+For releases, run **Request release from dev** and choose `patch`, `minor`, `major`, or `custom`. It creates a release PR that updates `package.json` and `package-lock.json`. After merge, **Publish main release** validates metadata, rejects duplicate/backward versions, creates `vX.Y.Z`, publishes the GitHub Release, and pushes the versioned and `latest` ACR images.
+
+Package metadata must match the repository name and description, remain MIT licensed, retain the repository URL, and keep the lockfile synchronized. `NODE_MAJOR_VERSION` controls release validation and Docker builds.
+
+## Workflows
+
+- `validate-infrastructure.yml`: Bash, package, ARM JSON, and Bicep checks
+- `validate-remediation.yml`: container remediation and endpoint validation
+- `deploy.yml`: branch-aware staged Azure deployment
+- `promote-dev-to-main.yml`: opens the dev-to-main promotion PR
+- `request-release.yml`: prepares a versioned release PR
+- `publish-release.yml`: publishes tags, GitHub Releases, and ACR images
+- `uninstall.yml`: protected, exact-name-confirmed Azure and Environment cleanup
+
+Run the shared checks locally:
 
 ```bash
-./scripts/deploy.sh \
-  --repository ninjapaw/ninjapaws-cloud-security-dojo \
-  --app-display-name ninjapaws-cloud-security-dojo-github-actions
+bash scripts/test.sh --skip-azure
+bash scripts/test.sh
 ```
 
-GitHub CLI is required only for the GitHub Actions setup portion. Install it automatically when needed with an interactive confirmation:
+## Security
 
-```bash
-./scripts/deploy.sh --install-gh
-```
+Do not commit secrets, customer data, production credentials, or private infrastructure details. Report security issues privately according to [SECURITY.md](SECURITY.md). See [CONTRIBUTING.md](CONTRIBUTING.md) for review and promotion requirements.
 
-For unattended use, accept the GitHub CLI package installation and other confirmations explicitly:
+## License and Ownership Notice
 
-```bash
-./scripts/deploy.sh --install-gh --yes
-```
-
-Infrastructure names are intentionally configured only in `config/deployment.json`; `deploy.sh` does not accept conflicting resource-name flags. It supplies the default location locally. In GitHub Actions, an `AZURE_LOCATION` organization or environment variable overrides that default and is passed to Bicep. `CONFIG_FILE` can select an alternate file for local Compose tooling only. `deploy.sh` and Bicep always use the committed `config/deployment.json` on the branch being deployed.
-
-Each run checks whether the Entra app registration, service principal, GitHub OIDC federated credential, Azure role assignments (`Contributor`, `Role Based Access Control Administrator` on the resource group, `AcrPush` on the registry), and GitHub Actions workflow configuration already exist and match the expected configuration. Existing Azure resources are skipped; a federated credential whose subject has drifted is repaired in place. Nothing is duplicated or recreated by default. The script then creates the resource group if missing, deploys [infra/main.bicep](infra/main.bicep), builds the image in ACR, restarts App Service, and verifies the public `/health` endpoint.
-
-When `--branch` is omitted, the wizard uses the current Git branch; it falls back to the repository default branch when that is available and to `main` only when it cannot detect either. The selected branch becomes the OIDC federated-credential subject. `main` uses the `prod` GitHub environment; every other branch, including `dev`, uses `dev`.
-
-The wizard uses GitHub CLI (`gh`) to verify that the remote `deploy.yml` workflow is enabled and creates the `dev` and `prod` GitHub environments when missing. It first configures the three required OIDC bootstrap identifiers (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`) as organization secrets with selected-repository access; if organization policy or permissions prevent that, it falls back to repository secrets. These identifiers let GitHub obtain an Azure OIDC token before it can access Azure services. They are the only GitHub-held configuration required by this deployment and are never displayed. GitHub does not disclose secret values, so the script safely synchronizes them on each run to repair unknown drift without creating duplicate secrets. It pauses with a command to run manually only when GitHub CLI is unavailable, authentication/repository access is missing, an Azure permission is missing, or an automated action fails. No client secret is created or required.
-
-After the first successful run, `deploy.yml` is configured to work going forward. Re-running `./scripts/deploy.sh` remains safe: it checks and repairs configuration, redeploys the Bicep infrastructure, and refreshes the training image without duplicating resources.
-
-No other GitHub organization secrets or variables are required by the workflows in this repository.
-
-#### Recreate or delete everything
-
-```bash
-# Delete and recreate the Entra app, federated credential, and resource group, then redeploy
-./scripts/deploy.sh --recreate
-
-# Permanently delete the resource group and Entra app registration, then exit
-./scripts/deploy.sh --delete
-```
-
-Both `--recreate` and `--delete` are destructive and prompt for confirmation. Add `--yes` to skip the prompt for unattended/CI use. A recreation automatically synchronizes the repository Actions secrets with the new `AZURE_CLIENT_ID`.
-
-### Manual Bicep deployment
-
-```bash
-az login
-az deployment group create \
-  --name ninjapaws-dojo-deployment \
-  --resource-group "$(jq -r '.deployment.resourceGroup' config/deployment.json)" \
-  --template-file infra/main.bicep
-```
-
-### Verify Azure deployment
-
-```bash
-APP_HOST=$(az webapp show \
-  --resource-group NP-ninjapaws-dojo-CentralUS \
-  --name ninjapaws-dojo-app \
-  --query defaultHostName -o tsv)
-
-curl "https://${APP_HOST}/health"
-curl "https://${APP_HOST}/api/status"
-az webapp log tail --resource-group NP-ninjapaws-dojo-CentralUS --name ninjapaws-dojo-app
-```
-
-The GitHub Actions deployment is manual-only and requires the OIDC bootstrap identifiers `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. The wizard prefers organization secrets restricted to this repository, then falls back to repository secrets when organization sharing is not available. `deploy.yml` selects `prod` for `main` and `dev` for all other branches, then reads non-secret deployment configuration from [config/deployment.json](config/deployment.json). It builds and pushes through Azure CLI authentication and configures the App Service to use managed identity for ACR pulls. Automatic deployment is intentionally disabled so a bad configuration cannot fail every push.
-
-### GitHub Actions bootstrap and environments
-
-The wizard manages these organization secrets with selected-repository access when allowed, or repository secrets otherwise. It verifies names but never prints values:
-
-| Secret | Value |
-|---|---|
-| `AZURE_CLIENT_ID` | Client ID of the Microsoft Entra application used by GitHub Actions |
-| `AZURE_TENANT_ID` | Microsoft Entra tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID containing the dojo resources |
-
-Configure a federated credential on the Entra application for each branch that runs `deploy.yml`. The wizard creates the credential for its detected or explicitly supplied `--branch`. The value in `AZURE_CLIENT_ID` must be the application (client) ID from the same tenant as `AZURE_TENANT_ID`; otherwise Azure Login fails with `AADSTS700016`. Do not create or store an Azure client secret for this workflow. GitHub has no branch-scoped repository secrets; `dev` and `prod` environments provide the deployment boundary and can enforce approval rules.
-
-The deployment identity needs permission to deploy the Bicep resources and create the managed-identity `AcrPull` assignment. Use a least-privilege custom role where possible; otherwise, the deployment identity needs Contributor plus permission to write role assignments at the deployment scope. The optional detection-workflow ACR publication also requires `AcrPush` on `ninjapawsdojo`.
-
-### Azure cleanup
-
-Training resources incur charges while running. Delete the resource group when finished:
-
-```bash
-az group delete --name NP-ninjapaws-dojo-CentralUS --yes --no-wait
-```
-
-## Detection and remediation workflow
-
-1. Build the default vulnerable image.
-2. Let GitHub Advanced Security analyze source and Defender for Cloud scan trusted images after the deployment workflow pushes them to ACR.
-3. Create a remediation branch.
-4. Change `ARG NGINX_VERSION=1.30.3` to `ARG NGINX_VERSION=1.30.4` or newer.
-5. Set `VULNERABILITY_STATUS=remediated` for the patched training image.
-6. Build and test the patched image.
-7. Open a pull request and review the remediation workflow results.
-8. Merge only after the actual package version, runtime status, endpoints, and security scan pass.
-
-The repository workflows are:
-
-- `.github/workflows/validate-remediation.yml`: builds the PR image, checks the actual NGINX version, tests endpoints, and verifies remediated runtime state.
-- `.github/workflows/deploy.yml`: provisions or updates Azure, pushes the image, and runs a health check.
-
-### Security integrations
-
-- **GitHub Advanced Security:** enable CodeQL default setup or an organization code-security configuration for this repository. GitHub then analyzes JavaScript source without a repository-owned CodeQL workflow.
-- **Microsoft Defender for DevOps:** in the Azure Defender for Cloud environment settings, connect the GitHub organization/repository as a DevOps connector. Defender for DevOps then evaluates the connected repository and reports findings in Azure.
-- **Microsoft Defender for Cloud:** enable the Defender plan for Container Registries. The deployment workflow publishes trusted images to ACR; Defender for Cloud scans the pushed image and reports container findings in Azure.
-
-These integrations are configured in GitHub and Azure, not in application code. GitHub permissions, the Azure connector, Defender plans, and ACR scanning must be enabled in their respective services.
-
-## Training exercises
-
-### Detection
-
-```bash
-docker build -t ninjapaws-dojo:scan .
-curl http://localhost:8080/api/status | jq '.vulnerability'
-```
-
-### Remediation
-
-Create a branch, update the NGINX build argument and status, then rebuild:
-
-```bash
-git checkout -b fix/cve-2026-42533
-docker build \
-  --build-arg NGINX_VERSION=1.30.4 \
-  --build-arg VULNERABILITY_STATUS=remediated \
-  -t ninjapaws-dojo:remediated .
-```
-
-Run the image and verify `/health`, `/api/status`, and the NGINX package version before opening a pull request.
-
-### Reporting
-
-Record the image tag, scanner, timestamp, package version, vulnerability result, remediation change, and endpoint validation results in the pull request. Never include secrets, customer data, or private infrastructure details.
-
-## Troubleshooting
-
-- Port already in use: change the host side of the Compose mapping, such as `9999:80`.
-- App does not respond: run `docker compose ps` and `docker compose logs dojo`.
-- Image does not build: retry with `docker build --no-cache`, then check network access to Ubuntu, NGINX, NodeSource, and npm registries.
-- Azure image pull failure: verify the App Service identity has `AcrPull`, the image exists in ACR, and `WEBSITES_PORT` is `80`.
-- Azure health failure: inspect App Service logs and confirm NGINX forwards to Node.js on port `3000`.
-
-## Security and legal information
-
-This is an independent community project, not a Microsoft product, and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names remain the property of Microsoft Corporation.
-
-The project is for authorized, non-production, defensive security training only. It intentionally contains a vulnerable training state and must not be exposed to untrusted users or used with real customer data, credentials, or production systems. See [SECURITY.md](SECURITY.md) for reporting guidance.
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
+The source is provided under the [MIT License](LICENSE). The MIT license does not grant rights to Microsoft trademarks, names, logos, or third-party materials. Microsoft trademarks and product names remain the property of Microsoft Corporation. This repository is an unapproved, unofficial community demonstration and should not imply Microsoft sponsorship or authorization.

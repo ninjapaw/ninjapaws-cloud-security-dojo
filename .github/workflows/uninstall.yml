@@ -1,0 +1,92 @@
+name: Remove Ninja Paws Azure environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to remove
+        required: true
+        type: choice
+        options: [dev, prod]
+      confirm_resource_group:
+        description: Type the exact resource group name to confirm deletion
+        required: true
+        type: string
+      wait:
+        description: Wait for Azure to confirm deletion
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
+
+jobs:
+  uninstall:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+      APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate deletion confirmation
+        run: |
+          : "${RESOURCE_GROUP:?AZURE_RESOURCE_GROUP must be configured in the environment}"
+          if [[ "${{ inputs.confirm_resource_group }}" != "$RESOURCE_GROUP" ]]; then
+            echo "The confirmation does not match $RESOURCE_GROUP. No deletion was attempted." >&2
+            exit 1
+          fi
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.SUBSCRIPTION_ID }}
+
+      - name: Delete tagged environment
+        run: |
+          args=(uninstall --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --location "$LOCATION" --resource-group "$RESOURCE_GROUP" --registry-name "$CONTAINER_REGISTRY_NAME" --app-service-name "$APP_SERVICE_NAME" --yes)
+          if [[ "${{ inputs.wait }}" == true ]]; then
+            args+=(--wait)
+          fi
+          scripts/deploy.sh "${args[@]}"
+
+      - name: Remove managed GitHub Environment variables
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for variable_name in \
+            AZURE_CLIENT_ID \
+            AZURE_TENANT_ID \
+            AZURE_SUBSCRIPTION_ID \
+            AZURE_LOCATION \
+            AZURE_RESOURCE_GROUP \
+            AZURE_CONTAINER_REGISTRY_NAME \
+            AZURE_APP_SERVICE_NAME \
+            AZURE_IMAGE_NAME \
+            BASE_OS_IMAGE \
+            BASE_OS_VERSION \
+            NGINX_VERSION \
+            VULNERABILITY_STATUS \
+            NODE_MAJOR_VERSION \
+            PORT \
+            DEFENDER_ENABLED; do
+            gh variable delete "$variable_name" --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true
+          done
+          # Remove the legacy secret form as well as the managed variable form.
+          gh secret delete AZURE_CLIENT_ID --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true

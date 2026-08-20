@@ -6,9 +6,11 @@ node_modules
 npm-debug.log*
 docs
 infra
-scripts/*
-!scripts/entrypoint.sh
+scripts
 *.md
 .env
 .env.*
 deployment-output.json
+output
+docker-compose.yml
+azuredeploy.json

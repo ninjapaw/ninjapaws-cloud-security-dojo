@@ -1,28 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Ninja Paws Cloud Security Dojo - Azure Deployment Script
-#
-# Idempotent by default: checks every resource (Entra app registration,
-# service principal, GitHub OIDC federated credential, Azure role
-# assignments, resource group, infrastructure, container image) and only
-# creates or repairs what is missing or drifted. Never duplicates existing
-# resources unless --recreate is passed.
-#
-# Usage:
-#   ./scripts/deploy.sh [options]
-#
-# Options:
-#   --repository OWNER/REPO     GitHub repository (default: ninjapaw/ninjapaws-cloud-security-dojo)
-#   --app-display-name NAME     Entra app registration display name
-#   --branch NAME                GitHub branch for OIDC federation (default: current branch)
-#   --install-gh                 Install GitHub CLI with apt-get when it is missing
-#   --recreate                   Delete and recreate the Entra app, service principal,
-#                                 federated credential, and resource group before deploying
-#   --delete                     Delete all resources created by this script and exit
-#   --yes                        Skip confirmation prompts (required for --recreate/--delete in CI)
-#   -h, --help                   Show this help and exit
+# Staged Azure lifecycle for the Ninja Paws Cloud Security Dojo.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,653 +10,2494 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPOSITORY_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-source "$SCRIPT_DIR/config.sh"
-if [[ "$CONFIG_FILE" != "$REPOSITORY_ROOT/config/deployment.json" ]]; then
-    echo "deploy.sh requires the committed repository config: $REPOSITORY_ROOT/config/deployment.json" >&2
-    exit 2
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+INVOCATION_DIR="$PWD"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+AZURE_REPO_ROOT="$REPO_ROOT"
+if command -v wslpath >/dev/null 2>&1; then
+    AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
+elif command -v cygpath >/dev/null 2>&1; then
+    AZURE_REPO_ROOT="$(cygpath -w "$REPO_ROOT")"
 fi
-load_deployment_config
+# The Azure CLI installer does not always add itself to the PATH seen by Git Bash or WSL.
+if ! command -v az >/dev/null 2>&1; then
+    for azure_cli_dir in \
+        "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/wbin" \
+        "/mnt/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/wbin"; do
+        if [[ -f "$azure_cli_dir/az" || -f "$azure_cli_dir/az.cmd" ]]; then
+            export PATH="$azure_cli_dir:$PATH"
+            break
+        fi
+    done
+fi
+if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+    windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+    if [[ -n "$windows_az_path" ]]; then
+        azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
+        export PATH="$azure_cli_dir:$PATH"
+    fi
+fi
 
-RESOURCE_GROUP=$CONFIG_RESOURCE_GROUP
-LOCATION=$CONFIG_LOCATION
-REGISTRY_NAME=$CONFIG_REGISTRY_NAME
-APP_SERVICE_NAME=$CONFIG_APP_SERVICE_NAME
-KEY_VAULT_NAME=$CONFIG_KEY_VAULT_NAME
-IMAGE_REPO=$CONFIG_IMAGE_NAME
-IMAGE_TAG=$CONFIG_IMAGE_TAG
-REPOSITORY=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##' || true)
-REPOSITORY=${REPOSITORY:-ninjapaw/ninjapaws-cloud-security-dojo}
-APP_DISPLAY_NAME=ninjapaws-cloud-security-dojo-github-actions
-BRANCH=
-RECREATE=false
-DELETE=false
+# Windows az.cmd emits CRLF output when called from WSL/Git Bash. MSYS also rewrites arguments that
+# look like Unix paths, which would corrupt resource IDs and role-assignment scopes, so exclude those.
+az() {
+    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
+}
+
+COMMAND="deploy"
+# Precedence for every setting: CLI flag > environment variable > config file > built-in fallback.
+# The workflow exports the unprefixed names, so both spellings are accepted.
+CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
+ENVIRONMENT="${DEPLOY_ENVIRONMENT:-auto}"
+SCENARIO_ID="${DEPLOY_SCENARIO:-}"
+ALL_SCENARIOS=false
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-${SUBSCRIPTION_ID:-}}"
+LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
+RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
+REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-${CONTAINER_REGISTRY_NAME:-${REGISTRY_NAME:-}}}"
+APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-${APP_SERVICE_NAME:-}}"
+IMAGE_NAME="${IMAGE_NAME:-}"
+IMAGE_TAG="${IMAGE_TAG:-}"
+BASE_OS_IMAGE="${BASE_OS_IMAGE:-}"
+BASE_OS_VERSION="${BASE_OS_VERSION:-}"
+NGINX_VERSION="${NGINX_VERSION:-}"
+VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-}"
+NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-}"
+PORT="${PORT:-}"
+NPM_REGISTRY_URL="${NPM_REGISTRY_URL:-}"
+NPM_USE_MIRROR="${NPM_USE_MIRROR:-}"
+NPM_NETWORK_MODE="${NPM_NETWORK_MODE:-}"
+DEFENDER_ENABLED="${DEFENDER_ENABLED:-}"
+DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-}"
+DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-}"
+DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-}"
+DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-}"
+DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-}"
+DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-}"
+SCENARIO_NAME=""
+SCENARIO_SHORT_NAME=""
+SCENARIO_CVE=""
+SCENARIO_ADVISORY_URL=""
+SCENARIO_AFFECTED_VERSION=""
+SCENARIO_FIXED_VERSION=""
+SCENARIO_WORKLOADS=""
 ASSUME_YES=false
-INSTALL_GH=false
+FORCE=false
+FORCE_REBUILD=false
+WAIT_FOR_DELETE=false
+STATE_FILE=""
+STATE_JS=""
+STATUS_HTML=""
+STATUS_CONSOLE=""
+STATUS_RAW_CONSOLE=""
+OUTPUT_DIR=""
+ARCHIVE_OUTPUTS=true
+OUTPUT_ROOT="${OUTPUT_ROOT:-}"
+CONSOLE_CAPTURE_STARTED=false
+CONSOLE_AUTORELOAD=true
+IMAGE_TAG_EXPLICIT=false
+USE_DEFAULTS=false
+OPEN_STATUS_HTML=true
+RUN_STARTED_AT="$(date +%s)"
+RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_ENDED_ISO=""
+RUN_ID=""
+RUN_INVOCATION="${*:-$COMMAND}"
+AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
+AZURE_ACCOUNT_NAME=""
+SUBSCRIPTION_NAME=""
 
-print_help() {
-    sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | grep '^#' | sed 's/^# \{0,1\}//'
+# Read a dotted path of string values out of the config file without requiring jq.
+config_lookup() {
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    awk -v want="$1" '
+        BEGIN { depth = 0 }
+        {
+            line = $0
+            gsub(/^[ \t]+|[ \t]+$/, "", line)
+            if (line ~ /^"[^"]+"[ \t]*:[ \t]*\{/) {
+                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
+                depth++; stack[depth] = key; next
+            }
+            if (line ~ /^\}/) { if (depth > 0) depth--; next }
+            if (line ~ /^"[^"]+"[ \t]*:[ \t]*".*"/) {
+                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
+                val = line
+                sub(/^"[^"]+"[ \t]*:[ \t]*"/, "", val); sub(/",?$/, "", val)
+                path = ""
+                for (i = 1; i <= depth; i++) path = path stack[i] "."
+                if (path key == want) { print val; exit }
+            }
+        }
+    ' "$CONFIG_FILE"
 }
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --repository) REPOSITORY="$2"; shift 2 ;;
-        --app-display-name) APP_DISPLAY_NAME="$2"; shift 2 ;;
-        --branch) BRANCH="$2"; shift 2 ;;
-        --install-gh) INSTALL_GH=true; shift ;;
-        --recreate) RECREATE=true; shift ;;
-        --delete) DELETE=true; shift ;;
-        --yes) ASSUME_YES=true; shift ;;
-        -h|--help) print_help; exit 0 ;;
-        *) echo "Unknown argument: $1" >&2; print_help; exit 2 ;;
+# Environment override first, then the shared default, then the built-in fallback.
+config_setting() {
+    local key="$1" fallback="$2" value
+    value="$(config_lookup "environments.$ENVIRONMENT.$key")"
+    [[ -n "$value" ]] || value="$(config_lookup "defaults.$key")"
+    printf '%s' "${value:-$fallback}"
+}
+
+project_meta() {
+    local value
+    value="$(config_lookup "project.$1")"
+    printf '%s' "${value:-$2}"
+}
+
+resolve_scenario() {
+    local configured_ids
+    configured_ids="$(config_lookup defaults.scenarioIds)"
+    if [[ "$ALL_SCENARIOS" == true ]]; then
+        SCENARIO_ID="$configured_ids"
+    fi
+    SCENARIO_ID="${SCENARIO_ID:-$(config_setting scenario defender-cloud-scenario-1)}"
+    [[ "$SCENARIO_ID" != *,* ]] || fail "Multiple scenarios are not yet supported in a single deployment invocation. Use --scenario with one ID; the registry is ready for future --all-scenarios orchestration."
+    SCENARIO_NAME="$(config_lookup "scenarios.$SCENARIO_ID.name")"
+    SCENARIO_SHORT_NAME="$(config_lookup "scenarios.$SCENARIO_ID.shortName")"
+    SCENARIO_CVE="$(config_lookup "scenarios.$SCENARIO_ID.cve")"
+    SCENARIO_ADVISORY_URL="$(config_lookup "scenarios.$SCENARIO_ID.advisoryUrl")"
+    SCENARIO_AFFECTED_VERSION="$(config_lookup "scenarios.$SCENARIO_ID.affectedVersion")"
+    SCENARIO_FIXED_VERSION="$(config_lookup "scenarios.$SCENARIO_ID.fixedVersion")"
+    SCENARIO_WORKLOADS="$(config_lookup "scenarios.$SCENARIO_ID.workloads")"
+    [[ -n "$SCENARIO_NAME" && -n "$SCENARIO_CVE" ]] || fail "Unknown scenario '$SCENARIO_ID'. Use --help or inspect the scenarios registry in $CONFIG_FILE."
+}
+
+resolve_audit_context() {
+    RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    APP_VERSION="$(sed -n 's/.*"version"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" 2>/dev/null | head -1)"
+    APP_VERSION="${APP_VERSION:-unknown}"
+    CONFIG_VERSION="$(config_lookup configVersion)"
+    CONFIG_VERSION="${CONFIG_VERSION:-unknown}"
+    GIT_BRANCH="${GITHUB_REF_NAME:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')}"
+    GIT_COMMIT="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')}"
+    if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+        GIT_DIRTY="modified (uncommitted changes present)"
+    else
+        GIT_DIRTY="clean"
+    fi
+    RUN_OPERATOR="${GITHUB_ACTOR:-${USER:-${USERNAME:-unknown}}}"
+    RUN_HOST="$(hostname 2>/dev/null || printf 'unknown')"
+    if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+        RUN_ORIGIN="GitHub Actions"
+        RUN_ORIGIN_DETAIL="workflow ${GITHUB_WORKFLOW:-unknown}, run ${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT:-1}, triggered by ${GITHUB_EVENT_NAME:-unknown}"
+    else
+        RUN_ORIGIN="Local workstation"
+        RUN_ORIGIN_DETAIL="interactive shell on $RUN_HOST"
+    fi
+}
+
+TASK_KEYS=()
+TASK_LABELS=()
+TASK_STATUSES=()
+TASK_DETAILS=()
+TASK_STARTED=()
+TASK_ENDED=()
+CHECK_LABELS=()
+CHECK_RESULTS=()
+CHECK_DETAILS=()
+CURRENT_TASK=""
+RUN_FINAL=false
+RUN_RESULT=""
+FAILURE_MESSAGE=""
+APP_URL=""
+APP_HTTP_CODE=""
+HEALTH_HTTP_CODE=""
+APP_RESPONSE_TIME=""
+APP_READY_ATTEMPTS=0
+APP_CONTAINER_ID=""
+APP_STATUS_BODY=""
+BUILD_FINGERPRINT=""
+FINGERPRINT_TAG=""
+IMAGE_DIGEST=""
+BUILD_SKIPPED=false
+ROLLOUT_SKIPPED=false
+
+register_task() {
+    TASK_KEYS+=("$1")
+    TASK_LABELS+=("$2")
+    TASK_STATUSES+=("not_started")
+    TASK_DETAILS+=("Queued.")
+    TASK_STARTED+=("0")
+    TASK_ENDED+=("0")
+}
+
+task_index() {
+    local i
+    if ((${#TASK_KEYS[@]} > 0)); then
+        for i in "${!TASK_KEYS[@]}"; do
+            if [[ "${TASK_KEYS[$i]}" == "$1" ]]; then
+                printf '%s' "$i"
+                return 0
+            fi
+        done
+    fi
+    printf -- '-1'
+}
+
+# status: not_started | in_progress | success | failure | skipped | not_applicable
+set_task() {
+    local key="$1" status="$2" detail="${3:-}" index
+    index="$(task_index "$key")"
+    if [[ "$index" == -1 ]]; then
+        return 0
+    fi
+    TASK_STATUSES[index]="$status"
+    if [[ -n "$detail" ]]; then
+        TASK_DETAILS[index]="$detail"
+    fi
+    case "$status" in
+        in_progress)
+            TASK_STARTED[index]="$(date +%s)"
+            CURRENT_TASK="$key"
+            ;;
+        success|failure|skipped)
+            TASK_ENDED[index]="$(date +%s)"
+            if [[ "$CURRENT_TASK" == "$key" ]]; then
+                CURRENT_TASK=""
+            fi
+            ;;
     esac
-done
-
-ACR_NAME=${REGISTRY_NAME//-/}
-
-detect_branch() {
-    local detected_branch
-    detected_branch=$(git branch --show-current 2>/dev/null || true)
-    if [[ -z "$detected_branch" ]]; then
-        detected_branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
-    fi
-    if [[ -z "$detected_branch" ]]; then
-        detected_branch=main
-        echo -e "${YELLOW}⚠️  Could not detect a Git branch; using main. Pass --branch to override.${NC}"
-    fi
-    BRANCH="$detected_branch"
+    return 0
 }
 
-if [[ -z "$BRANCH" ]]; then
-    detect_branch
-fi
+# result: pass | fail | unknown | not_applicable
+record_check() {
+    CHECK_LABELS+=("$1")
+    CHECK_RESULTS+=("$2")
+    CHECK_DETAILS+=("${3:-No evidence captured.}")
+}
 
-GITHUB_ENVIRONMENT=$(github_environment_for_branch "$BRANCH")
+register_lifecycle_tasks() {
+    register_task preflight "Preflight: required tooling, Azure sign-in, subscription selection"
+    register_task plan "Resolve settings, naming, and the run output workspace"
+    case "$COMMAND" in
+        setup|deploy|update|repair)
+            register_task resourcegroup "Create and tag the resource group"
+            register_task infra "Deploy the Bicep infrastructure"
+            register_task fingerprint "Fingerprint the build context and compare it with the registry"
+            register_task image "Build and push the container image, or reuse the matching digest"
+            register_task appconfig "Point App Service at the immutable image with managed-identity pull"
+            register_task restart "Restart App Service and wait for the container to answer"
+            register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
+            ;;
+        provision)
+            register_task resourcegroup "Create and tag the resource group"
+            register_task infra "Deploy the Bicep infrastructure"
+            ;;
+        build)
+            register_task fingerprint "Fingerprint the build context and compare it with the registry"
+            register_task image "Build and push the container image, or reuse the matching digest"
+            ;;
+        rollout)
+            register_task appconfig "Point App Service at the immutable image with managed-identity pull"
+            register_task restart "Restart App Service and wait for the container to answer"
+            register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
+            ;;
+        verify)
+            register_task verify "Verify Azure configuration, identity, and live endpoints"
+            register_task defender "Activate recommended Defender plans and scan for workload CVEs"
+            ;;
+        doctor)
+            register_task bicep "Compile the Bicep template"
+            register_task whatif "Run a what-if against the target resource group"
+            ;;
+        uninstall)
+            register_task discover "Locate the target resource group"
+            register_task ownership "Confirm Ninja Paws ownership tags before deleting"
+            register_task delete "Request resource group deletion"
+            register_task teardown "Confirm every resource has been removed"
+            ;;
+    esac
+}
+
+# Overall progress is derived from the registered task list so it stays honest per command.
+# Optional argument: percent complete (0-100) within the task that is currently in progress.
+auto_percent() {
+    local fraction="${1:-0}" i status units=0 total=0
+    if ((${#TASK_KEYS[@]} == 0)); then
+        printf '0'
+        return 0
+    fi
+    for i in "${!TASK_KEYS[@]}"; do
+        status="${TASK_STATUSES[$i]}"
+        total=$((total + 100))
+        case "$status" in
+            success|skipped|not_applicable) units=$((units + 100)) ;;
+            in_progress)                    units=$((units + fraction)) ;;
+        esac
+    done
+    if ((total == 0)); then
+        printf '0'
+        return 0
+    fi
+    printf '%s' $((units * 100 / total))
+}
+
+format_duration() {
+    local seconds="${1:-0}"
+    if ((seconds < 0)); then
+        printf -- '&mdash;'
+        return 0
+    fi
+    printf '%dm %02ds' $((seconds / 60)) $((seconds % 60))
+}
+
+usage() {
+    cat <<'EOF'
+Manage the Ninja Paws Cloud Security Dojo Azure lifecycle.
+
+Usage: scripts/deploy.sh <command> [options]
+
+Commands:
+  setup                    Provision, build, deploy, and verify
+  provision                Create or update the resource group and Bicep resources
+  build                    Build and push the selected image to ACR
+    deploy|update            Provision, build, deploy the image, and verify
+    rollout                  Configure App Service for an already-built image
+  verify                   Validate Azure resources, image, identity, and endpoints
+  repair                   Re-provision, rebuild, redeploy, and verify
+  doctor                   Run local and Azure preflight checks and Bicep what-if
+  plan                     Print the resolved deployment plan without changing Azure
+  uninstall                Delete the owned resource group (requires --yes or confirmation)
+
+Options:
+    --environment <dev|prod|auto> Deployment environment (default: detected from Git branch)
+  --subscription <id>      Azure subscription ID (default: current subscription)
+  --location <region>      Azure region (default: centralus)
+  --resource-group <name>  Azure resource group
+  --registry-name <name>   Azure Container Registry name
+  --app-service-name <name> App Service name
+  --image-name <name>      Container image repository (default: ninjapaws-dojo)
+  --image-tag <tag>        Image tag (default: current Git SHA)
+    --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
+    --all-scenarios          Deploy all configured scenarios (currently one scenario)
+    --yes                    Skip confirmation; required for non-interactive uninstall
+    --defaults               Accept built-in defaults without interactive prompts
+  --force                  Allow uninstall of an untagged resource group
+  --force-rebuild          Rebuild and redeploy even when the image content is unchanged
+  --wait                   Wait for resource-group deletion to finish
+    --no-status-html         Disable the auto-refreshing HTML status report
+    --no-open-status         Keep the report on disk without opening a browser
+    --no-archive             Delete the previous environment output instead of archiving it
+    --help                   Show this help
+
+OIDC bootstrap is separate and should be run once per GitHub Environment:
+  scripts/setup-azure-github-oidc.sh --environment <dev|prod> --provision
+EOF
+}
+
+fail() {
+    FAILURE_MESSAGE="$1"
+    echo -e "${RED}ERROR: $1${NC}" >&2
+    exit 1
+}
+
+prompt_default() {
+
+    prompt_region() {
+        local default_region="$1" answer index region
+        local regions=(centralus eastus eastus2 westus2 westus3 southcentralus westcentralus northeurope westeurope uksouth southeastasia australiaeast)
+        if [[ ! -t 0 ]]; then
+            printf '%s' "$default_region"
+            return 0
+        fi
+        printf '\nAzure region (default: %s)\n' "$default_region"
+        for index in "${!regions[@]}"; do
+            printf '  %2d) %s\n' "$((index + 1))" "${regions[$index]}"
+        done
+        while true; do
+            read -r -p "Select a region by number or name [$default_region]: " answer
+            answer="${answer:-$default_region}"
+            if [[ "$answer" =~ ^[0-9]+$ ]]; then
+                index=$((answer - 1))
+                if ((index >= 0 && index < ${#regions[@]})); then
+                    printf '%s' "${regions[$index]}"
+                    return 0
+                fi
+            else
+                for region in "${regions[@]}"; do
+                    if [[ "$answer" == "$region" ]]; then
+                        printf '%s' "$region"
+                        return 0
+                    fi
+                done
+            fi
+            printf 'Please choose one of the listed region numbers or names.\n' >&2
+        done
+    }
+    local prompt="$1"
+    local default_value="$2"
+    local answer
+    if [[ -t 0 ]]; then
+        read -r -p "$prompt [$default_value]: " answer
+        printf '%s' "${answer:-$default_value}"
+    else
+        printf '%s' "$default_value"
+    fi
+}
 
 confirm() {
-    local prompt="$1"
+    local message="$1"
     if [[ "$ASSUME_YES" == true ]]; then
         return 0
     fi
-    read -r -p "$prompt [y/N] " reply
-    [[ "$reply" =~ ^[Yy]$ ]]
+    [[ -t 0 ]] || fail "Confirmation is required in non-interactive mode. Re-run with --yes."
+    local answer
+    read -r -p "$message [y/N] " answer
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]] || fail "Operation cancelled."
 }
 
-# Ensures a resource exists: checks first, creates if missing. If creation
-# fails (e.g. insufficient permissions), pauses with the manual command and
-# re-checks after each keypress until it exists or the user quits.
-ensure_resource() {
-    local description="$1"
-    local manual_command="$2"
-    local check_fn="$3"
-    local create_fn="$4"
+html_escape() {
+        printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
 
-    if "$check_fn"; then
-        echo "  Already exists, skipping creation."
+mask_identifier() {
+    local value="${1:-}"
+    if [[ "$value" == "current Azure subscription" ]]; then
+        printf '%s' "$value"
+        return 0
+    fi
+    if [[ ${#value} -le 8 ]]; then
+        printf '%s' "${value:-not recorded}"
+    else
+        printf '%s...%s' "${value:0:4}" "${value: -4}"
+    fi
+}
+
+# The browser reloads these files every 3s, so never leave a half-written page on disk.
+# Windows rename fails while a reader holds the target open, so retry before the non-atomic fallback.
+publish_atomically() {
+    local source="$1" target="$2" attempt=0
+    while ((attempt < 20)); do
+        if mv -f "$source" "$target" 2>/dev/null; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.05 2>/dev/null || true
+    done
+    cp -f "$source" "$target" 2>/dev/null || true
+    rm -f "$source" 2>/dev/null || true
+    return 0
+}
+
+line_seen() {
+    local needle="$1"
+    local line
+    [[ -f "$2" ]] || return 1
+    while IFS= read -r line; do
+        [[ "$line" == "$needle" ]] && return 0
+    done < "$2"
+    return 1
+}
+
+write_console_html() {
+        local line line_number=0 reload_script="" console_tmp
+        [[ -n "$STATUS_CONSOLE" ]] || return 0
+        if [[ "${CONSOLE_AUTORELOAD:-true}" == true ]]; then
+            reload_script='        window.setTimeout(function () { window.location.reload(); }, 3000);'
+        fi
+        console_tmp="$STATUS_CONSOLE.tmp"
+        cat > "$console_tmp" <<EOF
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ninja Paws Deployment Console - $(html_escape "$ENVIRONMENT")</title>
+    <style>
+        :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; background: #091322; color: #d9e7f5; }
+        html, body { height: 100%; }
+        body { margin: 0; padding: 12px 16px 16px; display: flex; flex-direction: column; overflow: hidden; }
+        header { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px; color: #f2a24a; font-family: Inter, ui-sans-serif, system-ui, sans-serif; flex: 0 0 auto; }
+        .mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px 10px 10px 3px; background: #f2a24a; color: #102f4d; font-weight: 900; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+        header strong { font-size: 12px; letter-spacing: .1em; }
+        header small { display: block; color: #8fa6bc; font-size: 10px; letter-spacing: .12em; margin-top: 3px; }
+        .terminal { flex: 1 1 auto; min-height: 0; border: 1px solid #28415c; border-radius: 12px; overflow: auto; overscroll-behavior: contain; background: #0d1a2b; box-shadow: 0 12px 30px #0006; }
+        .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px 18px; padding: 10px 14px; margin-bottom: 10px; border: 1px solid #28415c; border-radius: 10px; background: #0d1a2b; flex: 0 0 auto; font-size: 11px; }
+        .meta span { color: #8fa6bc; }
+        .meta b { color: #d9e7f5; font-weight: 600; }
+        .warn-strip { flex: 0 0 auto; margin-bottom: 10px; padding: 8px 14px; border-radius: 8px; background: #3a1c1c; border: 1px solid #6d2b2b; color: #f0b4b4; font-size: 11px; }
+        .foot { flex: 0 0 auto; padding: 10px 2px 0; color: #58718b; font-size: 10px; }
+        .line { display: grid; grid-template-columns: 52px 1fr; min-width: max-content; border-bottom: 1px solid #ffffff0b; }
+        .number { padding: 5px 10px; color: #58718b; text-align: right; user-select: none; background: #0a1524; }
+        .text { padding: 5px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .empty { color: #58718b; padding: 24px; text-align: center; }
+    </style>
+</head>
+<body>
+    <header><span class="mark">NP</span><span><strong>NINJA PAWS DEPLOYMENT CONSOLE</strong><small>LIVE RAW TERMINAL STREAM &middot; $(html_escape "$ENVIRONMENT") &middot; RUN $(html_escape "$RUN_ID")</small></span></header>
+    <div class="meta">
+        <span>Command <b>$(html_escape "$COMMAND")</b></span>
+        <span>Environment <b>$(html_escape "$ENVIRONMENT")</b></span>
+        <span>Started <b>$(html_escape "$RUN_STARTED_ISO")</b></span>
+        <span>Operator <b>$(html_escape "$RUN_OPERATOR")</b></span>
+        <span>Origin <b>$(html_escape "$RUN_ORIGIN")</b></span>
+        <span>Branch <b>$(html_escape "$GIT_BRANCH")</b></span>
+        <span>Commit <b>$(html_escape "${GIT_COMMIT:0:12}")</b></span>
+        <span>Subscription <b>$(html_escape "${SUBSCRIPTION_ID:-unknown}")</b></span>
+        <span>Version <b>v$(html_escape "$APP_VERSION")</b></span>
+    </div>
+    <div class="warn-strip"><strong>USE AT YOUR OWN RISK.</strong> Intentionally vulnerable training environment &mdash; keep it isolated and delete it when the exercise ends.</div>
+    <div class="terminal" id="terminal">
+EOF
+        if [[ -s "$STATUS_RAW_CONSOLE" ]]; then
+                while IFS= read -r line; do
+                        line_number=$((line_number + 1))
+                        printf '    <div class="line"><span class="number">%s</span><span class="text">%s</span></div>\n' "$line_number" "$(html_escape "$line")" >> "$console_tmp"
+                    done < "$STATUS_RAW_CONSOLE"
+        else
+                    printf '    <div class="empty">Waiting for deployment output...</div>\n' >> "$console_tmp"
+        fi
+                cat >> "$console_tmp" <<EOF
+    </div>
+    <script>
+    (function () {
+        var terminal = document.getElementById('terminal');
+        var TOP_KEY = 'np-console-top';
+        var PINNED_KEY = 'np-console-pinned';
+        var store = null;
+        try { store = window.sessionStorage; store.getItem(TOP_KEY); } catch (error) { store = null; }
+
+        // Follow the tail unless the reader has deliberately scrolled up.
+        var pinned = store ? store.getItem(PINNED_KEY) !== '0' : true;
+        if (pinned) {
+            terminal.scrollTop = terminal.scrollHeight;
+        } else {
+            terminal.scrollTop = parseInt(store.getItem(TOP_KEY) || '0', 10);
+        }
+
+        terminal.addEventListener('scroll', function () {
+            var atBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 24;
+            if (store) {
+                store.setItem(PINNED_KEY, atBottom ? '1' : '0');
+                store.setItem(TOP_KEY, String(terminal.scrollTop));
+            }
+        }, { passive: true });
+
+$reload_script
+    })();
+    </script>
+    <div class="foot">$(html_escape "$(project_meta copyright 'Copyright (c) Ninja Paws')") &middot; v$(html_escape "$APP_VERSION") &middot; Licensed under $(html_escape "$(project_meta license MIT)") &middot; Provided as-is, without warranty. Generated $(date -u +%Y-%m-%dT%H:%M:%SZ).</div>
+</body>
+</html>
+EOF
+        publish_atomically "$console_tmp" "$STATUS_CONSOLE"
+}
+
+open_status_html() {
+    [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
+    local native
+    native="$(native_path "$STATUS_HTML")"
+    print_report_link
+    if [[ "$native" == *:\\* ]]; then
+        # MSYS rewrites a bare "/c" into "C:\", which turns cmd.exe /c into an interactive shell.
+        if command -v powershell.exe >/dev/null 2>&1; then
+            powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+        elif command -v cmd.exe >/dev/null 2>&1; then
+            MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
+        fi
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
+    elif command -v open >/dev/null 2>&1; then
+        open "$STATUS_HTML" >/dev/null 2>&1 &
+    fi
+    return 0
+}
+
+# The browser needs a host-native path: MSYS and WSL paths are not valid file:// URLs on Windows.
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    elif command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+report_url() {
+    local native
+    native="$(native_path "$1")"
+    if [[ "$native" == *:\\* ]]; then
+        printf 'file:///%s' "${native//\\//}"
+    else
+        printf 'file://%s' "$native"
+    fi
+}
+
+print_report_link() {
+    [[ -n "$STATUS_HTML" ]] || return 0
+    local url copy_note=""
+    url="$(report_url "$STATUS_HTML")"
+    if command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "$url" | clip.exe 2>/dev/null && copy_note="(copied to clipboard)"
+    elif command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "$url" | pbcopy 2>/dev/null && copy_note="(copied to clipboard)"
+    elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$url" | wl-copy 2>/dev/null && copy_note="(copied to clipboard)"
+    fi
+    echo -e "${BLUE}--- LIVE DEPLOYMENT REPORT (${ENVIRONMENT}) ---${NC}"
+    echo -e "  ${CYAN:-\033[0;36m}${url}${NC} ${copy_note}"
+    return 0
+}
+
+print_terminal_status() {
+    local phase="$1"
+    local status="$2"
+    local percent="$3"
+    local detail="${4:-}"
+    local width=28 filled empty elapsed icon
+    filled=$((percent * width / 100))
+    empty=$((width - filled))
+    elapsed=$(( $(date +%s) - RUN_STARTED_AT ))
+    case "$status" in
+        success) icon="✓"; color="$GREEN" ;;
+        failed) icon="✗"; color="$RED" ;;
+        waiting|starting) icon="…"; color="$YELLOW" ;;
+        *) icon="•"; color="$BLUE" ;;
+    esac
+    printf "\n${color}%s %s %-12s [%s%s] %3s%%  +%ss${NC}\n" "$icon" "$phase" "$status" "$(printf '%*s' "$filled" '' | tr ' ' '#')" "$(printf '%*s' "$empty" '')" "$percent" "$elapsed"
+    printf "  ${BLUE}↳${NC} %s\n" "$detail"
+    print_report_link
+}
+
+start_console_capture() {
+    [[ "$CONSOLE_CAPTURE_STARTED" == true || "${NO_STATUS_HTML:-false}" == true || "${NO_CONSOLE_CAPTURE:-false}" == true ]] && return 0
+    [[ -n "$STATUS_CONSOLE" ]] || return 0
+    [[ -t 1 ]] || return 0
+    CONSOLE_CAPTURE_STARTED=true
+    exec > >(tee -a "$STATUS_RAW_CONSOLE") 2>&1
+}
+
+render_task_rows() {
+    local i status label detail started ended elapsed icon cls text since_attr
+    if ((${#TASK_KEYS[@]} == 0)); then
+        printf '        <p>No lifecycle tasks were registered for this command.</p>\n'
+        return 0
+    fi
+    for i in "${!TASK_KEYS[@]}"; do
+        status="${TASK_STATUSES[$i]}"
+        label="${TASK_LABELS[$i]}"
+        detail="${TASK_DETAILS[$i]}"
+        started="${TASK_STARTED[$i]}"
+        ended="${TASK_ENDED[$i]}"
+        elapsed=-1
+        since_attr=""
+        if ((started > 0)); then
+            if ((ended > 0)); then
+                elapsed=$((ended - started))
+            else
+                elapsed=$(( $(date +%s) - started ))
+                since_attr=" data-since=\"$started\""
+            fi
+        fi
+        case "$status" in
+            success)        cls=ok;   icon='&#10003;'; text='Success' ;;
+            failure)        cls=bad;  icon='&#10007;'; text='Failure' ;;
+            in_progress)    cls=run;  icon='';         text='In progress' ;;
+            skipped)        cls=na;   icon='&#8631;';  text='Skipped' ;;
+            not_applicable) cls=na;   icon='&#8709;';  text='Not applicable' ;;
+            *)              cls=idle; icon='&#9675;';  text='Not started' ;;
+        esac
+        printf '        <div class="task %s">' "$cls"
+        if [[ "$status" == in_progress ]]; then
+            printf '<span class="ico %s spinner"></span>' "$cls"
+        else
+            printf '<span class="ico %s">%s</span>' "$cls" "$icon"
+        fi
+        printf '<div class="task-body"><div class="task-name">%s. %s</div><div class="task-detail">%s</div></div>' \
+            "$((i + 1))" "$(html_escape "$label")" "$(html_escape "$detail")"
+        printf '<div class="task-meta"><span class="pill %s">%s</span><span class="elapsed"%s>%s</span></div></div>\n' \
+            "$cls" "$text" "$since_attr" "$(format_duration "$elapsed")"
+    done
+}
+
+render_check_rows() {
+    local i result label detail cls text
+    if ((${#CHECK_LABELS[@]} == 0)); then
+        printf '            <tr><td colspan="3">No verification checks have run yet. They execute during the verify stage.</td></tr>\n'
+        return 0
+    fi
+    for i in "${!CHECK_LABELS[@]}"; do
+        result="${CHECK_RESULTS[$i]}"
+        label="${CHECK_LABELS[$i]}"
+        detail="${CHECK_DETAILS[$i]}"
+        case "$result" in
+            pass)           cls=ok;   text='Pass' ;;
+            fail)           cls=bad;  text='Failure' ;;
+            unknown)        cls=warn; text='Not sure' ;;
+            not_applicable) cls=na;   text='Not applicable' ;;
+            *)              cls=na;   text='Unrecorded' ;;
+        esac
+        printf '            <tr><td>%s</td><td><span class="pill %s">%s</span></td><td>%s</td></tr>\n' \
+            "$(html_escape "$label")" "$cls" "$text" "$(html_escape "$detail")"
+    done
+}
+
+count_tasks() {
+    local i status
+    TASK_TOTAL=0; TASK_DONE=0; TASK_FAILED=0; TASK_RUNNING=0; TASK_PENDING=0; TASK_SKIPPED=0
+    if ((${#TASK_KEYS[@]} == 0)); then
+        return 0
+    fi
+    for i in "${!TASK_KEYS[@]}"; do
+        status="${TASK_STATUSES[$i]}"
+        TASK_TOTAL=$((TASK_TOTAL + 1))
+        case "$status" in
+            success)                 TASK_DONE=$((TASK_DONE + 1)) ;;
+            failure)                 TASK_FAILED=$((TASK_FAILED + 1)) ;;
+            in_progress)             TASK_RUNNING=$((TASK_RUNNING + 1)) ;;
+            skipped|not_applicable)  TASK_SKIPPED=$((TASK_SKIPPED + 1)) ;;
+            *)                       TASK_PENDING=$((TASK_PENDING + 1)) ;;
+        esac
+    done
+}
+
+count_checks() {
+    local i
+    CHECK_PASS=0; CHECK_FAIL=0; CHECK_UNKNOWN=0; CHECK_NA=0; CHECK_TOTAL=0
+    if ((${#CHECK_RESULTS[@]} == 0)); then
+        return 0
+    fi
+    for i in "${!CHECK_RESULTS[@]}"; do
+        CHECK_TOTAL=$((CHECK_TOTAL + 1))
+        case "${CHECK_RESULTS[$i]}" in
+            pass)           CHECK_PASS=$((CHECK_PASS + 1)) ;;
+            fail)           CHECK_FAIL=$((CHECK_FAIL + 1)) ;;
+            unknown)        CHECK_UNKNOWN=$((CHECK_UNKNOWN + 1)) ;;
+            not_applicable) CHECK_NA=$((CHECK_NA + 1)) ;;
+        esac
+    done
+}
+
+portal_link() {
+    local resource_path="$1"
+    printf 'https://portal.azure.com/#@/resource/subscriptions/%s/resourceGroups/%s%s/overview' \
+        "$SUBSCRIPTION_ID" "$RESOURCE_GROUP" "$resource_path"
+}
+
+render_environment_links() {
+    local rg_url app_url_portal acr_url app_metrics_url app_diagnostics_url defender_url reachable
+    rg_url="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview"
+    app_url_portal="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME")"
+    acr_url="$(portal_link "/providers/Microsoft.ContainerRegistry/registries/$ACR_NAME")"
+    app_metrics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/metrics")"
+    app_diagnostics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/diagnostics")"
+    defender_url='https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade'
+
+    if [[ "$COMMAND" == uninstall ]]; then
+        printf '        <div class="item"><div class="label">Environment state</div><div class="value"><span class="pill na">Teardown requested</span><br>The dojo is being removed; its public URL will stop resolving.</div></div>\n'
+        printf '        <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a><br>Use this to confirm the deletion finished.</div></div>\n' \
+            "$(html_escape "$rg_url")" "$(html_escape "$RESOURCE_GROUP")"
+        printf '        <div class="item"><div class="label">Subscription resource groups</div><div class="value"><a href="https://portal.azure.com/#view/HubsExtension/BrowseResourceGroups" target="_blank" rel="noopener">Browse all resource groups</a></div></div>\n'
         return 0
     fi
 
-    echo "  Not found, creating..."
-    while true; do
-        if "$create_fn"; then
+    if [[ -n "$APP_URL" ]]; then
+        if [[ "$APP_HTTP_CODE" == 200 ]]; then
+            reachable='<span class="pill ok">Active &amp; reachable</span>'
+        elif [[ -z "$APP_HTTP_CODE" ]]; then
+            reachable='<span class="pill warn">Not tested yet</span>'
+        else
+            reachable="<span class=\"pill bad\">Unreachable (HTTP $(html_escape "$APP_HTTP_CODE"))</span>"
+        fi
+        printf '        <div class="item"><div class="label">Live application</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a><br>%s</div></div>\n' \
+            "$(html_escape "$APP_URL")" "$(html_escape "$APP_URL")" "$reachable"
+        printf '        <div class="item"><div class="label">Runtime status API</div><div class="value"><a href="%s/api/status" target="_blank" rel="noopener">/api/status</a> &middot; <a href="%s/health" target="_blank" rel="noopener">/health</a><br><span class="pill %s">health HTTP %s</span></div></div>\n' \
+            "$(html_escape "$APP_URL")" "$(html_escape "$APP_URL")" \
+            "$([[ "$HEALTH_HTTP_CODE" == 200 ]] && printf ok || printf warn)" \
+            "$(html_escape "${HEALTH_HTTP_CODE:-not tested}")"
+    elif [[ "$COMMAND" == plan || "$COMMAND" == doctor ]]; then
+        printf '        <div class="item"><div class="label">Live application</div><div class="value"><span class="pill na">Not evaluated</span><br>This command never contacts the running site.</div></div>\n'
+    else
+        printf '        <div class="item"><div class="label">Live application</div><div class="value"><span class="pill na">Not published yet</span><br>The public URL appears once the App Service rollout completes.</div></div>\n'
+    fi
+    printf '        <div class="item"><div class="label">Resource group</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a></div></div>\n' \
+        "$(html_escape "$rg_url")" "$(html_escape "$RESOURCE_GROUP")"
+    printf '        <div class="item"><div class="label">App Service (portal)</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a></div></div>\n' \
+        "$(html_escape "$app_url_portal")" "$(html_escape "$APP_SERVICE_NAME")"
+    printf '        <div class="item"><div class="label">Container registry (portal)</div><div class="value"><a href="%s" target="_blank" rel="noopener">%s</a></div></div>\n' \
+        "$(html_escape "$acr_url")" "$(html_escape "$ACR_NAME")"
+    printf '        <div class="item"><div class="label">Monitoring (App Service)</div><div class="value"><a href="%s" target="_blank" rel="noopener">Metrics</a> &middot; <a href="%s" target="_blank" rel="noopener">Diagnose and solve problems</a><br><span class="hint">Runtime health, response time, failures, and platform diagnostics.</span></div></div>\n' \
+        "$(html_escape "$app_metrics_url")" "$(html_escape "$app_diagnostics_url")"
+    printf '        <div class="item"><div class="label">Defender for Cloud</div><div class="value"><a href="%s" target="_blank" rel="noopener">Security recommendations</a><br><span class="hint">Posture, vulnerabilities, and security findings for the subscription.</span></div></div>\n' \
+        "$(html_escape "$defender_url")"
+}
+
+render_summary_counts() {
+    printf '<div class="item"><div class="label">Tasks succeeded</div><div class="value">%s / %s</div></div>' "$TASK_DONE" "$TASK_TOTAL"
+    printf '<div class="item"><div class="label">Tasks failed</div><div class="value">%s</div></div>' "$TASK_FAILED"
+    printf '<div class="item"><div class="label">Checks passed</div><div class="value">%s / %s</div></div>' "$CHECK_PASS" "$CHECK_TOTAL"
+    printf '<div class="item"><div class="label">Checks failed / not sure</div><div class="value">%s / %s</div></div>' "$CHECK_FAIL" "$CHECK_UNKNOWN"
+}
+
+render_run_facts() {
+    printf '<div class="item"><div class="label">Scenario</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "$SCENARIO_NAME")" "$(html_escape "$SCENARIO_ID")"
+    printf '<div class="item"><div class="label">Environment</div><div class="value">%s</div></div>' "$(html_escape "$ENVIRONMENT")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
+    printf '<div class="item"><div class="label">Resource group</div><div class="value">%s</div></div>' "$(html_escape "$RESOURCE_GROUP")"
+    printf '<div class="item"><div class="label">Region</div><div class="value">%s</div></div>' "$(html_escape "$LOCATION")"
+    printf '<div class="item"><div class="label">Registry</div><div class="value">%s</div></div>' "$(html_escape "$ACR_NAME")"
+    printf '<div class="item"><div class="label">App Service</div><div class="value">%s</div></div>' "$(html_escape "$APP_SERVICE_NAME")"
+    printf '<div class="item"><div class="label">Image</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$IMAGE_NAME:$IMAGE_TAG")"
+    printf '<div class="item"><div class="label">Image digest</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${IMAGE_DIGEST:-not resolved}")"
+    printf '<div class="item"><div class="label">Build fingerprint</div><div class="value"><code>%s</code><br>%s</div></div>' "$(html_escape "${BUILD_FINGERPRINT:-not computed}")" "$1"
+    printf '<div class="item"><div class="label">Training status</div><div class="value">%s on NGINX %s</div></div>' "$(html_escape "$VULNERABILITY_STATUS")" "$(html_escape "$NGINX_VERSION")"
+    printf '<div class="item"><div class="label">Updated</div><div class="value">%s</div></div>' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+render_console_lines() {
+    local line line_number total
+    if [[ ! -s "$STATUS_RAW_CONSOLE" ]]; then
+        printf '<div class="empty">Waiting for deployment output...</div>'
+        return 0
+    fi
+    total="$(wc -l < "$STATUS_RAW_CONSOLE" 2>/dev/null || printf '0')"
+    line_number=$(( total > 400 ? total - 400 : 0 ))
+    while IFS= read -r line; do
+        line_number=$((line_number + 1))
+        printf '<div class="line"><span class="number">%s</span><span class="text">%s</span></div>' \
+            "$line_number" "$(html_escape "$line")"
+    done < <(tail -n 400 "$STATUS_RAW_CONSOLE")
+    return 0
+}
+
+# Escape an HTML fragment for embedding in a JavaScript string literal.
+# sed escapes per line (its N-join quits early on single-line input); awk then joins with literal \n.
+json_escape() {
+    printf '%s' "$1" \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\r//g' -e 's|</|<\\/|g' \
+        | awk 'BEGIN { ORS = "" } NR > 1 { printf "\\n" } { print }'
+}
+
+# Live feed for the report. fetch() is blocked on file:// origins, so the page polls this by
+# injecting it as a <script>, which file:// does allow.
+write_state_js() {
+    local phase="$1" percent="$2" detail="$3" final="$4"
+    local verdict="$5" verdict_class="$6" headline="$7" verdict_note="$8" build_badge="$9" steps_outcome="${10}"
+    local state_tmp
+    [[ -n "$STATE_JS" ]] || return 0
+    state_tmp="$STATE_JS.tmp"
+    {
+        printf 'window.npReport && window.npReport({'
+        printf '"final":%s,' "$final"
+        printf '"percent":%s,' "$percent"
+        printf '"runStartedAt":%s,' "$RUN_STARTED_AT"
+        printf '"phase":"%s",' "$(json_escape "$phase")"
+        printf '"detail":"%s",' "$(json_escape "$detail")"
+        printf '"headline":"%s",' "$(json_escape "$headline")"
+        printf '"verdict":"%s",' "$(json_escape "$verdict")"
+        printf '"verdictClass":"%s",' "$(json_escape "$verdict_class")"
+        printf '"verdictNote":"%s",' "$(json_escape "$verdict_note")"
+        printf '"elapsed":%s,' "$(( $(date +%s) - RUN_STARTED_AT ))"
+        printf '"summaryHtml":"%s",' "$(json_escape "$(render_summary_counts)")"
+        printf '"tasksHtml":"%s",' "$(json_escape "$(render_task_rows)")"
+        printf '"checksHtml":"%s",' "$(json_escape "$(render_check_rows)")"
+        printf '"linksHtml":"%s",' "$(json_escape "$(render_environment_links)")"
+        printf '"factsHtml":"%s",' "$(json_escape "$(render_run_facts "$build_badge")")"
+        printf '"auditHtml":"%s",' "$(json_escape "$(render_audit_facts)")"
+        printf '"stepsHtml":"%s",' "$(json_escape "$(render_next_steps "$steps_outcome")")"
+        printf '"consoleHtml":"%s"' "$(json_escape "$(render_console_lines)")"
+        printf '});\n'
+    } > "$state_tmp"
+    publish_atomically "$state_tmp" "$STATE_JS"
+}
+
+render_audit_facts() {
+    local ended="${RUN_ENDED_ISO:-in progress}"
+    printf '<div class="item"><div class="label">Run ID</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$RUN_ID")"
+    printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$RUN_INVOCATION")"
+    printf '<div class="item"><div class="label">Started (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$RUN_STARTED_ISO")"
+    printf '<div class="item"><div class="label">Ended (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$ended")"
+    printf '<div class="item"><div class="label">Duration</div><div class="value">%s</div></div>' "$(format_duration "$(( $(date +%s) - RUN_STARTED_AT ))")"
+    printf '<div class="item"><div class="label">Operator</div><div class="value">%s</div></div>' "$(html_escape "$RUN_OPERATOR")"
+    printf '<div class="item"><div class="label">Origin</div><div class="value">%s<br><span class="hint">%s</span></div></div>' "$(html_escape "$RUN_ORIGIN")" "$(html_escape "$RUN_ORIGIN_DETAIL")"
+    printf '<div class="item"><div class="label">Git branch</div><div class="value">%s</div></div>' "$(html_escape "$GIT_BRANCH")"
+    printf '<div class="item"><div class="label">Git commit</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$GIT_COMMIT")"
+    printf '<div class="item"><div class="label">Working tree</div><div class="value">%s</div></div>' "$(html_escape "$GIT_DIRTY")"
+    printf '<div class="item"><div class="label">Tool version</div><div class="value">v%s (config v%s)</div></div>' "$(html_escape "$APP_VERSION")" "$(html_escape "$CONFIG_VERSION")"
+    printf '<div class="item"><div class="label">Config source</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(basename "$CONFIG_FILE")")"
+    printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$AZURE_TENANT_ID")")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
+    printf '<div class="item"><div class="label">Azure identity</div><div class="value">%s</div></div>' "$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")"
+}
+
+command_noun() {
+    case "$COMMAND" in
+        uninstall)              printf 'teardown' ;;
+        doctor)                 printf 'preflight' ;;
+        plan)                   printf 'dry run' ;;
+        verify)                 printf 'verification' ;;
+        provision)              printf 'provisioning' ;;
+        build)                  printf 'image build' ;;
+        rollout)                printf 'rollout' ;;
+        repair)                 printf 'repair' ;;
+        *)                      printf 'deployment' ;;
+    esac
+}
+
+render_next_steps() {
+    local outcome="$1" app_metrics_url
+    app_metrics_url="$(portal_link "/providers/Microsoft.Web/sites/$APP_SERVICE_NAME/metrics")"
+    if [[ "$outcome" == failure ]]; then
+        cat <<EOF
+        <li><strong>Read the failure detail above</strong>, then open the <a href="deployment-$ENVIRONMENT.console.html">full console stream</a> and <a href="deployment-$ENVIRONMENT.log"><code>deployment-$ENVIRONMENT.log</code></a> for the raw Azure CLI error.</li>
+        <li>Re-run preflight only: <code>scripts/deploy.sh doctor --environment $ENVIRONMENT --defaults</code></li>
+        <li>Re-run the failed command once the cause is fixed: <code>scripts/deploy.sh $COMMAND --environment $ENVIRONMENT --defaults</code></li>
+        <li>If Azure resources are in a half-built state, repair them: <code>scripts/deploy.sh repair --environment $ENVIRONMENT --defaults</code></li>
+        <li>If the container will not start, tail its logs: <code>az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME</code></li>
+        <li>As a last resort, tear down and start clean: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes --wait</code></li>
+EOF
+        return 0
+    fi
+    if [[ "$outcome" != success ]]; then
+        cat <<EOF
+        <li>Keep this tab open &mdash; it refreshes every 3 seconds and keeps your scroll position.</li>
+        <li>Watch the <a href="deployment-$ENVIRONMENT.console.html">live console stream</a> for raw Azure CLI output.</li>
+        <li>The verification matrix and any public URLs fill in as the run reaches those stages.</li>
+        <li>Do not interrupt the run; a partial provision leaves Azure resources behind that must be cleaned up with <code>scripts/deploy.sh uninstall</code>.</li>
+EOF
+        return 0
+    fi
+
+    case "$COMMAND" in
+        plan)
+            cat <<EOF
+        <li>Nothing was changed. This was a dry run of the resolved settings only.</li>
+        <li><strong>Validate the template against Azure</strong>: <code>scripts/deploy.sh doctor --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Deploy for real</strong>: <code>scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
+        <li>Override any resolved value with <code>--location</code>, <code>--resource-group</code>, <code>--registry-name</code>, or <code>--app-service-name</code>.</li>
+EOF
+            ;;
+        doctor)
+            cat <<EOF
+        <li>No Azure resources were changed. The template compiles and the predicted change set is in <code>doctor-whatif-$ENVIRONMENT.txt</code>.</li>
+        <li><strong>Review the what-if output</strong> above before applying anything to a live environment.</li>
+        <li><strong>Apply the infrastructure only</strong>: <code>scripts/deploy.sh provision --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Run the full lifecycle</strong>: <code>scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
+EOF
+            ;;
+        uninstall)
+            cat <<EOF
+        <li><strong>Confirm the teardown</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group blade</a>; deletion is asynchronous and can take several minutes.</li>
+        <li><strong>Verify from the CLI</strong>: <code>az group exists --name $RESOURCE_GROUP</code> should return <code>false</code>.</li>
+        <li>Re-run with <code>--wait</code> if you need the command to block until every resource is gone.</li>
+        <li><strong>Rebuild the dojo later</strong>: <code>scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
+        <li>The GitHub OIDC federated credentials are not deleted by uninstall; remove them separately if this environment is retiring for good.</li>
+EOF
+            ;;
+        provision)
+            cat <<EOF
+        <li>Infrastructure exists but no application image has been published yet.</li>
+        <li><strong>Build and publish</strong>: <code>scripts/deploy.sh build --environment $ENVIRONMENT --defaults</code> then <code>scripts/deploy.sh rollout --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Or do both at once</strong>: <code>scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Inspect what was created</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group</a>.</li>
+EOF
+            ;;
+        build)
+            cat <<EOF
+        <li>The image is in the registry but App Service has not been repointed at it.</li>
+        <li><strong>Publish it</strong>: <code>scripts/deploy.sh rollout --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Inspect the tags</strong>: <code>az acr repository show-tags --name $ACR_NAME --repository $IMAGE_NAME --orderby time_desc</code></li>
+        <li>Rebuilding with the same source is a no-op; use <code>--force-rebuild</code> if you need to force fresh layers.</li>
+EOF
+            ;;
+        verify)
+            cat <<EOF
+        <li>Nothing was changed &mdash; this was a read-only verification pass.</li>
+        <li><strong>Open the dojo</strong> at <a href="${APP_URL:-#}" target="_blank" rel="noopener">${APP_URL:-the App Service URL}</a>.</li>
+        <li><strong>Run the automated smoke tests</strong>: <code>scripts/test.sh</code></li>
+        <li>If a check came back <em>Not sure</em>, the evidence column above explains what could not be determined and why.</li>
+EOF
+            ;;
+        *)
+            cat <<EOF
+        <li><strong>Open the dojo</strong> at <a href="${APP_URL:-#}" target="_blank" rel="noopener">${APP_URL:-the App Service URL}</a> and confirm the landing page renders.</li>
+        <li><strong>Monitor the environment</strong> from <a href="$(html_escape "$app_metrics_url")" target="_blank" rel="noopener">App Service Metrics</a> and review security findings in <a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Defender for Cloud</a>.</li>
+        <li><strong>Exercise the CVE scenario</strong>: query <code>/api/status</code> and use <code>vulnerability.detected</code>, <code>detection_reason</code>, and <code>runtime_verification</code> as the authoritative evidence for CVE-2026-42533.</li>
+        <li><strong>Run the automated smoke tests</strong>: <code>scripts/test.sh</code></li>
+        <li><strong>Re-verify at any time without redeploying</strong>: <code>scripts/deploy.sh verify --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Re-running deploy is cheap</strong>: the build context is fingerprinted, so an unchanged image is neither rebuilt nor re-uploaded and a healthy App Service is not restarted. Force a full rebuild with <code>--force-rebuild</code>.</li>
+        <li><strong>Rotate the scenario</strong>: <code>VULNERABILITY_STATUS=patched scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
+        <li><strong>Review cost and exposure</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group</a>. This environment is intentionally vulnerable &mdash; keep it isolated and delete it when the exercise ends: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes --wait</code></li>
+EOF
+            ;;
+    esac
+}
+
+print_final_banner() {
+    local result="$1" color label
+    if [[ "$result" == failure ]]; then
+        color="$RED"
+        label="FAILED"
+    else
+        color="$GREEN"
+        label="COMPLETE"
+    fi
+    echo
+    echo -e "${color}==================================================================${NC}"
+    echo -e "${color}  $COMMAND ($ENVIRONMENT): $label${NC}"
+    echo -e "${color}==================================================================${NC}"
+    if [[ -n "$STATUS_HTML" ]]; then
+        echo -e "  Executive report : ${CYAN:-\033[0;36m}$(report_url "$STATUS_HTML")${NC}"
+        echo    "  Report file      : $(native_path "$STATUS_HTML")"
+    fi
+    if [[ -n "$APP_URL" ]]; then
+        echo -e "  Live application : ${CYAN:-\033[0;36m}$APP_URL${NC}"
+    fi
+    if [[ -n "$OUTPUT_DIR" ]]; then
+        echo    "  Output directory : $(native_path "$OUTPUT_DIR")"
+    fi
+    echo    "  Run ID           : $RUN_ID"
+    echo    "  Started (UTC)    : $RUN_STARTED_ISO"
+    echo    "  Ended (UTC)      : ${RUN_ENDED_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    echo    "  Operator/origin  : $RUN_OPERATOR via $RUN_ORIGIN"
+    echo    "  Version          : v$APP_VERSION (config v$CONFIG_VERSION), commit ${GIT_COMMIT:0:12} on $GIT_BRANCH"
+    echo -e "  ${YELLOW}USE AT YOUR OWN RISK${NC} - intentionally vulnerable training environment."
+    echo    "  $(project_meta copyright 'Copyright (c) Ninja Paws') - Licensed under $(project_meta license MIT)"
+    echo
+    return 0
+}
+
+finalize_report() {
+    local result="$1"
+    local detail="${2:-}"
+    if [[ "$RUN_FINAL" == true ]]; then
+        return 0
+    fi
+    RUN_FINAL=true
+    RUN_RESULT="$result"
+    RUN_ENDED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "$result" == failure ]]; then
+        write_status_html complete failed 100 "$detail"
+    else
+        write_status_html complete success 100 "$detail"
+    fi
+    print_final_banner "$result"
+}
+
+on_exit() {
+    local exit_code="$?"
+    trap - EXIT
+    if [[ -z "$STATUS_HTML" || "$RUN_FINAL" == true ]]; then
+        exit "$exit_code"
+    fi
+    if ((exit_code != 0)); then
+        if [[ -n "$CURRENT_TASK" ]]; then
+            set_task "$CURRENT_TASK" failure "${FAILURE_MESSAGE:-Stage aborted with exit code $exit_code.}"
+        fi
+        finalize_report failure "${FAILURE_MESSAGE:-The run stopped with exit code $exit_code. See the console stream for the underlying Azure CLI error.}"
+    fi
+    exit "$exit_code"
+}
+
+write_status_html() {
+        local phase="$1"
+        local status="$2"
+        local percent="$3"
+        local detail="${4:-}"
+        local final=false verdict verdict_class verdict_note headline build_badge live_badge total_since_attr
+        local total_elapsed report_tmp steps_outcome
+        [[ -n "$STATUS_HTML" ]] || return 0
+        printf '[%s] %s: %s\n' "$(date -u +%H:%M:%SZ)" "$phase" "$detail" >> "$STATUS_RAW_CONSOLE"
+        if [[ "$status" == running || "$status" == starting || "$status" == waiting ]]; then
+            CONSOLE_AUTORELOAD=true
+            live_badge=' <span class="pill run" id="refresh-badge">Live</span>'
+            total_since_attr=" data-since=\"$RUN_STARTED_AT\""
+        else
+            CONSOLE_AUTORELOAD=false
+            final=true
+            live_badge=''
+            total_since_attr=''
+        fi
+        if [[ "$status" == failed ]]; then
+            steps_outcome=failure
+        elif [[ "$final" == true ]]; then
+            steps_outcome=success
+        else
+            steps_outcome=progress
+        fi
+        write_console_html
+        print_terminal_status "$phase" "$status" "$percent" "$detail"
+
+        count_tasks
+        count_checks
+        total_elapsed=$(( $(date +%s) - RUN_STARTED_AT ))
+
+        if [[ -z "$BUILD_FINGERPRINT" ]]; then
+            build_badge='<span class="pill idle">Not evaluated</span>'
+        elif [[ "$BUILD_SKIPPED" == true ]]; then
+            build_badge='<span class="pill na">Unchanged &middot; rebuild and upload skipped</span>'
+        else
+            build_badge='<span class="pill ok">Changed &middot; rebuilt and pushed</span>'
+        fi
+
+        if [[ "$status" == failed ]]; then
+            verdict="Failed"
+            verdict_class="bad"
+            headline="Executive report &middot; $(command_noun) failed"
+            verdict_note="$TASK_DONE of $TASK_TOTAL lifecycle tasks completed before the run stopped. $TASK_FAILED task(s) failed."
+        elif [[ "$final" == true ]]; then
+            if ((CHECK_FAIL > 0)); then
+                verdict="Completed with failures"
+                verdict_class="bad"
+            elif ((CHECK_UNKNOWN > 0)); then
+                verdict="Completed with warnings"
+                verdict_class="warn"
+            else
+                verdict="Verified"
+                verdict_class="ok"
+            fi
+            headline="Executive report &middot; $(command_noun) complete"
+            verdict_note="$TASK_DONE of $TASK_TOTAL lifecycle tasks succeeded, $TASK_SKIPPED skipped or not applicable. Verification: $CHECK_PASS pass, $CHECK_FAIL failure, $CHECK_UNKNOWN not sure, $CHECK_NA not applicable."
+        else
+            verdict="In progress"
+            verdict_class="run"
+            headline="Executive progress report"
+            verdict_note="$TASK_DONE of $TASK_TOTAL lifecycle tasks complete, $TASK_RUNNING running, $TASK_PENDING queued, $TASK_SKIPPED skipped, $TASK_FAILED failed."
+        fi
+
+        mkdir -p "$(dirname "$STATUS_HTML")"
+        report_tmp="$STATUS_HTML.tmp"
+        cat > "$report_tmp" <<EOF
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ninja Paws Deployment - $(html_escape "$ENVIRONMENT")</title>
+    <style>
+        :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #eef3f8; color: #152238; }
+        body { margin: 0; padding: 32px; background: radial-gradient(circle at 85% 0%, #cde7f2 0, transparent 35%), #eef3f8; }
+        main { max-width: 1040px; margin: auto; }
+        header, section { background: #fff; border: 1px solid #dbe3ee; border-radius: 14px; box-shadow: 0 8px 24px #17203312; }
+        header { padding: 28px; margin-bottom: 18px; border-top: 5px solid #d98932; }
+        .brand { display: flex; align-items: center; gap: 12px; color: #102f4d; letter-spacing: .08em; font-size: 13px; }
+        .brand small { display: block; color: #77869a; font-size: 9px; letter-spacing: .16em; margin-top: 3px; }
+        .mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px 12px 12px 4px; background: #102f4d; color: #f2a24a; font-weight: 800; letter-spacing: 0; }
+        h1 { margin: 24px 0 8px; font-size: 30px; }
+        h2 { margin: 0 0 6px; font-size: 18px; }
+        p { margin: 6px 0; color: #5b6678; }
+        section { padding: 22px; margin: 18px 0; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+        .item { background: #f7f9fc; border-radius: 10px; padding: 14px; }
+        .label { color: #68758a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+        .value { margin-top: 5px; font-weight: 650; overflow-wrap: anywhere; }
+        .bar { height: 14px; background: #e7edf5; border-radius: 99px; overflow: hidden; margin: 14px 0 8px; }
+        .fill { height: 100%; width: ${percent}%; background: linear-gradient(90deg, #1769aa, #27a36a); transition: width .4s ease; }
+        .console { background: #101b2d; color: #d9e7f5; border-radius: 10px; padding: 16px; max-height: 280px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+        iframe { display: block; width: 100%; height: 420px; border: 0; border-radius: 10px; background: #101b2d; overflow: hidden; }
+        code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; background: #eef2f8; padding: 1px 5px; border-radius: 5px; }
+        a { color: #1769aa; }
+        .pill { display: inline-block; padding: 4px 10px; border-radius: 99px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; white-space: nowrap; }
+        .pill.ok { background: #e7f5ee; color: #176b43; }
+        .pill.bad { background: #fdeaea; color: #a02020; }
+        .pill.warn { background: #fdf3e0; color: #8a5a10; }
+        .pill.run { background: #e6f0fb; color: #14548c; }
+        .pill.idle { background: #eef1f6; color: #5d6a7d; }
+        .pill.na { background: #f0eef6; color: #5b4f80; }
+        .verdict { font-size: 15px; padding: 7px 16px; }
+        .task { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #e4eaf3; border-left-width: 4px; border-radius: 10px; margin-bottom: 8px; background: #fbfcfe; }
+        .task.ok { border-left-color: #27a36a; }
+        .task.bad { border-left-color: #d64545; background: #fffafa; }
+        .task.run { border-left-color: #1769aa; background: #f7fbff; }
+        .task.idle { border-left-color: #c8d2e0; }
+        .task.na { border-left-color: #a99cd0; }
+        .task-name { font-weight: 650; }
+        .task-detail { color: #5b6678; font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+        .task-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+        .elapsed { color: #7b8798; font-size: 11px; font-variant-numeric: tabular-nums; }
+        .ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font-weight: 800; font-size: 14px; }
+        .ico.ok { background: #27a36a; color: #fff; }
+        .ico.bad { background: #d64545; color: #fff; }
+        .ico.idle { background: #eef1f6; color: #7b8798; }
+        .ico.na { background: #efecf7; color: #5b4f80; }
+        .ico.run.spinner { background: transparent; border: 3px solid #cfe0f2; border-top-color: #1769aa; animation: spin .8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e7edf5; vertical-align: top; overflow-wrap: anywhere; }
+        th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #68758a; }
+        ol.steps li, ul.steps li { margin-bottom: 10px; color: #3c4759; }
+        .banner { padding: 14px 16px; border-radius: 10px; background: #fdeaea; border: 1px solid #f3c9c9; color: #7d1f1f; margin-top: 14px; }
+        .console-panel { background: #101b2d; color: #d9e7f5; border-radius: 10px; padding: 10px 0; height: 420px; overflow: auto; overscroll-behavior: contain; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+        .console-panel .line { display: grid; grid-template-columns: 56px 1fr; border-bottom: 1px solid #ffffff0b; }
+        .console-panel .number { padding: 3px 10px; color: #58718b; text-align: right; user-select: none; }
+        .console-panel .text { padding: 3px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .console-panel .empty { color: #58718b; padding: 24px; text-align: center; }
+        .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+        button.pdf { font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; padding: 12px 20px; background: #102f4d; color: #fff; box-shadow: 0 6px 16px #102f4d33; }
+        button.pdf:hover { background: #17436e; }
+        .hint { color: #77869a; font-size: 13px; }
+        footer { margin: 24px 0 8px; padding: 20px 22px; border-top: 3px solid #d98932; background: #fff; border-radius: 14px; border: 1px solid #dbe3ee; }
+        footer p { margin: 5px 0; font-size: 12px; color: #68758a; }
+        footer .disclaimer { color: #7d1f1f; background: #fdeaea; border: 1px solid #f3c9c9; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+        .print-only { display: none; }
+        @media (max-width: 600px) { body { padding: 14px; } h1 { font-size: 23px; } .task { grid-template-columns: 28px 1fr; } .task-meta { grid-column: 2; align-items: flex-start; } }
+        @media print {
+            @page { size: A4; margin: 14mm 12mm; }
+            :root, body { background: #fff !important; }
+            body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            main { max-width: none; }
+            header, section { box-shadow: none; border: 1px solid #d4dbe6; border-radius: 8px; break-inside: avoid; page-break-inside: avoid; }
+            header { padding: 16px; margin-bottom: 10px; }
+            section { padding: 14px; margin: 10px 0; }
+            h1 { font-size: 21px; margin: 12px 0 6px; }
+            h2 { font-size: 15px; }
+            p, td, th, li { font-size: 11px; }
+            .task { break-inside: avoid; page-break-inside: avoid; padding: 8px 10px; margin-bottom: 5px; }
+            .ico.run.spinner { animation: none; border-top-color: #1769aa; }
+            thead { display: table-header-group; }
+            tr { break-inside: avoid; page-break-inside: avoid; }
+            .no-print { display: none !important; }
+            .print-only { display: block; }
+            .grid { grid-template-columns: repeat(3, 1fr); }
+            a { color: #14548c; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <div class="brand"><span class="mark">NP</span><span><strong>NINJA PAWS</strong><small> CLOUD SECURITY DOJO</small></span></div>
+        <h1 id="headline">$headline</h1>
+        <p>Azure lifecycle command <code>$(html_escape "$COMMAND")</code> targeting environment <strong>$(html_escape "$ENVIRONMENT")</strong>.</p>
+        <p><span class="pill $verdict_class verdict" id="verdict-pill">$(html_escape "$verdict")</span></p>
+        <p id="verdict-note">$verdict_note</p>
+        <p class="print-only">Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) &middot; subscription $(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")</p>
+    </header>
+
+    <section>
+        <h2>Executive summary</h2>
+        <div class="bar"><div class="fill" id="progress-fill"></div></div>
+        <p><strong id="progress-percent">${percent}%</strong> &middot; current phase <strong id="phase-name">$(html_escape "$phase")</strong> &middot; elapsed <span id="total-elapsed"$total_since_attr>$(format_duration "$total_elapsed")</span>$live_badge</p>
+        <p id="phase-detail">$(html_escape "$detail")</p>
+        <div class="grid" style="margin-top:14px" id="summary-counts">$(render_summary_counts)</div>
+        <div id="failure-banner">$( [[ "$status" == failed ]] && printf '<div class="banner"><strong>Failure cause:</strong> %s</div>' "$(html_escape "${FAILURE_MESSAGE:-$detail}")" )</div>
+    </section>
+
+    <section>
+        <h2>Task list</h2>
+        <p>Every stage in this run, with its live state and duration.</p>
+        <div id="task-list">
+$(render_task_rows)
+        </div>
+    </section>
+
+    <section>
+        <h2>Verification matrix</h2>
+        <p>Each check is recorded as Pass, Failure, Not sure, or Not applicable with the evidence used to decide.</p>
+        <table>
+            <thead><tr><th style="width:32%">Check</th><th style="width:14%">Result</th><th>Evidence</th></tr></thead>
+            <tbody id="check-rows">
+$(render_check_rows)
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Environment access</h2>
+        <p>Clickable entry points for the deployed environment and its Azure resources.</p>
+        <div class="grid" id="env-links">
+$(render_environment_links)
+        </div>
+    </section>
+
+    <section>
+        <h2>Run facts</h2>
+        <div class="grid" id="run-facts">$(render_run_facts "$build_badge")</div>
+    </section>
+
+    <section>
+        <h2>Next steps</h2>
+        <ul class="steps" id="next-steps">
+$(render_next_steps "$steps_outcome")
+        </ul>
+    </section>
+
+    <section>
+        <h2>Audit trail</h2>
+        <p>Provenance for this run, retained alongside the archived report under <code>output/archive/</code>.</p>
+        <div class="grid" id="audit-facts">$(render_audit_facts)</div>
+    </section>
+
+    <section class="no-print">
+        <h2>Live console</h2>
+        <p>Raw terminal stream, last 400 lines. Scroll inside the panel to read back; it snaps to the newest line unless you scroll up.</p>
+        <div class="console-panel" id="console-panel"><div id="console-lines">$(render_console_lines)</div></div>
+    </section>
+
+    <section>
+        <h2>Report</h2>
+        <p class="print-only">Raw console output is excluded from this PDF. See the diagnostics files listed below.</p>
+        <div class="actions no-print">
+            <button type="button" class="pdf" id="pdf-button">Generate PDF</button>
+            <span class="hint">Opens your browser's print dialog &mdash; choose <strong>Save as PDF</strong>. Always reflects the latest data on screen.</span>
+        </div>
+        <p>Azure CLI log: <a href="deployment-$ENVIRONMENT.log"><code>deployment-$ENVIRONMENT.log</code></a></p>
+        <p>State manifest: <a href="deployment-$ENVIRONMENT.json"><code>deployment-$ENVIRONMENT.json</code></a></p>
+        <p>Console stream: <a href="deployment-$ENVIRONMENT.console.html"><code>deployment-$ENVIRONMENT.console.html</code></a></p>
+        <p id="live-note">$( [[ "$final" == true ]] && printf 'This is the final report for the run; live updates have stopped.' || printf 'This page updates itself in place every 2 seconds. It never reloads, so your scroll position and the PDF button stay put.' )</p>
+    </section>
+
+    <footer>
+        <p class="disclaimer"><strong>USE AT YOUR OWN RISK.</strong> $(html_escape "$(project_meta disclaimer 'Provided as-is, without warranty of any kind.')")</p>
+        <p>$(html_escape "$(project_meta name 'Ninja Paws Cloud Security Dojo')") v$(html_escape "$APP_VERSION") &middot; $(html_escape "$(project_meta copyright 'Copyright (c) Ninja Paws')") &middot; Licensed under $(html_escape "$(project_meta license MIT)")</p>
+        <p>Author: $(html_escape "$(project_meta author 'Ninja Paws')") &middot; <a href="$(html_escape "$(project_meta repository '')")">Source repository</a> &middot; <a href="$(html_escape "$(project_meta support '')")">Report an issue</a></p>
+        <p>Report generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by <code>scripts/deploy.sh</code> &middot; run <code>$(html_escape "$RUN_ID")</code> &middot; commit <code>$(html_escape "${GIT_COMMIT:0:12}")</code></p>
+        <p class="print-only">This document is a point-in-time snapshot. Verify against the live environment before relying on it for audit evidence.</p>
+    </footer>
+</main>
+<script>
+(function () {
+    var ENV = '$ENVIRONMENT';
+    var POLL_MS = 2000;
+    var finished = $final;
+
+    function byId(id) { return document.getElementById(id); }
+    function setHtml(id, html) {
+        var el = byId(id);
+        if (el && typeof html === 'string' && el.innerHTML !== html) { el.innerHTML = html; }
+    }
+    function setText(id, text) {
+        var el = byId(id);
+        if (el && typeof text === 'string' && el.textContent !== text) { el.textContent = text; }
+    }
+
+    function humanise(seconds) {
+        var minutes = Math.floor(seconds / 60);
+        var rest = seconds % 60;
+        return minutes + 'm ' + (rest < 10 ? '0' : '') + rest + 's';
+    }
+    function tickDurations() {
+        var now = Math.floor(Date.now() / 1000);
+        var timers = document.querySelectorAll('[data-since]');
+        for (var i = 0; i < timers.length; i++) {
+            var since = parseInt(timers[i].getAttribute('data-since'), 10);
+            if (since > 0) { timers[i].textContent = humanise(Math.max(0, now - since)); }
+        }
+    }
+    window.setInterval(tickDurations, 1000);
+
+    // Keep the console pinned to the newest line unless the reader scrolled up.
+    var panel = byId('console-panel');
+    var pinned = true;
+    if (panel) {
+        panel.addEventListener('scroll', function () {
+            pinned = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
+        }, { passive: true });
+        panel.scrollTop = panel.scrollHeight;
+    }
+
+    window.npReport = function (state) {
+        setHtml('headline', state.headline);
+        setHtml('verdict-note', state.verdictNote);
+        var pill = byId('verdict-pill');
+        if (pill) {
+            pill.className = 'pill ' + state.verdictClass + ' verdict';
+            pill.textContent = state.verdict;
+        }
+        var fill = byId('progress-fill');
+        if (fill) { fill.style.width = state.percent + '%'; }
+        setText('progress-percent', state.percent + '%');
+        setText('phase-name', state.phase);
+        setText('phase-detail', state.detail);
+        setHtml('summary-counts', state.summaryHtml);
+        setHtml('task-list', state.tasksHtml);
+        setHtml('check-rows', state.checksHtml);
+        setHtml('env-links', state.linksHtml);
+        setHtml('run-facts', state.factsHtml);
+        setHtml('audit-facts', state.auditHtml);
+        setHtml('next-steps', state.stepsHtml);
+
+        if (panel) {
+            var lines = byId('console-lines');
+            if (lines && lines.innerHTML !== state.consoleHtml) {
+                lines.innerHTML = state.consoleHtml;
+                if (pinned) { panel.scrollTop = panel.scrollHeight; }
+            }
+        }
+
+        var elapsed = byId('total-elapsed');
+        if (elapsed && !state.final) { elapsed.setAttribute('data-since', String(state.runStartedAt)); }
+        tickDurations();
+
+        if (state.final && !finished) {
+            finished = true;
+            var badge = byId('refresh-badge');
+            if (badge) { badge.parentNode.removeChild(badge); }
+            if (elapsed) { elapsed.removeAttribute('data-since'); elapsed.textContent = humanise(state.elapsed); }
+            setText('live-note', 'This is the final report for the run; live updates have stopped.');
+        }
+    };
+
+    function poll() {
+        if (finished) { return; }
+        var s = document.createElement('script');
+        s.src = 'deployment-' + ENV + '.state.js?t=' + Date.now();
+        s.onload = s.onerror = function () {
+            if (s.parentNode) { s.parentNode.removeChild(s); }
+            window.setTimeout(poll, POLL_MS);
+        };
+        document.body.appendChild(s);
+    }
+    if (!finished) { window.setTimeout(poll, POLL_MS); }
+
+    var badge = byId('refresh-badge');
+    if (badge && !finished) {
+        var remaining = POLL_MS / 1000;
+        window.setInterval(function () {
+            remaining = remaining > 0 ? remaining - 1 : POLL_MS / 1000;
+            badge.textContent = 'Live \u00b7 updating';
+        }, 1000);
+    }
+
+    var pdf = byId('pdf-button');
+    if (pdf) { pdf.addEventListener('click', function () { window.print(); }); }
+})();
+</script>
+</body>
+</html>
+EOF
+        publish_atomically "$report_tmp" "$STATUS_HTML"
+        write_state_js "$phase" "$percent" "$detail" "$final" "$verdict" "$verdict_class" "$headline" "$verdict_note" "$build_badge" "$steps_outcome"
+}
+
+write_state() {
+    local phase="$1"
+    local status="$2"
+    local message="${3:-}"
+    mkdir -p "$OUTPUT_DIR"
+    cat > "$STATE_FILE" <<EOF
+{
+    "environment": "$ENVIRONMENT",
+    "scenarioId": "$SCENARIO_ID",
+    "scenarioName": "$SCENARIO_NAME",
+    "subscriptionId": "$(mask_identifier "$SUBSCRIPTION_ID")",
+    "tenantId": "$(mask_identifier "$AZURE_TENANT_ID")",
+  "resourceGroup": "$RESOURCE_GROUP",
+  "location": "$LOCATION",
+  "registryName": "$ACR_NAME",
+  "appServiceName": "$APP_SERVICE_NAME",
+  "imageName": "$IMAGE_NAME",
+  "imageTag": "$IMAGE_TAG",
+  "imageDigest": "$IMAGE_DIGEST",
+  "buildFingerprint": "$BUILD_FINGERPRINT",
+  "buildSkipped": $BUILD_SKIPPED,
+  "rolloutSkipped": $ROLLOUT_SKIPPED,
+  "phase": "$phase",
+  "status": "$status",
+  "message": "$message",
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+resolve_settings() {
+    resolve_scenario
+    if [[ "$ENVIRONMENT" == auto ]]; then
+        local branch_name
+        branch_name="$(git branch --show-current 2>/dev/null || true)"
+        case "$branch_name" in
+            dev) ENVIRONMENT=dev ;;
+            main) ENVIRONMENT=prod ;;
+            *) fail "Cannot detect deployment environment from Git branch '$branch_name'. Use --environment dev or --environment prod." ;;
+        esac
+    fi
+
+    case "$ENVIRONMENT" in
+        dev|prod) ;;
+        *) fail "--environment must be dev, prod, or auto." ;;
+    esac
+    LOCATION="${LOCATION:-$(config_setting location centralus)}"
+    RESOURCE_GROUP="${RESOURCE_GROUP:-$(config_setting resourceGroup "")}"
+    REGISTRY_NAME="${REGISTRY_NAME:-$(config_setting registryName "")}"
+    APP_SERVICE_NAME="${APP_SERVICE_NAME:-$(config_setting appServiceName "")}"
+    IMAGE_NAME="${IMAGE_NAME:-$(config_setting imageName ninjapaws-dojo)}"
+    BASE_OS_IMAGE="${BASE_OS_IMAGE:-$(config_setting baseOsImage ubuntu)}"
+    BASE_OS_VERSION="${BASE_OS_VERSION:-$(config_setting baseOsVersion 24.04)}"
+    NGINX_VERSION="${NGINX_VERSION:-$(config_setting nginxVersion 1.30.3)}"
+    NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-$(config_setting nodeMajorVersion 20)}"
+    VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-$(config_setting vulnerabilityStatus vulnerable)}"
+    PORT="${PORT:-$(config_setting port 3000)}"
+    NPM_REGISTRY_URL="${NPM_REGISTRY_URL:-$(config_setting npmRegistryUrl https://registry.npmjs.org)}"
+    NPM_USE_MIRROR="${NPM_USE_MIRROR:-$(config_setting npmUseMirror true)}"
+    NPM_NETWORK_MODE="${NPM_NETWORK_MODE:-$(config_setting npmNetworkMode online)}"
+    DEFENDER_ENABLED="${DEFENDER_ENABLED:-$(config_setting defenderEnabled true)}"
+    DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-$(config_setting defender.scanAfterVerify true)}"
+    DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-$(config_setting defender.managePlans true)}"
+    DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-$SCENARIO_CVE}"
+    DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-$(config_setting defender.plans.AppServices Standard)}"
+    DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-$(config_setting defender.plans.Containers Standard)}"
+    DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-$(config_setting defender.plans.CloudPosture Free)}"
+    [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
+    [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
+    [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
+
+    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
+        LOCATION="$(prompt_region "$LOCATION")"
+        RESOURCE_GROUP="$(prompt_default 'Resource group' "$RESOURCE_GROUP")"
+        REGISTRY_NAME="$(prompt_default 'Container Registry' "$REGISTRY_NAME")"
+        APP_SERVICE_NAME="$(prompt_default 'App Service' "$APP_SERVICE_NAME")"
+    fi
+
+    ACR_NAME="${REGISTRY_NAME//-/}"
+    [[ "$ACR_NAME" =~ ^[a-z0-9]{5,50}$ ]] || fail "ACR name must be 5-50 lowercase letters or numbers after hyphen removal."
+    output_base="${OUTPUT_ROOT:-$INVOCATION_DIR/output}"
+    OUTPUT_DIR="$output_base/$ENVIRONMENT"
+    if [[ -d "$OUTPUT_DIR" ]]; then
+        if [[ "$ARCHIVE_OUTPUTS" == true ]]; then
+            archive_dir="$output_base/archive/$(date -u +%Y%m%dT%H%M%SZ)-$ENVIRONMENT"
+            mkdir -p "$archive_dir"
+            cp -a "$OUTPUT_DIR/." "$archive_dir/" 2>/dev/null || true
+            # Copy rather than move: an open browser tab must never see the report path disappear.
+            find "$OUTPUT_DIR" -maxdepth 1 -type f \
+                ! -name "deployment-$ENVIRONMENT.html" \
+                ! -name "deployment-$ENVIRONMENT.console.html" \
+                ! -name "deployment-$ENVIRONMENT.state.js" \
+                -delete 2>/dev/null || true
+        else
+            rm -rf "$OUTPUT_DIR"
+        fi
+    fi
+    mkdir -p "$OUTPUT_DIR"
+    rm -f "$REPO_ROOT/deployment-output.json"
+    STATE_FILE="$OUTPUT_DIR/deployment-$ENVIRONMENT.json"
+    STATE_JS="$OUTPUT_DIR/deployment-$ENVIRONMENT.state.js"
+    [[ "${NO_STATUS_HTML:-false}" == true ]] || STATUS_HTML="$OUTPUT_DIR/deployment-$ENVIRONMENT.html"
+    STATUS_CONSOLE="$OUTPUT_DIR/deployment-$ENVIRONMENT.console.html"
+    STATUS_RAW_CONSOLE="$OUTPUT_DIR/.deployment-$ENVIRONMENT.console.raw"
+    ACR_NAME="${REGISTRY_NAME//-/}"
+    set_task plan in_progress "Resolving names, output workspace, and image tag."
+    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
+        : > "$STATUS_RAW_CONSOLE"
+        write_status_html awaiting_user waiting 0 "Waiting for your input. The terminal is asking for deployment values; press Enter to accept each default."
+        open_status_html
+    fi
+    start_console_capture
+    if [[ "$COMMAND" == verify && "$IMAGE_TAG_EXPLICIT" == false && -f "$STATE_FILE" ]]; then
+        IMAGE_TAG="$(sed -n 's/.*"imageTag": "\([^"]*\)".*/\1/p' "$STATE_FILE")"
+    fi
+    IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short=12 HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+    set_task plan success "Targeting $RESOURCE_GROUP in $LOCATION with image $IMAGE_NAME:$IMAGE_TAG."
+    write_status_html planning starting "$(auto_percent)" "Resolved deployment settings and waiting for the selected lifecycle stage."
+    open_status_html
+}
+
+enforce_branch_environment() {
+    case "$COMMAND" in
+        setup|provision|build|deploy|update|repair|rollout|uninstall) ;;
+        *) return 0 ;;
+    esac
+
+    local branch_name expected_environment
+    branch_name="${GITHUB_REF_NAME:-$(git branch --show-current 2>/dev/null || true)}"
+    case "$branch_name" in
+        dev) expected_environment=dev ;;
+        main) expected_environment=prod ;;
+        *) fail "Mutating command '$COMMAND' requires branch 'dev' or 'main'; current branch is '$branch_name'." ;;
+    esac
+    [[ "$ENVIRONMENT" == "$expected_environment" ]] || fail "Branch '$branch_name' can only target environment '$expected_environment', not '$ENVIRONMENT'."
+}
+
+require_commands() {
+    local command_name
+    for command_name in az curl git tr; do
+        command -v "$command_name" >/dev/null 2>&1 || fail "'$command_name' is required."
+    done
+}
+
+authenticate() {
+    local account_info subscription_rows selected_subscription subscription_index subscription_id subscription_name
+    if ! az account show >/dev/null 2>&1; then
+        echo -e "${YELLOW}Azure CLI is not authenticated. Starting device-code login.${NC}"
+        az login --use-device-code >/dev/null
+    fi
+    if [[ -z "$SUBSCRIPTION_ID" && -t 0 && "$USE_DEFAULTS" == false ]]; then
+        subscription_rows="$(az account list --query "[?state=='Enabled'].[id,name]" -o tsv 2>/dev/null || true)"
+        if [[ -n "$subscription_rows" ]]; then
+            echo
+            echo "Azure subscriptions available to this account:"
+            subscription_index=0
+            while IFS=$'\t' read -r subscription_id subscription_name; do
+                [[ -n "$subscription_id" ]] || continue
+                subscription_index=$((subscription_index + 1))
+                printf '  %2d) %s (%s)\n' "$subscription_index" "$subscription_name" "$subscription_id"
+            done <<< "$subscription_rows"
+            while true; do
+                read -r -p "Select a subscription by number or ID [current]: " selected_subscription
+                if [[ -z "$selected_subscription" ]]; then
+                    break
+                fi
+                if [[ "$selected_subscription" =~ ^[0-9]+$ ]]; then
+                    subscription_index=0
+                    while IFS=$'\t' read -r subscription_id subscription_name; do
+                        [[ -n "$subscription_id" ]] || continue
+                        subscription_index=$((subscription_index + 1))
+                        if ((subscription_index == selected_subscription)); then
+                            SUBSCRIPTION_ID="$subscription_id"
+                            break 2
+                        fi
+                    done <<< "$subscription_rows"
+                elif [[ "$subscription_rows" == *"$selected_subscription"* ]]; then
+                    SUBSCRIPTION_ID="$selected_subscription"
+                    break
+                fi
+                echo "Please choose one of the listed subscription numbers or enter an exact subscription ID." >&2
+            done
+        fi
+    fi
+    if [[ -n "$SUBSCRIPTION_ID" ]]; then
+        az account set --subscription "$SUBSCRIPTION_ID" || fail "Unable to select subscription '$SUBSCRIPTION_ID'."
+    fi
+    # One call for every identity fact the audit trail needs; tsv returns one field per line.
+    account_info="$(az account show --query "[id,tenantId,name,user.name]" -o tsv)"
+    SUBSCRIPTION_ID="$(printf '%s\n' "$account_info" | sed -n 1p)"
+    AZURE_TENANT_ID="${AZURE_TENANT_ID:-$(printf '%s\n' "$account_info" | sed -n 2p)}"
+    SUBSCRIPTION_NAME="$(printf '%s\n' "$account_info" | sed -n 3p)"
+    AZURE_ACCOUNT_NAME="$(printf '%s\n' "$account_info" | sed -n 4p)"
+}
+
+print_plan() {
+    echo -e "${BLUE}Deployment plan${NC}"
+    echo "Environment: $ENVIRONMENT"
+    echo "Scenario: $SCENARIO_NAME ($SCENARIO_ID)"
+    echo "Subscription: $(mask_identifier "${SUBSCRIPTION_ID:-current Azure subscription}")"
+    echo "Resource group: $RESOURCE_GROUP"
+    echo "Location: $LOCATION"
+    echo "Registry: $ACR_NAME"
+    echo "App Service: $APP_SERVICE_NAME"
+    echo "Image: $IMAGE_NAME:$IMAGE_TAG"
+    echo "Bicep: $REPO_ROOT/infra/main.bicep"
+    echo "State: $STATE_FILE"
+    if [[ -n "$STATUS_HTML" ]]; then
+        echo "Live report: $(report_url "$STATUS_HTML")"
+    fi
+    return 0
+}
+
+run_bicep_deployment() {
+    local deployment_name="$1"
+    local deployment_output="$OUTPUT_DIR/deployment-output.json"
+    local deployment_log="$OUTPUT_DIR/deployment-$ENVIRONMENT.log"
+    local operations_seen="$OUTPUT_DIR/deployment-$ENVIRONMENT.operations"
+    local deployment_pid state succeeded failed running percent operation_lines operation_line
+    local expected_operations=6
+
+    : > "$deployment_log"
+    : > "$operations_seen"
+    echo -e "${BLUE}Bicep deployment: $deployment_name${NC}"
+    echo "Detailed Azure CLI output: $deployment_log"
+    write_status_html provisioning running "$(auto_percent 5)" "Submitting Bicep infrastructure deployment."
+
+    az deployment group create \
+        --name "$deployment_name" \
+        --resource-group "$RESOURCE_GROUP" \
+        --mode Incremental \
+        --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
+        --parameters \
+            containerRegistryName="$ACR_NAME" \
+            appServiceName="$APP_SERVICE_NAME" \
+            location="$LOCATION" \
+            imageName="$IMAGE_NAME" \
+            imageTag=latest \
+            nginxVersion="$NGINX_VERSION" \
+            vulnerabilityStatus="$VULNERABILITY_STATUS" \
+            port="$PORT" \
+            defenderEnabled="$DEFENDER_ENABLED" \
+        --output json > "$deployment_output" 2> "$deployment_log" &
+    deployment_pid=$!
+
+    while kill -0 "$deployment_pid" 2>/dev/null; do
+        state="$(az deployment group show --name "$deployment_name" --resource-group "$RESOURCE_GROUP" --query properties.provisioningState -o tsv 2>/dev/null || true)"
+        succeeded="$(az deployment operation group list --name "$deployment_name" --resource-group "$RESOURCE_GROUP" --query "[?properties.provisioningState=='Succeeded'] | length(@)" -o tsv 2>/dev/null || printf '0')"
+        failed="$(az deployment operation group list --name "$deployment_name" --resource-group "$RESOURCE_GROUP" --query "[?properties.provisioningState=='Failed'] | length(@)" -o tsv 2>/dev/null || printf '0')"
+        running="$(az deployment operation group list --name "$deployment_name" --resource-group "$RESOURCE_GROUP" --query "[?properties.provisioningState=='Running' || properties.provisioningState=='Accepted'] | length(@)" -o tsv 2>/dev/null || printf '0')"
+        operation_lines="$(az deployment operation group list --name "$deployment_name" --resource-group "$RESOURCE_GROUP" --query "[].{state:properties.provisioningState,resource:targetResource.resourceName,type:targetResource.resourceType}" -o tsv 2>/dev/null || true)"
+
+        if [[ "$succeeded" =~ ^[0-9]+$ ]]; then
+            percent=$((succeeded * 100 / expected_operations))
+            ((percent > 95)) && percent=95
+        else
+            percent=10
+        fi
+        printf '[%3s%%] state=%s succeeded=%s running=%s failed=%s\n' "$percent" "${state:-starting}" "$succeeded" "$running" "$failed"
+        write_status_html provisioning running "$(auto_percent "$percent")" "Azure state: ${state:-starting}; succeeded=$succeeded; running=$running; failed=$failed."
+
+        while IFS= read -r operation_line; do
+            [[ -n "$operation_line" ]] || continue
+            if ! line_seen "$operation_line" "$operations_seen"; then
+                echo "  resource: $operation_line"
+                printf '%s\n' "$operation_line" >> "$operations_seen"
+            fi
+        done <<< "$operation_lines"
+        sleep 5
+    done
+
+    wait "$deployment_pid" || {
+        FAILURE_MESSAGE="The Bicep deployment '$deployment_name' failed. The Azure CLI error is in deployment-$ENVIRONMENT.log and the console stream."
+        echo -e "${RED}Bicep deployment failed. Full CLI details:${NC}"
+        cat "$deployment_log"
+        return 1
+    }
+    printf '[100%%] state=Succeeded succeeded=%s running=0 failed=%s\n' "$succeeded" "$failed"
+    BICEP_OPERATIONS_SUCCEEDED="$succeeded"
+    echo -e "${GREEN}Bicep deployment completed.${NC}"
+}
+
+provision() {
+    local group_id
+    set_task resourcegroup in_progress "Creating and tagging $RESOURCE_GROUP in $LOCATION."
+    echo -e "${YELLOW}Provisioning resource group and Bicep infrastructure...${NC}"
+    az group create \
+        --name "$RESOURCE_GROUP" \
+        --location "$LOCATION" \
+        --output none
+    group_id="$(az group show --name "$RESOURCE_GROUP" --query id -o tsv)"
+    az tag update \
+        --resource-id "$group_id" \
+        --operation Merge \
+        --tags ninjapaws-managed=true ninjapaws-environment="$ENVIRONMENT" \
+        --output none
+    record_check "Resource group exists and carries the Ninja Paws ownership tags" pass "$RESOURCE_GROUP in $LOCATION tagged ninjapaws-managed=true, ninjapaws-environment=$ENVIRONMENT."
+    set_task resourcegroup success "$RESOURCE_GROUP is present in $LOCATION and tagged for environment $ENVIRONMENT."
+    write_status_html provisioning running "$(auto_percent)" "Resource group ready; starting the Bicep deployment."
+
+    set_task infra in_progress "Submitting the Bicep template and tracking each resource operation."
+    run_bicep_deployment "ninjapaws-dojo-$(date +%s)"
+    record_check "Bicep infrastructure deployment reached Succeeded" pass "${BICEP_OPERATIONS_SUCCEEDED:-All} resource operations completed without a failed state."
+    set_task infra success "Registry, App Service, plan, and managed identity are deployed and in a Succeeded state."
+    write_state provisioned success "Bicep infrastructure applied"
+    write_status_html provisioning success "$(auto_percent)" "Bicep infrastructure completed successfully."
+}
+
+sha256_of_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
+sha256_of_stdin() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -d' ' -f1
+    else
+        shasum -a 256 | cut -d' ' -f1
+    fi
+}
+
+# Content address for the image: every file the Dockerfile copies, plus every build argument.
+compute_build_fingerprint() {
+    local file manifest=""
+    for file in Dockerfile package.json package-lock.json app.js nginx.conf entrypoint.sh; do
+        if [[ -f "$REPO_ROOT/$file" ]]; then
+            manifest+="$file $(sha256_of_file "$REPO_ROOT/$file")"$'\n'
+        else
+            manifest+="$file absent"$'\n'
+        fi
+    done
+    manifest+="args $BASE_OS_IMAGE $BASE_OS_VERSION $NODE_MAJOR_VERSION $NGINX_VERSION $VULNERABILITY_STATUS $PORT $DEFENDER_ENABLED"$'\n'
+    manifest+="npmRegistryUrl $NPM_REGISTRY_URL"$'\n'
+    manifest+="npmUseMirror $NPM_USE_MIRROR"$'\n'
+    manifest+="npmNetworkMode $NPM_NETWORK_MODE"$'\n'
+    printf '%s' "$manifest" | sha256_of_stdin | cut -c1-16
+}
+
+acr_tag_digest() {
+    az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$1" --query digest -o tsv 2>/dev/null || true
+}
+
+# One registry round trip returns every tag on a manifest, instead of one lookup per tag.
+# tsv renders a JSON array one element per line, so flatten to a single space-delimited string.
+acr_tags_for_digest() {
+    az acr manifest list-metadata --registry "$ACR_NAME" --name "$IMAGE_NAME" \
+        --query "[?digest=='$1'].tags | [0]" -o tsv 2>/dev/null \
+        | tr '\r\n\t' '   ' | tr -s ' ' || true
+}
+
+acr_digest_has_tag() {
+    [[ " $1 " == *" $2 "* ]]
+}
+
+# Server-side retag so an unchanged image gains the new tag without a rebuild.
+acr_alias_tag() {
+    local digest="$1" tag="$2" registry_login="$3"
+    az acr import \
+        --name "$ACR_NAME" \
+        --source "$registry_login/$IMAGE_NAME@$digest" \
+        --image "$IMAGE_NAME:$tag" \
+        --force \
+        --output none
+}
+
+build_image() {
+    local registry_login existing_digest tag aliased=0 existing_tags
+    local build_log build_pid build_elapsed build_lines build_tail build_percent build_started
+    set_task fingerprint in_progress "Hashing the build context and build arguments."
+    registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv)" || fail "ACR '$ACR_NAME' was not found. Run provision first."
+
+    BUILD_FINGERPRINT="$(compute_build_fingerprint)"
+    FINGERPRINT_TAG="fp-$BUILD_FINGERPRINT"
+    echo -e "${BLUE}Build fingerprint: $BUILD_FINGERPRINT${NC}"
+
+    if [[ "$FORCE_REBUILD" == false ]]; then
+        existing_digest="$(acr_tag_digest "$FINGERPRINT_TAG")"
+    else
+        existing_digest=""
+        echo -e "${YELLOW}--force-rebuild set; ignoring any matching image already in the registry.${NC}"
+    fi
+
+    if [[ -n "$existing_digest" ]]; then
+        set_task fingerprint success "Fingerprint $BUILD_FINGERPRINT already exists in $ACR_NAME as $existing_digest, so no rebuild is required."
+        record_check "Build context fingerprint compared against the registry" pass "Fingerprint $BUILD_FINGERPRINT matched an existing manifest, avoiding a rebuild and upload."
+    elif [[ "$FORCE_REBUILD" == true ]]; then
+        set_task fingerprint success "Fingerprint $BUILD_FINGERPRINT computed; the registry comparison was bypassed by --force-rebuild."
+        record_check "Build context fingerprint compared against the registry" not_applicable "--force-rebuild was set, so the registry was not consulted for a matching digest."
+    else
+        set_task fingerprint success "Fingerprint $BUILD_FINGERPRINT is not in $ACR_NAME, so the image content changed and must be rebuilt."
+        record_check "Build context fingerprint compared against the registry" pass "Fingerprint $BUILD_FINGERPRINT was absent, correctly triggering a rebuild."
+    fi
+    write_status_html building running "$(auto_percent)" "Fingerprint resolved as $BUILD_FINGERPRINT."
+
+    if [[ -n "$existing_digest" ]]; then
+        set_task image in_progress "Aliasing the existing digest onto the release tags instead of rebuilding."
+        IMAGE_DIGEST="$existing_digest"
+        echo -e "${GREEN}Identical image content already in ACR ($IMAGE_DIGEST). Skipping the build.${NC}"
+        existing_tags="$(acr_tags_for_digest "$IMAGE_DIGEST")"
+        write_status_html building running "$(auto_percent 50)" "Digest already carries tags: ${existing_tags:-none}. Aliasing anything missing."
+        for tag in "$IMAGE_TAG" latest "$VULNERABILITY_STATUS"; do
+            if ! acr_digest_has_tag "$existing_tags" "$tag"; then
+                acr_alias_tag "$IMAGE_DIGEST" "$tag" "$registry_login" || fail "Could not alias tag '$tag' to digest $IMAGE_DIGEST. Re-run with --force-rebuild."
+                echo "  aliased $IMAGE_NAME:$tag -> $IMAGE_DIGEST"
+                aliased=$((aliased + 1))
+            fi
+        done
+        BUILD_SKIPPED=true
+        record_check "Container image is present in the registry" pass "Reused existing manifest $IMAGE_DIGEST; $aliased tag(s) were re-pointed server-side with no layer upload."
+        set_task image skipped "No rebuild or upload needed: reused $IMAGE_DIGEST and re-pointed $aliased tag(s)."
+        write_state image-built success "Reused existing image $IMAGE_DIGEST"
+        write_status_html building success "$(auto_percent)" "Reused the existing image digest; no rebuild or upload was required."
+        return 0
+    fi
+
+    set_task image in_progress "Running a remote ACR build for $IMAGE_NAME:$IMAGE_TAG."
+    echo -e "${YELLOW}Building and pushing $registry_login/$IMAGE_NAME:$IMAGE_TAG...${NC}"
+    write_status_html building running "$(auto_percent 10)" "Building and pushing the versioned, latest, fingerprint, and training-status images to ACR."
+    build_log="$OUTPUT_DIR/acr-build-$ENVIRONMENT.log"
+    : > "$build_log"
+    build_started="$(date +%s)"
+    az acr build \
+        --registry "$ACR_NAME" \
+        --image "$IMAGE_NAME:$IMAGE_TAG" \
+        --image "$IMAGE_NAME:latest" \
+        --image "$IMAGE_NAME:$VULNERABILITY_STATUS" \
+        --image "$IMAGE_NAME:$FINGERPRINT_TAG" \
+        --build-arg "BASE_OS_IMAGE=$BASE_OS_IMAGE" \
+        --build-arg "BASE_OS_VERSION=$BASE_OS_VERSION" \
+        --build-arg "NODE_MAJOR_VERSION=$NODE_MAJOR_VERSION" \
+        --build-arg "NGINX_VERSION=$NGINX_VERSION" \
+        --build-arg "VULNERABILITY_STATUS=$VULNERABILITY_STATUS" \
+        --build-arg "PORT=$PORT" \
+        --build-arg "DEFENDER_ENABLED=$DEFENDER_ENABLED" \
+        --build-arg "NPM_REGISTRY_URL=$NPM_REGISTRY_URL" \
+        --build-arg "NPM_USE_MIRROR=$NPM_USE_MIRROR" \
+        --build-arg "NPM_NETWORK_MODE=$NPM_NETWORK_MODE" \
+        "$AZURE_REPO_ROOT" > "$build_log" 2>&1 &
+    build_pid=$!
+
+    # The remote build is silent for minutes; heartbeat so the report keeps moving.
+    while kill -0 "$build_pid" 2>/dev/null; do
+        build_elapsed=$(( $(date +%s) - build_started ))
+        build_lines="$(wc -l < "$build_log" 2>/dev/null || printf '0')"
+        build_tail="$(tail -n 1 "$build_log" 2>/dev/null || true)"
+        build_percent=$((build_elapsed * 100 / 180))
+        ((build_percent > 95)) && build_percent=95
+        printf '[%3s%%] acr build running %ss (%s log lines)\n' "$build_percent" "$build_elapsed" "$build_lines"
+        write_status_html building running "$(auto_percent "$build_percent")" "ACR build running for ${build_elapsed}s; ${build_lines} log lines. Latest: ${build_tail:-waiting for the build agent}"
+        sleep 5
+    done
+    if ! wait "$build_pid"; then
+        FAILURE_MESSAGE="The ACR build for $IMAGE_NAME:$IMAGE_TAG failed. Full output is in acr-build-$ENVIRONMENT.log."
+        echo -e "${RED}ACR build failed. Full output:${NC}"
+        cat "$build_log"
+        fail "$FAILURE_MESSAGE"
+    fi
+    cat "$build_log"
+    IMAGE_DIGEST="$(acr_tag_digest "$IMAGE_TAG")"
+    record_check "Container image is present in the registry" pass "Built and pushed $IMAGE_NAME with tags $IMAGE_TAG, latest, $FINGERPRINT_TAG, $VULNERABILITY_STATUS (digest ${IMAGE_DIGEST:-unresolved})."
+    set_task image success "Pushed $IMAGE_NAME:$IMAGE_TAG plus latest, $FINGERPRINT_TAG, and $VULNERABILITY_STATUS (digest ${IMAGE_DIGEST:-unknown})."
+    write_state image-built success "Image pushed to ACR"
+    write_status_html building success "$(auto_percent)" "Container images pushed to ACR."
+}
+
+rollout_image() {
+    local registry_login identity_client_id image_reference configured_image health_code app_host
+    local previous_container
+    set_task appconfig in_progress "Comparing the live App Service configuration against the target image."
+    registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv)"
+    az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$IMAGE_TAG" --output none || fail "Image '$IMAGE_NAME:$IMAGE_TAG' is not present in ACR."
+    [[ -n "$IMAGE_DIGEST" ]] || IMAGE_DIGEST="$(acr_tag_digest "$IMAGE_TAG")"
+    image_reference="DOCKER|$registry_login/$IMAGE_NAME:$IMAGE_TAG"
+
+    configured_image="$(az webapp config container show --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" -o tsv 2>/dev/null || true)"
+    app_host="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --query defaultHostName -o tsv)"
+    if [[ "$FORCE_REBUILD" == false && "$BUILD_SKIPPED" == true && "$configured_image" == "$image_reference" ]]; then
+        health_code="$(http_probe "https://$app_host/health")"
+        if [[ "${health_code%% *}" == 200 ]]; then
+            ROLLOUT_SKIPPED=true
+            echo -e "${GREEN}App Service already runs $IMAGE_DIGEST and is healthy. Skipping reconfiguration and restart.${NC}"
+            record_check "App Service container configuration matches the target image" pass "Already set to $image_reference; no configuration change was applied."
+            set_task appconfig skipped "No change: App Service already points at $IMAGE_NAME:$IMAGE_TAG (${IMAGE_DIGEST:-digest unknown})."
+            record_check "App Service restart was required" not_applicable "The running container already serves the target digest and answered /health with HTTP 200."
+            set_task restart skipped "Restart avoided: the live container is already correct and healthy."
+            write_state rolled-out success "App Service already running the target digest"
+            write_status_html deploying success "$(auto_percent)" "App Service is already on the target image; no restart was needed."
             return 0
         fi
-        echo ""
-        echo -e "${RED}⚠️  Manual action required: $description${NC}"
-        echo -e "${YELLOW}Run this yourself, or ask an admin to, then continue:${NC}"
-        echo ""
-        echo "  $manual_command"
-        echo ""
-        read -n 1 -r -s -p "Press any key to re-check, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-            exit 1
-        fi
-        if "$check_fn"; then
-            echo -e "${GREEN}✅ Found, continuing...${NC}"
-            return 0
-        fi
-        echo -e "${YELLOW}Still not found, retrying...${NC}"
-    done
-}
-
-# Retries a one-shot action (e.g. a deployment or build) that has no
-# separate existence check. On failure, pauses with the manual command and
-# retries after each keypress until it succeeds or the user quits.
-run_or_pause() {
-    local description="$1"
-    local manual_command="$2"
-    local action_fn="$3"
-
-    while ! "$action_fn"; do
-        echo ""
-        echo -e "${RED}⚠️  Automatic step failed: $description${NC}"
-        echo -e "${YELLOW}Run this yourself, or ask an admin to, then retry:${NC}"
-        echo ""
-        echo "  $manual_command"
-        echo ""
-        read -n 1 -r -s -p "Press any key to retry, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-            exit 1
-        fi
-    done
-}
-
-# Waits for a prerequisite that cannot be repaired safely by this script.
-wait_for_prerequisite() {
-    local description="$1"
-    local manual_command="$2"
-    local check_fn="$3"
-
-    while ! "$check_fn"; do
-        echo ""
-        echo -e "${RED}⚠️  Manual action required: $description${NC}"
-        echo -e "${YELLOW}Run this yourself, or ask an administrator to, then continue:${NC}"
-        echo ""
-        echo "  $manual_command"
-        echo ""
-        read -n 1 -r -s -p "Press any key to re-check, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-            exit 1
-        fi
-    done
-}
-
-echo -e "${BLUE}🥷 Ninja Paws Cloud Security Dojo - Azure Deployment${NC}"
-echo -e "${BLUE}🏗️  Infrastructure as Code Deployment${NC}"
-echo ""
-
-if ! command -v az &> /dev/null; then
-    echo -e "${RED}❌ Azure CLI is not installed${NC}"
-    echo "Install from: https://learn.microsoft.com/cli/azure/install-azure-cli"
-    exit 1
-fi
-
-if ! command -v jq &> /dev/null; then
-    echo -e "${YELLOW}⚠️  jq is not installed; falling back to grep-based output parsing${NC}"
-fi
-
-if ! az account show >/dev/null 2>&1; then
-    echo -e "${YELLOW}Authenticating to Azure...${NC}"
-    az login --use-device-code
-fi
-
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-TENANT_ID=$(az account show --query tenantId -o tsv)
-echo -e "${GREEN}✅ Authenticated to subscription: $SUBSCRIPTION_ID${NC}"
-echo "  Shared configuration: $CONFIG_FILE"
-echo "  Branch: $BRANCH | GitHub environment: $GITHUB_ENVIRONMENT"
-echo ""
-
-RESOURCE_GROUP_SCOPE="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
-ACR_SCOPE="$RESOURCE_GROUP_SCOPE/providers/Microsoft.ContainerRegistry/registries/$ACR_NAME"
-FEDERATED_CREDENTIAL_NAME="github-${BRANCH//[^[:alnum:]_-]/-}"
-
-# --- Delete mode: tear down everything this script manages, then exit ---
-if [[ "$DELETE" == true ]]; then
-    echo -e "${RED}⚠️  This will permanently delete:${NC}"
-    echo "  - Resource group: $RESOURCE_GROUP (and every resource inside it)"
-    echo "  - Entra app registration: $APP_DISPLAY_NAME (and its service principal)"
-    echo ""
-    if ! confirm "Type y to confirm deletion of the above"; then
-        echo "Aborted. Nothing was deleted."
-        exit 1
+        echo -e "${YELLOW}Configured image matches but the app is unhealthy; reconfiguring and restarting.${NC}"
     fi
 
-    if az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1; then
-        echo -e "${YELLOW}Deleting resource group: $RESOURCE_GROUP${NC}"
-        az group delete --name "$RESOURCE_GROUP" --yes
-        echo -e "${GREEN}✅ Resource group deleted${NC}"
+    identity_client_id="$(az identity show --resource-group "$RESOURCE_GROUP" --name "${APP_SERVICE_NAME}-identity" --query clientId -o tsv)"
+    echo -e "${YELLOW}Configuring App Service for immutable image $IMAGE_TAG...${NC}"
+    write_status_html deploying running "$(auto_percent 20)" "Configuring App Service with the immutable container image and managed identity."
+    az webapp config set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$APP_SERVICE_NAME" \
+        --generic-configurations "{\"linuxFxVersion\":\"$image_reference\",\"acrUseManagedIdentityCreds\":true,\"acrUserManagedIdentityID\":\"$identity_client_id\"}" \
+        --output none
+    az webapp config appsettings set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$APP_SERVICE_NAME" \
+        --settings "DOCKER_REGISTRY_SERVER_URL=https://$registry_login" WEBSITES_PORT=80 WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
+        --output none
+    record_check "App Service container configuration matches the target image" pass "Set to $image_reference with managed-identity pull using client ID $identity_client_id."
+    set_task appconfig success "App Service $APP_SERVICE_NAME points at $registry_login/$IMAGE_NAME:$IMAGE_TAG (${IMAGE_DIGEST:-digest unknown}) via managed identity."
+
+    set_task restart in_progress "Restarting App Service and waiting for the new container to answer."
+    write_status_html deploying running "$(auto_percent 20)" "Restarting App Service and waiting for the container to warm up."
+    previous_container="$(status_field host "$(fetch_app_status "$app_host")")"
+    az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --output none
+    if wait_for_app_ready "$app_host" "$previous_container"; then
+        record_check "App Service restart was required" pass "Restarted and container ${APP_CONTAINER_ID:-unknown} answered /health and /api/status with the expected build after $APP_READY_ATTEMPTS attempt(s)."
+        set_task restart success "New container ${APP_CONTAINER_ID:-unknown} is serving traffic and reporting NGINX $NGINX_VERSION / $VULNERABILITY_STATUS after $APP_READY_ATTEMPTS attempt(s)."
     else
-        echo "Resource group '$RESOURCE_GROUP' does not exist, skipping."
+        record_check "App Service restart was required" fail "Restarted but the container never served the expected build; last health response was HTTP ${HEALTH_HTTP_CODE:-000} after $APP_READY_ATTEMPTS attempt(s)."
+        set_task restart failure "The container did not serve the expected build within $APP_READY_ATTEMPTS attempts; last health response was HTTP ${HEALTH_HTTP_CODE:-000}."
+        FAILURE_MESSAGE="App Service '$APP_SERVICE_NAME' restarted but never became healthy. Check the container logs with: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME"
+        write_state rolled-out failure "Container did not become healthy"
+        fail "$FAILURE_MESSAGE"
+    fi
+    write_state rolled-out success "App Service configured for immutable image"
+    write_status_html deploying success "$(auto_percent)" "App Service configured, restarted, and answering health checks."
+}
+
+http_probe() {
+    curl -o /dev/null -sS -w '%{http_code} %{time_total}' --max-time 30 "$1" 2>/dev/null || printf '000 0'
+}
+
+fetch_app_status() {
+    curl -fsS --max-time 20 "https://$1/api/status" 2>/dev/null || true
+}
+
+status_field() {
+    printf '%s' "${2:-}" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"
+}
+
+# A restart keeps the outgoing container answering for a few seconds, so "healthy" alone proves
+# nothing. Wait until a *different* container reports the build we just published.
+wait_for_app_ready() {
+    local host="$1" previous_container="${2:-}" max_attempts="${3:-24}"
+    local attempt=0 body container probe expected_detected=false
+    [[ "$VULNERABILITY_STATUS" == vulnerable ]] && expected_detected=true
+    APP_READY_ATTEMPTS=0
+    APP_CONTAINER_ID=""
+    while ((attempt < max_attempts)); do
+        attempt=$((attempt + 1))
+        APP_READY_ATTEMPTS="$attempt"
+        probe="$(http_probe "https://$host/health")"
+        HEALTH_HTTP_CODE="${probe%% *}"
+        if [[ "$HEALTH_HTTP_CODE" == 200 ]]; then
+            body="$(fetch_app_status "$host")"
+            container="$(status_field host "$body")"
+            if [[ -n "$body" \
+                && "$body" == *"\"$NGINX_VERSION\""* \
+                && "$body" == *"\"detected\":$expected_detected"* \
+                && ( -z "$previous_container" || "$container" != "$previous_container" ) ]]; then
+                APP_CONTAINER_ID="$container"
+                APP_STATUS_BODY="$body"
+                return 0
+            fi
+        fi
+        echo "  waiting for the new container (attempt $attempt/$max_attempts, health HTTP $HEALTH_HTTP_CODE, container ${container:-none})"
+        write_status_html deploying running "$(auto_percent $((attempt * 90 / max_attempts)))" "Waiting for the replacement container to serve the new image (attempt $attempt of $max_attempts, health HTTP $HEALTH_HTTP_CODE)."
+        sleep 10
+    done
+    return 1
+}
+
+defender_plan_tier() {
+    az security pricing show --name "$1" --query pricingTier -o tsv 2>/dev/null || true
+}
+
+run_defender_scan() {
+    local appservices_tier containers_tier cspm_tier assessment_json target_found=1 failures=0
+    local plan_name desired_tier current_tier plan_label
+    set_task defender in_progress "Activating configured Defender plans and requesting the latest assessment inventory."
+    write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service and Defender for Containers coverage, then scanning for $DEFENDER_TARGET_CVE."
+
+    if [[ "$DEFENDER_SCAN_ENABLED" != true ]]; then
+        record_check "Defender for Cloud post-verification scan" not_applicable "Disabled by configuration (defender.scanAfterVerify=$DEFENDER_SCAN_ENABLED)."
+        record_check "Defender workload coverage" not_applicable "Defender plan management and scanning were disabled for this run."
+        set_task defender skipped "Defender scan skipped by configuration."
+        return 0
     fi
 
-    EXISTING_APP_ID=$(az ad app list --filter "displayName eq '$APP_DISPLAY_NAME'" --query '[0].appId' -o tsv)
-    if [[ -n "$EXISTING_APP_ID" ]]; then
-        echo -e "${YELLOW}Deleting Entra app registration: $APP_DISPLAY_NAME${NC}"
-        az ad app delete --id "$EXISTING_APP_ID"
-        echo -e "${GREEN}✅ App registration deleted (service principal removed with it)${NC}"
+    appservices_tier="$DEFENDER_APPSERVICES_TIER"
+    containers_tier="$DEFENDER_CONTAINERS_TIER"
+    cspm_tier="$DEFENDER_CSPM_TIER"
+    while IFS='|' read -r plan_name desired_tier plan_label; do
+        [[ -n "$plan_name" ]] || continue
+        if [[ "$desired_tier" == disabled || "$desired_tier" == off ]]; then
+            record_check "Defender plan: $plan_label" not_applicable "Disabled by configuration; this workload is not requesting $plan_label coverage."
+            continue
+        fi
+        current_tier="$(defender_plan_tier "$plan_name")"
+        if [[ "$DEFENDER_MANAGE_PLANS" == true && "$current_tier" != "$desired_tier" ]]; then
+            if az security pricing create --name "$plan_name" --tier "$desired_tier" --output none 2>/dev/null; then
+                current_tier="$(defender_plan_tier "$plan_name")"
+                record_check "Defender plan: $plan_label" pass "Requested $desired_tier tier; Azure reports the plan at ${current_tier:-pending} tier."
+            else
+                record_check "Defender plan: $plan_label" fail "Could not activate the requested $desired_tier tier. Check Microsoft.Security/pricings permissions and subscription eligibility."
+                failures=$((failures + 1))
+            fi
+        elif [[ "$current_tier" == "$desired_tier" ]]; then
+            record_check "Defender plan: $plan_label" pass "Azure reports the configured $desired_tier tier."
+        else
+            record_check "Defender plan: $plan_label" unknown "Azure reports '${current_tier:-not available}', while configuration requests $desired_tier and plan management is disabled."
+        fi
+    done <<EOF
+AppServices|$appservices_tier|Defender for App Service
+Containers|$containers_tier|Defender for Containers
+CloudPosture|$cspm_tier|Defender CSPM
+EOF
+
+    write_status_html defender running "$(auto_percent 55)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
+    assessment_json="$(az security assessment list --resource-group "$RESOURCE_GROUP" -o json 2>/dev/null || true)"
+    if [[ -z "$assessment_json" ]]; then
+        record_check "Defender assessment inventory returned data" unknown "The assessment query returned no payload. Defender may still be initializing, or the account may lack Microsoft.Security/assessments/read."
     else
-        echo "App registration '$APP_DISPLAY_NAME' does not exist, skipping."
+        record_check "Defender assessment inventory returned data" pass "Retrieved the latest Defender assessment inventory for $RESOURCE_GROUP."
+        if [[ "$assessment_json" == *"$DEFENDER_TARGET_CVE"* ]]; then
+            target_found=0
+            record_check "Target CVE appears in Defender findings" pass "$DEFENDER_TARGET_CVE was present in the latest Defender assessment payload."
+        else
+            record_check "Target CVE appears in Defender findings" unknown "$DEFENDER_TARGET_CVE was not present in this payload. Vulnerability assessment is asynchronous and may require the image scan to complete."
+        fi
     fi
 
-    echo ""
-    echo -e "${GREEN}✅ Delete complete.${NC}"
+    if [[ "$appservices_tier" == Standard ]]; then
+        record_check "App Service workload is covered for attack detection" pass "Defender for App Service monitors App Service requests/responses, platform logs, sandboxes, and hosting VMs."
+    else
+        record_check "App Service workload is covered for attack detection" not_applicable "Defender for App Service is not enabled at the configured tier."
+    fi
+    if [[ "$containers_tier" == Standard ]]; then
+        record_check "ACR image workload is covered for vulnerability assessment" pass "Defender for Containers is configured to scan Azure Container Registry images for known vulnerabilities, including CVEs."
+    else
+        record_check "ACR image workload is covered for vulnerability assessment" not_applicable "Defender for Containers is not enabled at the configured tier."
+    fi
+    record_check "Kubernetes runtime workload coverage" not_applicable "This deployment runs a custom container on App Service; it does not deploy AKS/Kubernetes nodes or workloads."
+    record_check "Unrequested Defender workload plans" not_applicable "Defender for Servers, SQL, Storage, Key Vault, DNS, and Resource Manager are not activated because this scenario does not deploy those workloads."
+
+    if ((failures > 0)); then
+        set_task defender failure "$failures Defender plan activation check(s) failed. See the verification matrix for details."
+        FAILURE_MESSAGE="$failures Defender plan activation check(s) failed."
+        fail "$FAILURE_MESSAGE"
+    fi
+    if ((target_found != 0)); then
+        set_task defender success "Defender plans and workload coverage were verified; CVE findings remain asynchronous and are recorded as Not sure when absent."
+    else
+        set_task defender success "Defender plans and workload coverage were verified; $DEFENDER_TARGET_CVE was found in the assessment payload."
+    fi
+    write_status_html defender success "$(auto_percent)" "Defender for Cloud scan and workload coverage verification completed."
+}
+
+verify() {
+    local app_host registry_login configured_image expected_image identity_name identity_principal role_count
+    local status_json probe settle_attempts deployed_tags runtime_binary_version runtime_package_version failures=0
+    set_task verify in_progress "Running the Azure configuration, identity, and endpoint verification matrix."
+    write_status_html verifying running "$(auto_percent 10)" "Checking image configuration, ACR pull permissions, and application endpoints."
+
+    app_host="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --query defaultHostName -o tsv 2>/dev/null || true)"
+    if [[ -n "$app_host" ]]; then
+        APP_URL="https://$app_host"
+        record_check "App Service exists and has a public hostname" pass "Default host name: $app_host"
+    else
+        record_check "App Service exists and has a public hostname" fail "App Service '$APP_SERVICE_NAME' was not found in resource group '$RESOURCE_GROUP'."
+        failures=$((failures + 1))
+    fi
+
+    registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv 2>/dev/null || true)"
+    if [[ -n "$registry_login" ]]; then
+        record_check "Container registry is reachable" pass "Login server: $registry_login"
+    else
+        record_check "Container registry is reachable" fail "ACR '$ACR_NAME' was not found in resource group '$RESOURCE_GROUP'."
+        failures=$((failures + 1))
+    fi
+
+    if az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$IMAGE_TAG" --output none 2>/dev/null; then
+        record_check "Expected image tag exists in ACR" pass "Found $IMAGE_NAME:$IMAGE_TAG in $ACR_NAME."
+    else
+        record_check "Expected image tag exists in ACR" fail "Tag '$IMAGE_NAME:$IMAGE_TAG' is missing from registry '$ACR_NAME'. Re-run the build stage."
+        failures=$((failures + 1))
+    fi
+
+    if [[ -z "$BUILD_FINGERPRINT" ]]; then
+        BUILD_FINGERPRINT="$(compute_build_fingerprint)"
+        FINGERPRINT_TAG="fp-$BUILD_FINGERPRINT"
+    fi
+    [[ -n "$IMAGE_DIGEST" ]] || IMAGE_DIGEST="$(acr_tag_digest "$IMAGE_TAG")"
+    deployed_tags="$(acr_tags_for_digest "$IMAGE_DIGEST")"
+    if [[ -z "$IMAGE_DIGEST" || -z "$deployed_tags" ]]; then
+        record_check "Deployed image matches the current source fingerprint" unknown "Tags for $IMAGE_TAG could not be read from ACR, so content equivalence is undetermined."
+    elif acr_digest_has_tag "$deployed_tags" "$FINGERPRINT_TAG"; then
+        record_check "Deployed image matches the current source fingerprint" pass "Digest $IMAGE_DIGEST carries both $IMAGE_TAG and $FINGERPRINT_TAG (tags: $deployed_tags)."
+    else
+        record_check "Deployed image matches the current source fingerprint" fail "Digest $IMAGE_DIGEST carries tags [$deployed_tags] but not $FINGERPRINT_TAG. The running image does not match the working tree."
+        failures=$((failures + 1))
+    fi
+
+    configured_image="$(az webapp config container show --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" -o tsv 2>/dev/null || true)"
+    expected_image="DOCKER|$registry_login/$IMAGE_NAME:$IMAGE_TAG"
+    if [[ -z "$configured_image" ]]; then
+        record_check "App Service runs the expected immutable image" unknown "Could not read the container configuration from App Service; the image in use is undetermined."
+    elif [[ "$configured_image" == "$expected_image" ]]; then
+        record_check "App Service runs the expected immutable image" pass "Configured image matches $expected_image"
+    else
+        record_check "App Service runs the expected immutable image" fail "Image drift: expected '$expected_image' but App Service is configured with '$configured_image'."
+        failures=$((failures + 1))
+    fi
+
+    identity_name="${APP_SERVICE_NAME}-identity"
+    identity_principal="$(az identity show --resource-group "$RESOURCE_GROUP" --name "$identity_name" --query principalId -o tsv 2>/dev/null || true)"
+    if [[ -z "$identity_principal" ]]; then
+        record_check "User-assigned managed identity has AcrPull on the registry" fail "Managed identity '$identity_name' was not found, so the App Service cannot pull images without credentials."
+        failures=$((failures + 1))
+    else
+        role_count="$(az role assignment list --assignee-object-id "$identity_principal" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.ContainerRegistry/registries/$ACR_NAME" --query "[?roleDefinitionName=='AcrPull'] | length(@)" -o tsv 2>/dev/null || printf '')"
+        if [[ -z "$role_count" ]]; then
+            record_check "User-assigned managed identity has AcrPull on the registry" unknown "Role assignments could not be listed; your account may lack Microsoft.Authorization/roleAssignments/read."
+        elif ((role_count > 0)); then
+            record_check "User-assigned managed identity has AcrPull on the registry" pass "Principal $identity_principal holds AcrPull scoped to $ACR_NAME."
+        else
+            record_check "User-assigned managed identity has AcrPull on the registry" fail "Principal $identity_principal has no AcrPull assignment on $ACR_NAME; image pulls will fail."
+            failures=$((failures + 1))
+        fi
+    fi
+
+    if [[ -z "$APP_URL" ]]; then
+        record_check "Public site responds over HTTPS" not_applicable "No public hostname is available yet."
+        record_check "Health endpoint responds over HTTPS" not_applicable "No public hostname is available yet."
+        record_check "Runtime status API is serving JSON" not_applicable "No public hostname is available yet."
+        record_check "Runtime reports the expected NGINX version" not_applicable "No public hostname is available yet."
+        record_check "CVE detection API reports the expected result" not_applicable "No public hostname is available yet."
+    else
+        # A container that is still swapping answers 502 for a few seconds; retry before judging it.
+        settle_attempts=0
+        while ((settle_attempts < 12)); do
+            settle_attempts=$((settle_attempts + 1))
+            probe="$(http_probe "$APP_URL/health")"
+            [[ "${probe%% *}" == 200 ]] && break
+            echo "  endpoint not ready yet (attempt $settle_attempts/12, HTTP ${probe%% *}); retrying"
+            write_status_html verifying running "$(auto_percent $((settle_attempts * 60 / 12)))" "Waiting for the application to answer before recording endpoint results (attempt $settle_attempts of 12)."
+            sleep 10
+        done
+
+        probe="$(http_probe "$APP_URL/")"
+        APP_HTTP_CODE="${probe%% *}"
+        APP_RESPONSE_TIME="${probe##* }"
+        if [[ "$APP_HTTP_CODE" == 200 ]]; then
+            record_check "Public site responds over HTTPS" pass "GET $APP_URL/ returned HTTP 200 in ${APP_RESPONSE_TIME}s."
+        elif [[ "$APP_HTTP_CODE" == 000 ]]; then
+            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ did not complete after $settle_attempts attempt(s) (DNS, TLS, or container start failure)."
+            failures=$((failures + 1))
+        else
+            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ returned HTTP $APP_HTTP_CODE after $settle_attempts attempt(s)."
+            failures=$((failures + 1))
+        fi
+
+        probe="$(http_probe "$APP_URL/health")"
+        HEALTH_HTTP_CODE="${probe%% *}"
+        if [[ "$HEALTH_HTTP_CODE" == 200 ]]; then
+            record_check "Health endpoint responds over HTTPS" pass "GET $APP_URL/health returned HTTP 200."
+        else
+            record_check "Health endpoint responds over HTTPS" fail "GET $APP_URL/health returned HTTP $HEALTH_HTTP_CODE after $settle_attempts attempt(s)."
+            failures=$((failures + 1))
+        fi
+
+        status_json="$(fetch_app_status "${APP_URL#https://}")"
+        if [[ -z "$status_json" ]]; then
+            record_check "Runtime status API is serving JSON" fail "GET $APP_URL/api/status returned no body; the container is not serving the application."
+            failures=$((failures + 1))
+            record_check "Runtime reports the expected NGINX version" unknown "The status payload was unavailable, so the running NGINX version could not be confirmed."
+            record_check "CVE detection API reports the expected result" unknown "The status payload was unavailable, so advisory-condition detection could not be confirmed."
+        else
+            echo "$status_json"
+            record_check "Runtime status API is serving JSON" pass "GET $APP_URL/api/status returned a payload of ${#status_json} bytes from container $(status_field host "$status_json")."
+            if [[ "$status_json" == *"\"${NGINX_VERSION}\""* ]]; then
+                record_check "Runtime reports the expected NGINX version" pass "Status payload contains the expected NGINX version $NGINX_VERSION."
+            else
+                record_check "Runtime reports the expected NGINX version" unknown "Status payload does not contain NGINX $NGINX_VERSION. The running image may predate the current build arguments."
+            fi
+            if [[ "$VULNERABILITY_STATUS" == vulnerable && "$status_json" == *'"detected":true'* ]]; then
+                record_check "CVE detection API reports the expected result" pass "The API detected CVE-2026-42533 from actual NGINX version and affected map/regex configuration evidence."
+            elif [[ "$VULNERABILITY_STATUS" != vulnerable && "$status_json" == *'"detected":false'* ]]; then
+                record_check "CVE detection API reports the expected result" pass "The API did not detect CVE-2026-42533 because the fixed NGINX/configuration conditions are not present."
+            else
+                record_check "CVE detection API reports the expected result" unknown "The API result did not match the requested scenario state; inspect detection_reason and runtime evidence."
+            fi
+            runtime_binary_version="$(status_field nginx_binary_version "$status_json")"
+            runtime_package_version="$(status_field nginx_package_version "$status_json")"
+            if [[ "$runtime_binary_version" == "$NGINX_VERSION" && -n "$runtime_package_version" ]]; then
+                record_check "NGINX binary and package provenance is verified" pass "Container startup measured nginx/$runtime_binary_version from the binary and package version $runtime_package_version from dpkg-query."
+            else
+                record_check "NGINX binary and package provenance is verified" unknown "Container provenance evidence was incomplete (binary=${runtime_binary_version:-missing}, package=${runtime_package_version:-missing}); the API may be from an older image."
+            fi
+            if [[ "$VULNERABILITY_STATUS" == vulnerable && "$status_json" == *'"scenario_config_state":"affected"'* && "$status_json" == *'"map_regex_enabled":true'* ]]; then
+                record_check "Scenario 1 vulnerable map/regex configuration is active" pass "Runtime evidence confirms the affected map directive with regex matching is enabled for the vulnerable image."
+            elif [[ "$VULNERABILITY_STATUS" != vulnerable && "$status_json" == *'"scenario_config_state":"remediated"'* && "$status_json" == *'"map_regex_enabled":false'* ]]; then
+                record_check "Scenario 1 vulnerable map/regex configuration is removed" pass "Runtime evidence confirms the affected map directive with regex matching is disabled in the remediated image."
+            else
+                record_check "Scenario 1 map/regex configuration state is verified" unknown "Runtime configuration evidence did not match the expected $VULNERABILITY_STATUS state; the running image may predate Scenario 1 configuration evidence."
+            fi
+        fi
+    fi
+
+    if ((failures > 0)); then
+        set_task verify failure "$failures verification check(s) failed. See the verification matrix for the exact evidence."
+        write_state verified failure "$failures verification checks failed"
+        fail "Verification failed: $failures check(s) did not pass. Review the verification matrix in the report."
+    fi
+
+    set_task verify success "All blocking verification checks passed for $APP_URL."
+    write_state verified success "Runtime and Azure configuration verified"
+    echo -e "${GREEN}Verification passed: $APP_URL${NC}"
+    write_status_html verified success "$(auto_percent)" "Deployment verified successfully at $APP_URL."
+}
+
+doctor() {
+    local bicep_output="$OUTPUT_DIR/doctor-main.bicep.json"
+    local whatif_output="$OUTPUT_DIR/doctor-whatif-$ENVIRONMENT.txt"
+    mkdir -p "$OUTPUT_DIR"
+
+    set_task bicep in_progress "Compiling infra/main.bicep with the Azure CLI Bicep toolchain."
+    echo -e "${YELLOW}Compiling Bicep...${NC}"
+    if az bicep build --file "$AZURE_REPO_ROOT/infra/main.bicep" --outfile "$bicep_output" >/dev/null; then
+        record_check "Bicep template compiles" pass "infra/main.bicep compiled cleanly to ARM JSON."
+        set_task bicep success "infra/main.bicep compiles without errors."
+    else
+        record_check "Bicep template compiles" fail "infra/main.bicep failed to compile; the template cannot be deployed."
+        set_task bicep failure "infra/main.bicep did not compile."
+        FAILURE_MESSAGE="infra/main.bicep failed to compile. Fix the template before deploying."
+        fail "$FAILURE_MESSAGE"
+    fi
+    rm -f "$bicep_output"
+    write_status_html doctor running "$(auto_percent)" "Bicep compiled. Running the what-if analysis."
+
+    set_task whatif in_progress "Running az deployment group what-if against $RESOURCE_GROUP."
+    if az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
+        if az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
+            --parameters containerRegistryName="$ACR_NAME" appServiceName="$APP_SERVICE_NAME" location="$LOCATION" \
+            --result-format ResourceIdOnly | tee "$whatif_output"; then
+            record_check "What-if analysis completed against the live resource group" pass "Predicted changes were written to doctor-whatif-$ENVIRONMENT.txt."
+            set_task whatif success "What-if completed; the predicted change set is in doctor-whatif-$ENVIRONMENT.txt."
+        else
+            record_check "What-if analysis completed against the live resource group" fail "az deployment group what-if returned an error against $RESOURCE_GROUP."
+            set_task whatif failure "What-if failed against $RESOURCE_GROUP."
+            FAILURE_MESSAGE="The what-if analysis failed. The template and the live resource group may be incompatible."
+            fail "$FAILURE_MESSAGE"
+        fi
+    else
+        echo "Resource group does not exist yet; provision will create it."
+        record_check "What-if analysis completed against the live resource group" not_applicable "Resource group $RESOURCE_GROUP does not exist yet, so there is nothing to compare against."
+        set_task whatif skipped "Nothing to compare: $RESOURCE_GROUP does not exist yet and provision will create it."
+    fi
+    echo -e "${GREEN}Preflight checks passed.${NC}"
+}
+
+uninstall() {
+    local managed environment_tag resource_count
+    set_task discover in_progress "Looking up $RESOURCE_GROUP in subscription $SUBSCRIPTION_ID."
+    [[ -n "$RESOURCE_GROUP" ]] || fail "Resource group is required for uninstall."
+    if ! az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
+        echo "Resource group '$RESOURCE_GROUP' does not exist."
+        record_check "Target resource group exists" not_applicable "$RESOURCE_GROUP is already absent from subscription $SUBSCRIPTION_ID."
+        set_task discover skipped "Nothing to remove: $RESOURCE_GROUP does not exist."
+        set_task ownership not_applicable "No resource group to validate."
+        set_task delete not_applicable "No resource group to delete."
+        set_task teardown success "The environment is already fully torn down."
+        record_check "Environment is fully removed" pass "$RESOURCE_GROUP is not present, so no Ninja Paws resources remain."
+        finalize_report success "Nothing to uninstall; $RESOURCE_GROUP is already absent."
+        exit 0
+    fi
+    resource_count="$(az resource list --resource-group "$RESOURCE_GROUP" --query "length(@)" -o tsv 2>/dev/null || printf 'unknown')"
+    record_check "Target resource group exists" pass "$RESOURCE_GROUP holds $resource_count resource(s)."
+    set_task discover success "$RESOURCE_GROUP found with $resource_count resource(s)."
+
+    set_task ownership in_progress "Checking the ninjapaws-managed and ninjapaws-environment tags."
+    managed="$(az group show --name "$RESOURCE_GROUP" --query "tags['ninjapaws-managed']" -o tsv)"
+    environment_tag="$(az group show --name "$RESOURCE_GROUP" --query "tags['ninjapaws-environment']" -o tsv)"
+    if [[ "$managed" == true && "$environment_tag" == "$ENVIRONMENT" ]]; then
+        record_check "Resource group is owned by Ninja Paws for this environment" pass "Tags ninjapaws-managed=true and ninjapaws-environment=$ENVIRONMENT are both present."
+        set_task ownership success "Ownership confirmed via tags; deletion is safe."
+    elif [[ "$FORCE" == true ]]; then
+        record_check "Resource group is owned by Ninja Paws for this environment" unknown "Ownership tags did not match (managed='$managed', environment='$environment_tag') but --force was supplied, so the guard was bypassed."
+        set_task ownership skipped "Ownership guard bypassed by --force; deleting an untagged or foreign resource group."
+    else
+        record_check "Resource group is owned by Ninja Paws for this environment" fail "Tags did not match (managed='$managed', environment='$environment_tag'); refusing to delete."
+        set_task ownership failure "Refusing to delete: $RESOURCE_GROUP is not tagged as a Ninja Paws '$ENVIRONMENT' deployment."
+        FAILURE_MESSAGE="Resource group is not tagged as a Ninja Paws '$ENVIRONMENT' deployment. Use --force only after checking its contents."
+        fail "$FAILURE_MESSAGE"
+    fi
+    write_status_html uninstalling running "$(auto_percent)" "Ownership resolved. Awaiting deletion confirmation."
+
+    confirm "Delete resource group '$RESOURCE_GROUP' in environment '$ENVIRONMENT' from subscription '$SUBSCRIPTION_ID'? This is destructive."
+    set_task delete in_progress "Submitting the resource group deletion request."
+    az group delete --name "$RESOURCE_GROUP" --yes --no-wait
+    record_check "Deletion request accepted by Azure" pass "az group delete was accepted for $RESOURCE_GROUP; Azure removes the resources asynchronously."
+    set_task delete success "Azure accepted the deletion of $RESOURCE_GROUP and $resource_count resource(s)."
+    write_state uninstall requested "Resource group deletion requested"
+    if [[ "$WAIT_FOR_DELETE" == true ]]; then
+        set_task teardown in_progress "Polling Azure until $RESOURCE_GROUP disappears."
+        while az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; do
+            echo "Waiting for resource group deletion..."
+            write_status_html uninstalling running "$(auto_percent 50)" "Waiting for Azure to finish removing $RESOURCE_GROUP."
+            sleep 15
+        done
+        record_check "Environment is fully removed" pass "$RESOURCE_GROUP no longer exists in subscription $SUBSCRIPTION_ID."
+        set_task teardown success "$RESOURCE_GROUP and all its resources are gone."
+        write_state uninstall complete "Resource group deletion confirmed"
+    else
+        record_check "Environment is fully removed" unknown "Deletion was requested with --no-wait, so removal was not confirmed. Re-run with --wait, or check the portal."
+        set_task teardown skipped "Not waited on: deletion runs asynchronously. Use --wait to confirm removal."
+    fi
+    echo -e "${GREEN}Uninstall requested for '$RESOURCE_GROUP'.${NC}"
+}
+
+while (($# > 0)); do
+    case "$1" in
+        setup|provision|build|deploy|update|verify|repair|doctor|plan|rollout|uninstall)
+            COMMAND="$1"
+            shift
+            ;;
+        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario)
+            (($# >= 2)) || fail "$1 requires a value."
+            case "$1" in
+                --environment) ENVIRONMENT="$2" ;;
+                --subscription) SUBSCRIPTION_ID="$2" ;;
+                --location) LOCATION="$2" ;;
+                --resource-group) RESOURCE_GROUP="$2" ;;
+                --registry-name) REGISTRY_NAME="$2" ;;
+                --app-service-name) APP_SERVICE_NAME="$2" ;;
+                --image-name) IMAGE_NAME="$2" ;;
+                --image-tag) IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=true ;;
+                --scenario) SCENARIO_ID="$2" ;;
+            esac
+            shift 2
+            ;;
+        --yes) ASSUME_YES=true; shift ;;
+        --defaults) USE_DEFAULTS=true; shift ;;
+        --force) FORCE=true; shift ;;
+        --force-rebuild) FORCE_REBUILD=true; shift ;;
+        --all-scenarios) ALL_SCENARIOS=true; shift ;;
+        --wait) WAIT_FOR_DELETE=true; shift ;;
+        --no-status-html) NO_STATUS_HTML=true; shift ;;
+        --no-open-status) OPEN_STATUS_HTML=false; shift ;;
+        --no-archive) ARCHIVE_OUTPUTS=false; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) fail "Unknown argument: $1" ;;
+    esac
+done
+
+register_lifecycle_tasks
+trap on_exit EXIT
+resolve_audit_context
+resolve_settings
+enforce_branch_environment
+if [[ "$COMMAND" == plan ]]; then
+    set_task preflight not_applicable "Skipped: plan is a dry run and never contacts Azure."
+    print_plan
+    finalize_report success "Dry run only. No Azure resources were inspected or changed."
     exit 0
 fi
 
-# --- Recreate mode: remove existing app registration, credential, and resource group first ---
-if [[ "$RECREATE" == true ]]; then
-    echo -e "${RED}⚠️  --recreate will delete and recreate:${NC}"
-    echo "  - Entra app registration: $APP_DISPLAY_NAME"
-    echo "  - Resource group: $RESOURCE_GROUP (and every resource inside it)"
-    echo ""
-    if ! confirm "Type y to confirm recreation"; then
-        echo "Aborted. Nothing was changed."
-        exit 1
-    fi
+set_task preflight in_progress "Checking required tooling and the Azure sign-in context."
+require_commands
+record_check "Required local tooling is installed" pass "az, curl, git, and tr are all available on PATH."
+authenticate
+record_check "Azure CLI is authenticated and the subscription is selectable" pass "Operating against subscription $SUBSCRIPTION_ID."
+set_task preflight success "Tooling present and authenticated against subscription $SUBSCRIPTION_ID."
+print_plan
+write_status_html preflight running "$(auto_percent)" "Preflight complete. Starting the $COMMAND lifecycle."
 
-    EXISTING_APP_ID=$(az ad app list --filter "displayName eq '$APP_DISPLAY_NAME'" --query '[0].appId' -o tsv)
-    if [[ -n "$EXISTING_APP_ID" ]]; then
-        echo -e "${YELLOW}Deleting existing app registration for recreation...${NC}"
-        az ad app delete --id "$EXISTING_APP_ID"
-    fi
-
-    if az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1; then
-        echo -e "${YELLOW}Deleting existing resource group for recreation...${NC}"
-        az group delete --name "$RESOURCE_GROUP" --yes
-    fi
-    echo -e "${GREEN}✅ Ready to recreate${NC}"
-    echo ""
-fi
-
-# --- Entra app registration: check, skip if present, create only if missing ---
-check_app_registration() {
-    APP_CLIENT_ID=$(az ad app list --filter "displayName eq '$APP_DISPLAY_NAME'" --query '[0].appId' -o tsv)
-    [[ -n "$APP_CLIENT_ID" ]]
-}
-create_app_registration() {
-    local output
-    if output=$(az ad app create \
-            --display-name "$APP_DISPLAY_NAME" \
-            --sign-in-audience AzureADMyOrg \
-            --query appId -o tsv 2>/tmp/ninjapaws-app.err); then
-        APP_CLIENT_ID="$output"
-        return 0
-    fi
-    cat /tmp/ninjapaws-app.err >&2
-    return 1
-}
-
-echo -e "${YELLOW}Checking Entra app registration: $APP_DISPLAY_NAME${NC}"
-ensure_resource \
-    "Create the Entra app registration '$APP_DISPLAY_NAME' (requires the Application Developer role or higher in Entra ID)" \
-    "az ad app create --display-name \"$APP_DISPLAY_NAME\" --sign-in-audience AzureADMyOrg" \
-    check_app_registration \
-    create_app_registration
-APP_OBJECT_ID=$(az ad app show --id "$APP_CLIENT_ID" --query id -o tsv)
-
-check_service_principal() {
-    az ad sp show --id "$APP_CLIENT_ID" >/dev/null 2>&1
-}
-create_service_principal() {
-    az ad sp create --id "$APP_CLIENT_ID" >/dev/null 2>/tmp/ninjapaws-sp.err && return 0
-    cat /tmp/ninjapaws-sp.err >&2
-    return 1
-}
-ensure_resource \
-    "Create the service principal for app '$APP_CLIENT_ID' (requires Application Administrator or Cloud Application Administrator)" \
-    "az ad sp create --id $APP_CLIENT_ID" \
-    check_service_principal \
-    create_service_principal
-SERVICE_PRINCIPAL_OBJECT_ID=$(az ad sp show --id "$APP_CLIENT_ID" --query id -o tsv)
-echo -e "${GREEN}✅ App registration ready${NC}"
-echo ""
-
-# --- GitHub OIDC federated credential: check subject, repair if drifted, create if missing ---
-echo -e "${YELLOW}Checking GitHub OIDC federated credential for branch: $BRANCH${NC}"
-EXPECTED_SUBJECT="repo:$REPOSITORY:ref:refs/heads/$BRANCH"
-FEDERATED_CREDENTIAL_PARAMS="{\"name\":\"$FEDERATED_CREDENTIAL_NAME\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"$EXPECTED_SUBJECT\",\"audiences\":[\"api://AzureADTokenExchange\"],\"description\":\"GitHub Actions OIDC for $BRANCH\"}"
-
-while true; do
-    EXISTING_SUBJECT=$(az ad app federated-credential list --id "$APP_OBJECT_ID" \
-        --query "[?name=='$FEDERATED_CREDENTIAL_NAME'].subject | [0]" -o tsv 2>/dev/null)
-
-    if [[ "$EXISTING_SUBJECT" == "$EXPECTED_SUBJECT" ]]; then
-        echo "  Already exists with correct subject, skipping."
-        break
-    fi
-
-    if [[ -z "$EXISTING_SUBJECT" ]]; then
-        echo "  Not found, creating..."
-        if az ad app federated-credential create --id "$APP_OBJECT_ID" \
-                --parameters "$FEDERATED_CREDENTIAL_PARAMS" >/dev/null 2>/tmp/ninjapaws-fc.err; then
-            break
+case "$COMMAND" in
+    doctor)
+        doctor
+        finalize_report success "Preflight checks passed. No Azure resources were changed."
+        ;;
+    provision)
+        confirm "Provision or update Azure infrastructure?"
+        provision
+        finalize_report success "Infrastructure provisioned. Run the build and rollout stages to publish the application."
+        ;;
+    build)
+        build_image
+        finalize_report success "Container images built and pushed. Run the rollout stage to publish them."
+        ;;
+    setup|deploy|update)
+        confirm "Provision, build, deploy, and verify Azure resources?"
+        provision
+        build_image
+        rollout_image
+        verify
+        run_defender_scan
+        finalize_report success "Full lifecycle completed and verified at ${APP_URL:-the App Service URL}."
+        ;;
+    repair)
+        confirm "Repair Azure infrastructure and redeploy the selected image?"
+        provision
+        build_image
+        rollout_image
+        verify
+        run_defender_scan
+        finalize_report success "Repair completed and verified at ${APP_URL:-the App Service URL}."
+        ;;
+    rollout)
+        confirm "Roll out the already-built image to Azure App Service?"
+        rollout_image
+        verify
+        run_defender_scan
+        finalize_report success "Rollout completed and verified at ${APP_URL:-the App Service URL}."
+        ;;
+    verify)
+        verify
+        run_defender_scan
+        finalize_report success "Verification completed for ${APP_URL:-the App Service URL}."
+        ;;
+    uninstall)
+        uninstall
+        if [[ "$WAIT_FOR_DELETE" == true ]]; then
+            finalize_report success "Uninstall completed. $RESOURCE_GROUP and all of its resources are gone."
+        else
+            finalize_report success "Uninstall requested. Azure removes $RESOURCE_GROUP asynchronously; re-run with --wait to confirm."
         fi
-        MANUAL_FC_CMD="az ad app federated-credential create --id $APP_OBJECT_ID --parameters '$FEDERATED_CREDENTIAL_PARAMS'"
-    else
-        echo "  Found with drifted subject ('$EXISTING_SUBJECT'), repairing..."
-        if az ad app federated-credential update --id "$APP_OBJECT_ID" \
-                --federated-credential-id "$FEDERATED_CREDENTIAL_NAME" \
-                --parameters "$FEDERATED_CREDENTIAL_PARAMS" >/dev/null 2>/tmp/ninjapaws-fc.err; then
-            break
-        fi
-        MANUAL_FC_CMD="az ad app federated-credential update --id $APP_OBJECT_ID --federated-credential-id $FEDERATED_CREDENTIAL_NAME --parameters '$FEDERATED_CREDENTIAL_PARAMS'"
-    fi
-
-    cat /tmp/ninjapaws-fc.err >&2
-    echo ""
-    echo -e "${RED}⚠️  Manual action required: configure the GitHub OIDC federated credential (requires Application Developer role or higher)${NC}"
-    echo -e "${YELLOW}Run this yourself, or ask an Azure AD admin to, then continue:${NC}"
-    echo ""
-    echo "  $MANUAL_FC_CMD"
-    echo ""
-    read -n 1 -r -s -p "Press any key to re-check, or 'q' to quit: " key
-    echo ""
-    if [[ "$key" == "q" || "$key" == "Q" ]]; then
-        echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-        exit 1
-    fi
-done
-echo -e "${GREEN}✅ GitHub OIDC federation ready${NC}"
-echo ""
-
-# --- Resource group: check, create only if missing ---
-check_resource_group() {
-    az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1
-}
-create_resource_group() {
-    az group create --name "$RESOURCE_GROUP" --location "$LOCATION" >/dev/null 2>/tmp/ninjapaws-rg.err && return 0
-    cat /tmp/ninjapaws-rg.err >&2
-    return 1
-}
-echo -e "${YELLOW}Checking resource group: $RESOURCE_GROUP${NC}"
-ensure_resource \
-    "Create the resource group '$RESOURCE_GROUP' in '$LOCATION' (may be blocked by Azure Policy or missing permissions)" \
-    "az group create --name $RESOURCE_GROUP --location $LOCATION" \
-    check_resource_group \
-    create_resource_group
-echo -e "${GREEN}✅ Resource group ready${NC}"
-echo ""
-
-# --- Azure role assignments: check, skip if present, create only if missing ---
-ensure_role() {
-    local role="$1"
-    local scope="$2"
-    while true; do
-        if az role assignment list \
-                --assignee-object-id "$SERVICE_PRINCIPAL_OBJECT_ID" \
-                --scope "$scope" \
-                --query "[?roleDefinitionName=='$role'] | length(@)" -o tsv 2>/dev/null | grep -q '^1$'; then
-            echo "  Role '$role' already assigned, skipping."
-            return 0
-        fi
-        echo "  Assigning role '$role'..."
-        if az role assignment create \
-                --assignee-object-id "$SERVICE_PRINCIPAL_OBJECT_ID" \
-                --assignee-principal-type ServicePrincipal \
-                --role "$role" \
-                --scope "$scope" \
-                >/dev/null 2>/tmp/ninjapaws-role.err; then
-            return 0
-        fi
-        cat /tmp/ninjapaws-role.err >&2
-        echo ""
-        echo -e "${RED}⚠️  Manual action required: assign role '$role' (requires Owner or User Access Administrator)${NC}"
-        echo -e "${YELLOW}Run this yourself, or ask an admin to, then continue:${NC}"
-        echo ""
-        echo "  az role assignment create --assignee-object-id $SERVICE_PRINCIPAL_OBJECT_ID --assignee-principal-type ServicePrincipal --role \"$role\" --scope $scope"
-        echo ""
-        read -n 1 -r -s -p "Press any key to re-check, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-            exit 1
-        fi
-    done
-}
-
-echo -e "${YELLOW}Checking Azure role assignments for GitHub Actions...${NC}"
-ensure_role Contributor "$RESOURCE_GROUP_SCOPE"
-ensure_role "Role Based Access Control Administrator" "$RESOURCE_GROUP_SCOPE"
-echo -e "${GREEN}✅ Deployment roles ready${NC}"
-echo ""
-
-echo -e "${YELLOW}Deploying infrastructure with Bicep...${NC}"
-echo "  - Container Registry: $REGISTRY_NAME"
-echo "  - App Service: $APP_SERVICE_NAME"
-echo "  - Location: $LOCATION"
-echo "  - Resource Group: $RESOURCE_GROUP"
-echo ""
-
-DEPLOYMENT_NAME="ninjapaws-dojo-$(date +%s)"
-DEPLOYMENT_OUTPUT=$(mktemp "${TMPDIR:-/tmp}/ninjapaws-deployment-output.XXXXXX")
-trap 'rm -f "$DEPLOYMENT_OUTPUT"' EXIT
-
-deploy_infrastructure() {
-    az deployment group create \
-        --name "$DEPLOYMENT_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --template-file infra/main.bicep \
-        --parameters location="$LOCATION" \
-        --output json > "$DEPLOYMENT_OUTPUT"
-}
-run_or_pause \
-    "Deploy infra/main.bicep to resource group '$RESOURCE_GROUP' (may be blocked by Azure Policy or missing permissions)" \
-    "az deployment group create --name $DEPLOYMENT_NAME --resource-group $RESOURCE_GROUP --template-file infra/main.bicep --parameters location=$LOCATION" \
-    deploy_infrastructure
-
-echo -e "${GREEN}✅ Infrastructure deployed successfully${NC}"
-echo ""
-
-echo -e "${YELLOW}Deployment Outputs:${NC}"
-if command -v jq &> /dev/null; then
-    REGISTRY_LOGIN=$(jq -r '.properties.outputs.containerRegistryLoginServer.value // empty' "$DEPLOYMENT_OUTPUT")
-    APP_URL=$(jq -r '.properties.outputs.appServiceUrl.value // empty' "$DEPLOYMENT_OUTPUT")
-else
-    REGISTRY_LOGIN=$(grep -oP '"containerRegistryLoginServer"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' "$DEPLOYMENT_OUTPUT" || true)
-    APP_URL=$(grep -oP '"appServiceUrl"\s*:\s*{\s*"value"\s*:\s*"\K[^"]+' "$DEPLOYMENT_OUTPUT" || true)
-fi
-
-echo -e "  ${BLUE}Container Registry:${NC} ${REGISTRY_LOGIN:-$ACR_NAME.azurecr.io}"
-echo -e "  ${BLUE}App Service URL:${NC} ${APP_URL:-https://${APP_SERVICE_NAME}.azurewebsites.net}"
-echo ""
-
-# The registry now exists, so the GitHub Actions identity can be granted push access.
-echo -e "${YELLOW}Checking AcrPush role for GitHub Actions...${NC}"
-ensure_role AcrPush "$ACR_SCOPE"
-echo ""
-
-# --- GitHub Actions: make deploy.yml runnable with the OIDC identity above ---
-check_github_cli() {
-    command -v gh >/dev/null 2>&1
-}
-install_github_cli() {
-    local -a elevated=()
-
-    if check_github_cli; then
-        return 0
-    fi
-    if ! command -v apt-get >/dev/null 2>&1; then
-        echo "Automatic GitHub CLI installation is supported only on Debian-based systems." >&2
-        return 1
-    fi
-    if [[ "$EUID" -ne 0 ]]; then
-        if ! command -v sudo >/dev/null 2>&1; then
-            echo "sudo is required to install GitHub CLI as the current user." >&2
-            return 1
-        fi
-        elevated=(sudo)
-    fi
-    if [[ "$ASSUME_YES" != true ]] && ! confirm "GitHub CLI is missing. Install it with apt-get"; then
-        return 1
-    fi
-
-    "${elevated[@]}" apt-get update && "${elevated[@]}" apt-get install -y gh
-}
-check_github_auth() {
-    gh auth status --hostname github.com >/dev/null 2>&1
-}
-check_github_repository() {
-    [[ "$(gh repo view "$REPOSITORY" --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" == "$REPOSITORY" ]]
-}
-check_deploy_workflow() {
-    [[ "$(gh workflow view deploy.yml --repo "$REPOSITORY" --json state --jq .state 2>/dev/null)" == "active" ]]
-}
-enable_deploy_workflow() {
-    gh workflow enable deploy.yml --repo "$REPOSITORY"
-}
-sync_github_actions_secrets() {
-    local repository_name="${REPOSITORY#*/}"
-    if gh secret set AZURE_CLIENT_ID --org "$GITHUB_ORGANIZATION" --visibility selected --repos "$repository_name" --body "$APP_CLIENT_ID" &&
-        gh secret set AZURE_TENANT_ID --org "$GITHUB_ORGANIZATION" --visibility selected --repos "$repository_name" --body "$TENANT_ID" &&
-        gh secret set AZURE_SUBSCRIPTION_ID --org "$GITHUB_ORGANIZATION" --visibility selected --repos "$repository_name" --body "$SUBSCRIPTION_ID"; then
-        GITHUB_SECRET_SCOPE="organization ($GITHUB_ORGANIZATION; selected repository access)"
-        return 0
-    fi
-
-    echo "  Organization secret configuration is unavailable; falling back to repository-scoped OIDC identifiers."
-    gh secret set AZURE_CLIENT_ID --repo "$REPOSITORY" --body "$APP_CLIENT_ID" &&
-        gh secret set AZURE_TENANT_ID --repo "$REPOSITORY" --body "$TENANT_ID" &&
-        gh secret set AZURE_SUBSCRIPTION_ID --repo "$REPOSITORY" --body "$SUBSCRIPTION_ID" &&
-        GITHUB_SECRET_SCOPE="repository ($REPOSITORY)"
-}
-check_github_actions_secrets() {
-    local secret_names
-    secret_names=$(gh secret list --repo "$REPOSITORY" --json name --jq '.[].name' 2>/dev/null) || return 1
-    grep -qx AZURE_CLIENT_ID <<<"$secret_names" &&
-        grep -qx AZURE_TENANT_ID <<<"$secret_names" &&
-        grep -qx AZURE_SUBSCRIPTION_ID <<<"$secret_names"
-}
-check_github_environment() {
-    gh api "repos/$REPOSITORY/environments/$1" >/dev/null 2>&1
-}
-create_github_environment() {
-    gh api --method PUT "repos/$REPOSITORY/environments/$1" >/dev/null
-}
-ensure_github_environment() {
-    local environment_name="$1"
-    while ! check_github_environment "$environment_name"; do
-        echo "  Environment '$environment_name' not found, creating..."
-        if create_github_environment "$environment_name"; then
-            break
-        fi
-        echo ""
-        echo -e "${RED}⚠️  Manual action required: create GitHub environment '$environment_name'${NC}"
-        echo "  gh api --method PUT repos/$REPOSITORY/environments/$environment_name"
-        read -n 1 -r -s -p "Press any key to re-check, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved."
-            exit 1
-        fi
-    done
-}
-
-echo -e "${YELLOW}Checking GitHub Actions deployment access...${NC}"
-if ! check_github_cli && [[ "$INSTALL_GH" == true ]]; then
-    echo "  GitHub CLI is missing; attempting installation..."
-    install_github_cli || true
-fi
-wait_for_prerequisite \
-    "Install GitHub CLI (gh) so this script can configure repository Actions secrets" \
-    "sudo apt-get update && sudo apt-get install -y gh" \
-    check_github_cli
-wait_for_prerequisite \
-    "Sign in to GitHub CLI with write access to '$REPOSITORY'" \
-    "gh auth login --hostname github.com --web --scopes repo" \
-    check_github_auth
-wait_for_prerequisite \
-    "Grant the authenticated GitHub account access to '$REPOSITORY'" \
-    "gh repo view $REPOSITORY" \
-    check_github_repository
-ensure_resource \
-    "Enable the deploy.yml GitHub Actions workflow on '$REPOSITORY'" \
-    "gh workflow enable deploy.yml --repo $REPOSITORY" \
-    check_deploy_workflow \
-    enable_deploy_workflow
-echo "  Branch '$BRANCH' uses GitHub environment '$GITHUB_ENVIRONMENT'."
-ensure_github_environment dev
-ensure_github_environment prod
-# Secret values cannot be read from GitHub. Synchronizing them repairs unknown
-# drift without revealing values or creating duplicate secrets.
-GITHUB_ORGANIZATION=${REPOSITORY%%/*}
-run_or_pause \
-    "Configure shared GitHub Actions OIDC bootstrap identifiers for '$REPOSITORY'" \
-    "gh secret set AZURE_CLIENT_ID --org $GITHUB_ORGANIZATION --visibility selected --repos ${REPOSITORY#*/} --body <application-client-id>" \
-    sync_github_actions_secrets
-echo -e "${GREEN}✅ GitHub Actions deploy.yml is ready for '$GITHUB_ENVIRONMENT'${NC}"
-echo ""
-
-echo -e "${YELLOW}Building Docker image...${NC}"
-build_and_push_image() {
-    az acr build \
-        --registry "$ACR_NAME" \
-        --image "${IMAGE_REPO}:${IMAGE_TAG}" \
-        --image "${IMAGE_REPO}:vulnerable" \
-        --image "${IMAGE_REPO}:latest" \
-        --build-arg "UBUNTU_VERSION=$CONFIG_UBUNTU_VERSION" \
-        --build-arg "NODE_MAJOR_VERSION=$CONFIG_NODE_MAJOR_VERSION" \
-        --build-arg "NGINX_VERSION=$CONFIG_NGINX_VERSION" \
-        --build-arg "VULNERABILITY_STATUS=$CONFIG_VULNERABILITY_STATUS" \
-        --build-arg "PORT=$CONFIG_PORT" \
-        .
-}
-run_or_pause \
-    "Build and push the training image to ACR '$ACR_NAME'" \
-    "az acr build --registry $ACR_NAME --image ${IMAGE_REPO}:${IMAGE_TAG} --image ${IMAGE_REPO}:vulnerable --image ${IMAGE_REPO}:latest ." \
-    build_and_push_image
-
-echo -e "${GREEN}✅ Image built and pushed to ACR${NC}"
-echo ""
-
-APP_URL=${APP_URL:-https://${APP_SERVICE_NAME}.azurewebsites.net}
-
-restart_app_service() {
-    az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" >/dev/null
-}
-run_or_pause \
-    "Restart App Service '$APP_SERVICE_NAME'" \
-    "az webapp restart --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME" \
-    restart_app_service
-
-echo -e "${YELLOW}Waiting for App Service to update...${NC}"
-HEALTHY=false
-for i in $(seq 1 12); do
-    if curl -fsS "$APP_URL/health" >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ Application is healthy${NC}"
-        HEALTHY=true
-        break
-    fi
-    echo "  Attempt $i/12 - Waiting for application to start..."
-    sleep 10
-done
-
-if [[ "$HEALTHY" != true ]]; then
-    while true; do
-        echo -e "${RED}❌ Application health check failed${NC}"
-        echo -e "${YELLOW}Investigate with:${NC}"
-        echo ""
-        echo "  az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME"
-        echo ""
-        read -n 1 -r -s -p "Press any key to re-check health, or 'q' to quit: " key
-        echo ""
-        if [[ "$key" == "q" || "$key" == "Q" ]]; then
-            echo "Exiting. Re-run ./scripts/deploy.sh once resolved, or check the App Service logs."
-            exit 1
-        fi
-        if curl -fsS "$APP_URL/health" >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ Application is healthy${NC}"
-            break
-        fi
-        echo -e "${RED}Still not healthy.${NC}"
-    done
-fi
-
-echo ""
-echo -e "${GREEN}✅ Deployment Complete!${NC}"
-echo ""
-echo -e "${BLUE}🎯 Next Steps:${NC}"
-echo "  1. Visit your application: $APP_URL"
-echo "  2. Check container registry: az acr repository list --name $ACR_NAME"
-echo "  3. Monitor in Azure Portal: Defender for Cloud > Container registries"
-echo "  4. Create remediation PR: Update Dockerfile NGINX 1.30.3 → 1.30.4"
-echo ""
-echo -e "${BLUE}🔑 GitHub Actions configuration:${NC}"
-echo "  Environment: $GITHUB_ENVIRONMENT (branch: $BRANCH)"
-echo "  OIDC secret names verified without displaying values"
-echo "  OIDC bootstrap identifier scope: ${GITHUB_SECRET_SCOPE:-unknown}"
-echo "  Non-secret deployment settings: config/deployment.json"
-echo ""
-echo -e "${BLUE}📚 Resources:${NC}"
-echo "  - GitHub: https://github.com/$REPOSITORY"
-echo "  - Azure Portal: https://portal.azure.com"
-echo "  - Defender for Cloud: https://portal.azure.com/#view/Microsoft_Azure_Security/SecurityCentermenu"
-echo ""
-echo -e "${BLUE}🐾 Ninja Paws | Cloud Security Training${NC}"
+        ;;
+esac

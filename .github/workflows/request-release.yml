@@ -1,0 +1,128 @@
+name: Request release from dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_mode:
+        description: Version increment to request
+        required: true
+        type: choice
+        options: [patch, minor, major, custom]
+      custom_version:
+        description: SemVer version when custom is selected, without the v prefix
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: request-release-dev
+  cancel-in-progress: false
+
+jobs:
+  create-release-pr:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Verify source branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != dev ]]; then
+            echo "Run this workflow from the dev branch. Current ref: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ vars.NODE_MAJOR_VERSION || '20' }}
+          cache: npm
+
+      - name: Calculate and validate release version
+        env:
+          VERSION_MODE: ${{ inputs.version_mode }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current_version=$(node -p "require('./package.json').version")
+          case "$VERSION_MODE" in
+            patch|minor|major)
+              npm version "$VERSION_MODE" --no-git-tag-version >/dev/null
+              ;;
+            custom)
+              [[ -n "$CUSTOM_VERSION" ]] || { echo "custom_version is required." >&2; exit 1; }
+              npm version "$CUSTOM_VERSION" --no-git-tag-version >/dev/null
+              ;;
+            *)
+              echo "Unsupported version mode: $VERSION_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists." >&2
+            exit 1
+          fi
+
+          repository_name="${GITHUB_REPOSITORY##*/}"
+          package_name=$(node -p "require('./package.json').name")
+          [[ "$package_name" == "$repository_name" ]] || { echo "package.name '$package_name' must equal '$repository_name'." >&2; exit 1; }
+
+          repository_description=$(gh api "repos/$GITHUB_REPOSITORY" --jq .description)
+          package_description=$(node -p "require('./package.json').description")
+          [[ "$package_description" == "$repository_description" ]] || { echo "package.description does not match the GitHub repository description." >&2; exit 1; }
+
+          node - <<'NODE'
+          const pkg = require('./package.json');
+          if (pkg.license !== 'MIT') throw new Error('package.license must remain MIT');
+          if (!pkg.author || !pkg.keywords || pkg.keywords.length === 0) throw new Error('package author and keywords are required');
+          if (!pkg.repository || !pkg.repository.url.includes('ninjapaws-cloud-security-dojo')) throw new Error('package.repository is missing or incorrect');
+          NODE
+
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "Previous package version: $current_version"
+          echo "Requested release: $version"
+
+      - name: Validate package and repository
+        run: |
+          npm ci
+          npm test
+          bash scripts/test.sh --skip-azure
+          node -e "const pkg=require('./package.json'); const lock=require('./package-lock.json').packages['']; if (pkg.name !== lock.name || pkg.version !== lock.version) process.exit(1);"
+
+      - name: Create release branch and pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          release_branch="release/$RELEASE_TAG"
+          if git ls-remote --exit-code --heads origin "$release_branch" >/dev/null 2>&1; then
+            existing_pr=$(gh pr list --repo "$GH_REPO" --head "$release_branch" --base main --state open --json url --jq '.[0].url')
+            [[ -n "$existing_pr" ]] && { echo "Release PR already exists: $existing_pr"; exit 0; }
+            echo "Release branch already exists without an open PR: $release_branch" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$release_branch"
+          git add package.json package-lock.json
+          git commit -m "chore: release $RELEASE_TAG"
+          git push origin "HEAD:$release_branch"
+
+          gh pr create \
+            --repo "$GH_REPO" \
+            --base main \
+            --head "$release_branch" \
+            --title "Release $RELEASE_TAG" \
+            --body "This release PR updates package metadata to $RELEASE_TAG. Merge it into main after dev validation; the publish workflow will create the tag, GitHub Release, and versioned/latest ACR images."
