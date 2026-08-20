@@ -57,6 +57,20 @@
       "metadata": {
         "description": "Training status reported by the application"
       }
+    },
+    "port": {
+      "type": "int",
+      "defaultValue": 3000,
+      "metadata": {
+        "description": "Internal Node.js application port"
+      }
+    },
+    "defenderEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Training dashboard Defender badge toggle"
+      }
     }
   },
   "variables": {
@@ -158,7 +172,11 @@
             },
             {
               "name": "PORT",
-              "value": "3000"
+              "value": "[string(parameters('port'))]"
+            },
+            {
+              "name": "DEFENDER_ENABLED",
+              "value": "[string(parameters('defenderEnabled'))]"
             }
           ]
         }

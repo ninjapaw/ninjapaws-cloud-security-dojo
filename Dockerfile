@@ -1,10 +1,12 @@
-ARG UBUNTU_VERSION=24.04
-FROM ubuntu:${UBUNTU_VERSION}
+ARG BASE_OS_IMAGE=ubuntu
+ARG BASE_OS_VERSION=24.04
+FROM ${BASE_OS_IMAGE}:${BASE_OS_VERSION}
 
 ARG NGINX_VERSION=1.30.3
 ARG NODE_MAJOR_VERSION=20
 ARG VULNERABILITY_STATUS=vulnerable
 ARG PORT=3000
+ARG DEFENDER_ENABLED=false
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,16 +39,20 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY app.js ./
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
 
 # Create nginx directories
 RUN mkdir -p /var/run/nginx /var/log/nginx
 
 # Set environment variables
+ENV BASE_OS_IMAGE=${BASE_OS_IMAGE}
+ENV BASE_OS_VERSION=${BASE_OS_VERSION}
 ENV NGINX_VERSION=${NGINX_VERSION}
+ENV NODE_MAJOR_VERSION=${NODE_MAJOR_VERSION}
 ENV VULNERABILITY_STATUS=${VULNERABILITY_STATUS}
 ENV PORT=${PORT}
+ENV DEFENDER_ENABLED=${DEFENDER_ENABLED}
 
 # Expose ports
 EXPOSE 80 ${PORT}
@@ -56,7 +62,7 @@ RUN chmod +x /entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Run entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

@@ -49,5 +49,15 @@ Complete the Azure deployment lifecycle and close the infrastructure-as-code, CI
 - `bash scripts/test.sh --skip-azure` passed under the current Bash environment.
 - Full `bash scripts/test.sh` passed with Azure CLI/Bicep enabled.
 - Deployment wrappers now check `tr`, support Windows Node discovery, and translate WSL paths for Windows Azure CLI.
+- Removed `.env.example`; all of its values are now managed through GitHub Environment variables and Bicep/App Service configuration.
+- Added regression checks preventing `.env.example` drift and requiring `PORT`, `NODE_MAJOR_VERSION`, `DEFENDER_ENABLED`, `NGINX_VERSION`, and `VULNERABILITY_STATUS` in bootstrap/workflow configuration.
+- Added the same runtime settings to deploy-button and ARM parameter templates.
+- Promoted all Dockerfile build arguments into runtime `ENV` values and safe entrypoint startup logs; added the Defender build argument propagation.
+- Entrypoint now logs the resolved non-secret base OS, NGINX, Node.js, port, vulnerability, and Defender settings at startup.
+- Package metadata now matches the GitHub repository identity and Node 20 runtime.
+- Added dev-only release request and main-only release publish workflows with SemVer selection, duplicate-tag protection, metadata validation, versioned/latest image publishing, and GitHub Release creation.
+- Added live Bicep progress reporting with percentage estimates, resource-operation details, and a persistent deployment log.
+- Dev `provision` test completed successfully with live `[10%]`, `[95%]`, and `state=Succeeded` progress output.
+- Mutating lifecycle commands are now branch-locked: `dev` can only target `dev`, and `main` can only target `prod`.
 - Azure what-if preview: 4 resources to create and 2 resources to update in `NP-ninjapaws-dojo-CentralUS`.
 - No Azure deployment or destructive operation was executed during validation.

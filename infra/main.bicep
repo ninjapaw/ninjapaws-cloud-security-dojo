@@ -6,6 +6,8 @@ param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
 param nginxVersion string = '1.30.3'
 param vulnerabilityStatus string = 'vulnerable'
+param port int = 3000
+param defenderEnabled bool = false
 
 // Azure Container Registry
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -95,7 +97,11 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
         }
         {
           name: 'PORT'
-          value: '3000'
+          value: string(port)
+        }
+        {
+          name: 'DEFENDER_ENABLED'
+          value: string(defenderEnabled)
         }
       ]
     }

@@ -1,72 +1,45 @@
-docker build -t ninjapaws-dojo:test .
-docker-compose up -d
-curl http://localhost:8080/health
-docker-compose logs -f
-# Contributing to Ninja Paws Cloud Security Dojo
+# Contributing
 
-Thank you for contributing to the Ninja Paws Cloud Security Dojo. This project is designed for defensive security training, learning, and demonstration.
+Ninja Paws is a fictional, unofficial community demo organization. This repository is independent, educational, and not affiliated with or endorsed by Microsoft Corporation. Contributions from Microsoft employees, if any, are individual contributions and do not imply Microsoft authorization.
 
-## Contributing guidance
+## Development
 
-We welcome thoughtful contributions that improve the training value, clarity, or security guidance in this project.
+Use Node.js 20+, Docker, Docker Compose, and Bash. Run the shared checks before opening a pull request:
 
-When contributing, please keep changes focused, actionable, and aligned with the educational purpose of the repository.
+```bash
+npm ci
+npm test
+bash scripts/test.sh --skip-azure
+```
 
-## Reporting issues
+Do not commit `.env` files, secrets, customer data, production credentials, generated Azure deployment output, or private infrastructure details.
 
-Before opening an issue or pull request, please:
+## Branch Flow
 
-1. Check whether the issue already exists.
-2. Include a clear title and summary.
-3. Provide reproducible steps when applicable.
-4. Mention any environment or configuration details.
+- Feature branches merge into `dev`.
+- `dev` is the development deployment environment.
+- Use **Promote dev to main** to create the promotion pull request.
+- `main` is production and must remain protected.
+- Production deployment occurs after the reviewed promotion PR merges.
 
-## Pull request expectations
+## Pull Requests
 
-Please keep pull requests narrow and clear.
+Include:
 
-Recommended PR content:
+- What changed and why
+- Validation commands and results
+- Security or infrastructure impact
+- Configuration or GitHub Environment variable changes
+- Rollback or follow-up considerations
 
-- a brief summary of the change
-- why the change is needed
-- how it was validated
-- any follow-up actions or dependencies
+Required checks depend on the change and may include infrastructure validation, remediation validation, package metadata checks, and deployment verification. Do not bypass branch protection or environment approvals.
 
-## Security and safe use
+## Releases
 
-This repository is intentionally educational and should not be used for offensive or harmful activity.
+Use **Request release from dev** to select a patch, minor, major, or custom SemVer release. The workflow creates a release PR and synchronizes `package.json` and `package-lock.json`. Merging it into `main` allows **Publish main release** to validate metadata, create the version tag and GitHub Release, and publish versioned/latest container images.
 
-Contributors must avoid adding:
+## Legal and Trademark Notice
 
-- production secrets or credentials
-- customer or business-sensitive data
-- exploitation code or weaponized examples
-- unauthorized or unsafe deployment guidance
+Microsoft, Azure, GitHub, Defender, and related marks belong to their respective owners. This project is not an approved or authorized Microsoft project and must not imply Microsoft sponsorship, endorsement, or ownership without written authorization.
 
-## Documentation standards
-
-Please keep documentation accurate, concise, and easy to follow for learners.
-
-Use simple examples, clear steps, and safe, placeholder values when describing environment settings.
-
-## Legal note
-
-This project is an independent community project and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names remain the property of Microsoft Corporation.
-
-## Code of conduct
-
-Contributions should be respectful, constructive, and educational. Please do not use the repository to promote unsafe or harmful behavior.
-
-## License
-
-By contributing to this project, you agree that your contributions will be licensed under the terms of the [MIT License](LICENSE).
-- Read through workflows in `.github/workflows`
-- Ask questions in issues with `question` label
-
-## 🙏 Thank You!
-
-Your contributions help make cloud security education better for everyone. Thank you for being part of the Ninja Paws community!
-
----
-
-**Ready to contribute? Let's make security training amazing together! 🥷🛡🐾**
+Security reports belong in the private process described in [SECURITY.md](SECURITY.md).

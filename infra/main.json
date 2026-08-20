@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "16584844822655025504"
+      "templateHash": "11591800224058233069"
     }
   },
   "parameters": {
@@ -38,6 +38,14 @@
     "vulnerabilityStatus": {
       "type": "string",
       "defaultValue": "vulnerable"
+    },
+    "port": {
+      "type": "int",
+      "defaultValue": 3000
+    },
+    "defenderEnabled": {
+      "type": "bool",
+      "defaultValue": false
     }
   },
   "resources": [
@@ -134,7 +142,11 @@
             },
             {
               "name": "PORT",
-              "value": "3000"
+              "value": "[string(parameters('port'))]"
+            },
+            {
+              "name": "DEFENDER_ENABLED",
+              "value": "[string(parameters('defenderEnabled'))]"
             }
           ]
         }

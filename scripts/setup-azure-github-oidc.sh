@@ -17,6 +17,13 @@ for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/P
     break
   fi
 done
+if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+  windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+  if [[ -n "$windows_az_path" ]]; then
+    azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
+    export PATH="$azure_cli_dir:$PATH"
+  fi
+fi
 
 # Windows az.cmd emits CRLF output when called from WSL/Git Bash.
 az() {
@@ -210,8 +217,13 @@ gh variable set AZURE_RESOURCE_GROUP --env "$environment_name" --repo "$reposito
 gh variable set AZURE_CONTAINER_REGISTRY_NAME --env "$environment_name" --repo "$repository" --body "$acr_name"
 gh variable set AZURE_APP_SERVICE_NAME --env "$environment_name" --repo "$repository" --body "$app_service_name"
 gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body 'ninjapaws-dojo'
+gh variable set BASE_OS_IMAGE --env "$environment_name" --repo "$repository" --body 'ubuntu'
+gh variable set BASE_OS_VERSION --env "$environment_name" --repo "$repository" --body '24.04'
 gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body '1.30.3'
 gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body 'vulnerable'
+gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body '20'
+gh variable set PORT --env "$environment_name" --repo "$repository" --body '3000'
+gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body 'false'
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 

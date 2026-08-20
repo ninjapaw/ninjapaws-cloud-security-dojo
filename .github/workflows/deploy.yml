@@ -37,8 +37,13 @@ jobs:
       CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
       APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
       IMAGE_NAME: ${{ vars.AZURE_IMAGE_NAME || 'ninjapaws-dojo' }}
+      BASE_OS_IMAGE: ${{ vars.BASE_OS_IMAGE || 'ubuntu' }}
+      BASE_OS_VERSION: ${{ vars.BASE_OS_VERSION || '24.04' }}
       NGINX_VERSION: ${{ vars.NGINX_VERSION || '1.30.3' }}
       VULNERABILITY_STATUS: ${{ vars.VULNERABILITY_STATUS || 'vulnerable' }}
+      NODE_MAJOR_VERSION: ${{ vars.NODE_MAJOR_VERSION || '20' }}
+      PORT: ${{ vars.PORT || '3000' }}
+      DEFENDER_ENABLED: ${{ vars.DEFENDER_ENABLED || 'false' }}
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
       DEPLOY_STAGE: ${{ inputs.stage || 'full' }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}

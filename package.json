@@ -1,11 +1,20 @@
 {
   "name": "ninjapaws-cloud-security-dojo",
   "version": "1.0.0",
-  "description": "🥷 Ninja Paws Cloud Security Dojo - Master the art of cloud security one vulnerability at a time",
+  "description": "🥷 Ninja Paws Cloud Security Dojo is a public Azure security training environment demonstrating how GitHub Advanced Security, Microsoft Defender for Cloud, Defender for DevOps, Azure Container Registry, and Azure App Service work together to detect, remediate, and validate container vulnerabilities.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues"
+  },
+  "homepage": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo#readme",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js"
+    "dev": "node app.js",
+    "test": "node --check app.js"
   },
   "keywords": [
     "security",
@@ -21,6 +30,6 @@
     "express": "^4.18.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

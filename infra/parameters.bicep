@@ -6,6 +6,8 @@ param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
 param nginxVersion string = '1.30.3'
 param vulnerabilityStatus string = 'vulnerable'
+param port int = 3000
+param defenderEnabled bool = false
 
 module infrastructure './main.bicep' = {
   name: 'ninjapaws-dojo-infrastructure'
@@ -18,6 +20,8 @@ module infrastructure './main.bicep' = {
     imageTag: imageTag
     nginxVersion: nginxVersion
     vulnerabilityStatus: vulnerabilityStatus
+    port: port
+    defenderEnabled: defenderEnabled
   }
 }
 

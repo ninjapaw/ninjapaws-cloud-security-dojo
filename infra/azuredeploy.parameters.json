@@ -13,6 +13,24 @@
     },
     "appServicePlanName": {
       "value": "ninjapaws-dojo-plan"
+    },
+    "imageName": {
+      "value": "ninjapaws-dojo"
+    },
+    "imageTag": {
+      "value": "latest"
+    },
+    "nginxVersion": {
+      "value": "1.30.3"
+    },
+    "vulnerabilityStatus": {
+      "value": "vulnerable"
+    },
+    "port": {
+      "value": 3000
+    },
+    "defenderEnabled": {
+      "value": false
     }
   }
 }

@@ -79,8 +79,13 @@ jobs:
             AZURE_CONTAINER_REGISTRY_NAME \
             AZURE_APP_SERVICE_NAME \
             AZURE_IMAGE_NAME \
+            BASE_OS_IMAGE \
+            BASE_OS_VERSION \
             NGINX_VERSION \
-            VULNERABILITY_STATUS; do
+            VULNERABILITY_STATUS \
+            NODE_MAJOR_VERSION \
+            PORT \
+            DEFENDER_ENABLED; do
             gh variable delete "$variable_name" --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true
           done
           # Remove the legacy secret form as well as the managed variable form.
