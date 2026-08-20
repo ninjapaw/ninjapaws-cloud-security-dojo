@@ -42,7 +42,7 @@ The direct application listens on `http://localhost:3000`.
 ### Endpoint surface
 
 | Route | Purpose | Exposure |
-| --- | ---: | --- |
+| --- | --- | --- |
 | `/` | Human-readable training dashboard | Public application route |
 | `/health` | Lightweight JSON health probe | Public application route; used by App Service and rollout checks |
 | `/api/status` | JSON CVE metadata, package/config evidence, image host, and runtime state | Public evidence route for the demo |
