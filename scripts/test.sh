@@ -106,6 +106,12 @@ file_contains "$REPO_ROOT/Dockerfile" 'FROM ${BASE_OS_IMAGE}:${BASE_OS_VERSION}'
 file_contains "$REPO_ROOT/Dockerfile" 'ENV BASE_OS_IMAGE=${BASE_OS_IMAGE}'
 file_contains "$REPO_ROOT/Dockerfile" 'ENV NODE_MAJOR_VERSION=${NODE_MAJOR_VERSION}'
 file_contains "$REPO_ROOT/Dockerfile" 'ENV DEFENDER_ENABLED=${DEFENDER_ENABLED}'
+file_contains "$REPO_ROOT/Dockerfile" 'ARG NPM_REGISTRY_URL=https://registry.npmjs.org'
+file_contains "$REPO_ROOT/Dockerfile" 'ARG NPM_USE_MIRROR=true'
+file_contains "$REPO_ROOT/Dockerfile" 'NPM_USE_MIRROR'
+file_contains "$REPO_ROOT/Dockerfile" 'ARG NPM_NETWORK_MODE=online'
+file_contains "$REPO_ROOT/Dockerfile" 'npm ci --offline --omit=dev --ignore-scripts'
+file_contains "$REPO_ROOT/Dockerfile" 'npm ci --omit=dev --ignore-scripts'
 file_contains "$REPO_ROOT/Dockerfile" 'COPY nginx.conf /etc/nginx/nginx.conf.template'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_IMAGE:'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_VERSION:'
@@ -163,7 +169,7 @@ if bash "$REPO_ROOT/scripts/deploy.sh" provision --environment prod --defaults -
     echo "ERROR: dev branch was allowed to target prod." >&2
     exit 1
 fi
-for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER; do
+for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT NPM_REGISTRY_URL NPM_USE_MIRROR NPM_NETWORK_MODE DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER; do
     file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" "gh variable set $variable_name"
     file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "$variable_name"
 done

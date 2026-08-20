@@ -61,6 +61,9 @@ All Docker build arguments are non-secret configuration. Defaults are safe fallb
 | `VULNERABILITY_STATUS` | `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
 | `PORT` | `3000` | Internal Node.js port behind NGINX |
 | `WEBSITES_PORT` | `80` | Port exposed by the container to Azure App Service |
+| `NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry or approved enterprise mirror used during the image build |
+| `NPM_USE_MIRROR` | `true` | Use `NPM_REGISTRY_URL` when true; use npm's direct default when false |
+| `NPM_NETWORK_MODE` | `online` | `online` downloads dependencies; `offline` disables npm network access and requires a populated npm cache |
 | `DEFENDER_ENABLED` | `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans |
 
 Defender for Cloud settings live under the `defender` object in `config/deploy.config.json`. The checked-in defaults are intentionally suited to this vulnerable App Service container scenario:
@@ -81,6 +84,42 @@ The lifecycle does **not** automatically deactivate an already-enabled Defender 
 `entrypoint.sh` generates NGINX from `nginx.conf` at startup, replacing `__APP_PORT__` with `PORT`. This is a deliberate dual-port design: **WEBSITES_PORT=80** tells Azure App Service which container port accepts traffic, while **PORT=3000** is the Node.js upstream behind NGINX. Changing `PORT` changes the NGINX upstream automatically; changing `WEBSITES_PORT` requires changing the container listener and App Service configuration together. Startup also records the actual NGINX binary and Debian package versions, which `/api/status` exposes under `runtime_verification` and the deployment report verifies.
 
 Never put credentials in these variables. Runtime secrets belong in Azure Key Vault with managed identity. GitHub Environment secrets are reserved for values GitHub itself must keep confidential when OIDC or Key Vault cannot provide them.
+
+### Defender endpoint blocks during npm builds
+
+On Windows hosts managed by Microsoft Defender Exploit Guard, the Docker build may be blocked before npm can download dependencies. The relevant host event is Windows Defender Operational Event `1126`, typically showing:
+
+```text
+Destination: https://registry.npmjs.org
+Process Name: com.docker.backend.exe
+```
+
+That is a network-policy block on Docker Desktop, not a malicious npm path and not a reason to skip dependency installation. The preferred resolution is for the endpoint administrator to allow the approved registry, or to point `NPM_REGISTRY_URL` at the organization’s approved npm mirror/cache:
+
+```powershell
+$env:NPM_REGISTRY_URL = 'https://npm-mirror.contoso.example/repository/npm-group/'
+docker build --build-arg NPM_REGISTRY_URL=$env:NPM_REGISTRY_URL -t ninja-paws-dojo .
+```
+
+For enterprise builds, I recommend an **Azure Artifacts npm feed** configured with an npmjs.org upstream source. It provides organizational access control, retention, auditability, and caching while preserving package provenance. Set `NPM_REGISTRY_URL` to that feed URL and allow the endpoint to reach the approved feed.
+
+To skip mirror configuration for a diagnostic comparison:
+
+```powershell
+$env:NPM_USE_MIRROR = 'false'
+docker build --build-arg NPM_USE_MIRROR=$env:NPM_USE_MIRROR -t ninja-paws-dojo .
+```
+
+When `NPM_USE_MIRROR=false`, npm uses its direct default registry. This does not bypass Defender Exploit Guard; a host policy that blocks `registry.npmjs.org` will still block the build. The same variables can be stored as non-secret GitHub Environment variables. Do not put credentials in the URL. There is intentionally no `SKIP_NPM_INSTALL` option because it would create an incomplete image and bypass dependency integrity checks.
+
+To disable npm network access entirely:
+
+```powershell
+$env:NPM_NETWORK_MODE = 'offline'
+docker build --build-arg NPM_NETWORK_MODE=$env:NPM_NETWORK_MODE -t ninja-paws-dojo .
+```
+
+Offline mode still runs `npm ci --offline --ignore-scripts`; it does not skip dependency installation. It succeeds only when the required package tarballs are already in the npm cache or supplied by a prebuilt dependency image/build layer. On a clean Docker builder, offline mode will fail with a missing-cache error, which is intentional and safer than silently omitting dependencies.
 
 ### Subscription, tenant, and region setup
 

@@ -29,6 +29,9 @@ jobs:
       NODE_MAJOR_VERSION: ${{ vars.NODE_MAJOR_VERSION || '20' }}
       VULNERABILITY_STATUS: ${{ vars.VULNERABILITY_STATUS || 'vulnerable' }}
       PORT: ${{ vars.PORT || '3000' }}
+      NPM_REGISTRY_URL: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
+      NPM_USE_MIRROR: ${{ vars.NPM_USE_MIRROR || 'true' }}
+      NPM_NETWORK_MODE: ${{ vars.NPM_NETWORK_MODE || 'online' }}
       DEFENDER_ENABLED: ${{ vars.DEFENDER_ENABLED || 'true' }}
       DEFENDER_SCAN_ENABLED: ${{ vars.DEFENDER_SCAN_ENABLED || 'true' }}
       DEFENDER_MANAGE_PLANS: ${{ vars.DEFENDER_MANAGE_PLANS || 'true' }}

@@ -9,6 +9,9 @@ ARG NODE_MAJOR_VERSION=20
 ARG VULNERABILITY_STATUS=vulnerable
 ARG PORT=3000
 ARG DEFENDER_ENABLED=false
+ARG NPM_REGISTRY_URL=https://registry.npmjs.org
+ARG NPM_USE_MIRROR=true
+ARG NPM_NETWORK_MODE=online
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,7 +41,13 @@ WORKDIR /app
 
 # Copy application files
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN if [ "${NPM_NETWORK_MODE}" = "offline" ]; then \
+        npm ci --offline --omit=dev --ignore-scripts; \
+    else \
+        if [ "${NPM_USE_MIRROR}" = "true" ]; then npm config set registry "${NPM_REGISTRY_URL}"; else npm config delete registry || true; fi && \
+        npm ci --omit=dev --ignore-scripts; \
+    fi && \
+    npm cache clean --force
 
 COPY app.js ./
 COPY nginx.conf /etc/nginx/nginx.conf.template

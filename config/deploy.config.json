@@ -21,6 +21,9 @@
     "nodeMajorVersion": "20",
     "vulnerabilityStatus": "vulnerable",
     "port": "3000",
+    "npmRegistryUrl": "https://registry.npmjs.org",
+    "npmUseMirror": "true",
+    "npmNetworkMode": "online",
     "defenderEnabled": "true",
     "defender": {
       "scanAfterVerify": "true",
@@ -52,7 +55,10 @@
       "registryName": "ninjapawsdojodev",
       "appServiceName": "ninjapaws-dojo-app-dev",
       "vulnerabilityStatus": "vulnerable",
-      "defenderEnabled": "true"
+      "defenderEnabled": "true",
+      "npmRegistryUrl": "https://registry.npmjs.org",
+      "npmUseMirror": "true",
+      "npmNetworkMode": "online"
     },
     "prod": {
       "branch": "main",
@@ -61,7 +67,10 @@
       "registryName": "ninjapawsdojo",
       "appServiceName": "ninjapaws-dojo-app",
       "vulnerabilityStatus": "vulnerable",
-      "defenderEnabled": "true"
+      "defenderEnabled": "true",
+      "npmRegistryUrl": "https://registry.npmjs.org",
+      "npmUseMirror": "true",
+      "npmNetworkMode": "online"
     }
   }
 }

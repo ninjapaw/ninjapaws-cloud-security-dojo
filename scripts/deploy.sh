@@ -67,6 +67,9 @@ NGINX_VERSION="${NGINX_VERSION:-}"
 VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-}"
 PORT="${PORT:-}"
+NPM_REGISTRY_URL="${NPM_REGISTRY_URL:-}"
+NPM_USE_MIRROR="${NPM_USE_MIRROR:-}"
+NPM_NETWORK_MODE="${NPM_NETWORK_MODE:-}"
 DEFENDER_ENABLED="${DEFENDER_ENABLED:-}"
 DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-}"
 DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-}"
@@ -1523,6 +1526,9 @@ resolve_settings() {
     NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-$(config_setting nodeMajorVersion 20)}"
     VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-$(config_setting vulnerabilityStatus vulnerable)}"
     PORT="${PORT:-$(config_setting port 3000)}"
+    NPM_REGISTRY_URL="${NPM_REGISTRY_URL:-$(config_setting npmRegistryUrl https://registry.npmjs.org)}"
+    NPM_USE_MIRROR="${NPM_USE_MIRROR:-$(config_setting npmUseMirror true)}"
+    NPM_NETWORK_MODE="${NPM_NETWORK_MODE:-$(config_setting npmNetworkMode online)}"
     DEFENDER_ENABLED="${DEFENDER_ENABLED:-$(config_setting defenderEnabled true)}"
     DEFENDER_SCAN_ENABLED="${DEFENDER_SCAN_ENABLED:-$(config_setting defender.scanAfterVerify true)}"
     DEFENDER_MANAGE_PLANS="${DEFENDER_MANAGE_PLANS:-$(config_setting defender.managePlans true)}"
@@ -1798,6 +1804,9 @@ compute_build_fingerprint() {
         fi
     done
     manifest+="args $BASE_OS_IMAGE $BASE_OS_VERSION $NODE_MAJOR_VERSION $NGINX_VERSION $VULNERABILITY_STATUS $PORT $DEFENDER_ENABLED"$'\n'
+    manifest+="npmRegistryUrl $NPM_REGISTRY_URL"$'\n'
+    manifest+="npmUseMirror $NPM_USE_MIRROR"$'\n'
+    manifest+="npmNetworkMode $NPM_NETWORK_MODE"$'\n'
     printf '%s' "$manifest" | sha256_of_stdin | cut -c1-16
 }
 
@@ -1897,6 +1906,9 @@ build_image() {
         --build-arg "VULNERABILITY_STATUS=$VULNERABILITY_STATUS" \
         --build-arg "PORT=$PORT" \
         --build-arg "DEFENDER_ENABLED=$DEFENDER_ENABLED" \
+        --build-arg "NPM_REGISTRY_URL=$NPM_REGISTRY_URL" \
+        --build-arg "NPM_USE_MIRROR=$NPM_USE_MIRROR" \
+        --build-arg "NPM_NETWORK_MODE=$NPM_NETWORK_MODE" \
         "$AZURE_REPO_ROOT" > "$build_log" 2>&1 &
     build_pid=$!
 
