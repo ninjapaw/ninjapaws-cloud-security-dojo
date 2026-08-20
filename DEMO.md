@@ -50,7 +50,7 @@ https://ninjapaws-dojo-app-dev.azurewebsites.net/api/status
 https://ninjapaws-dojo-app-dev.azurewebsites.net/health
 ```
 
-There is no `/map` URL. The CVE-relevant `map` is an internal NGINX directive in the rendered scenario configuration. Inspect `runtime_verification.map_regex_enabled` and `runtime_verification.scenario_config_state` in `/api/status`; do not treat a missing `/map` route as evidence that the scenario is absent.
+The CVE-relevant `map` is an internal NGINX directive in the rendered scenario configuration. Inspect `runtime_verification.map_regex_enabled` and `runtime_verification.scenario_config_state` in `/api/status`.
 
 The status payload should show:
 
