@@ -155,7 +155,7 @@ archive_count=$(find "$test_output/archive" -mindepth 1 -maxdepth 1 -type d -nam
 test "$archive_count" -ge 1
 file_contains "$status_html" 'Executive progress report'
 file_contains "$status_html" 'window.npReport'
-file_contains "$status_html" 'deployment-dev.state.js'
+file_contains "$status_html" "deployment-' + ENV + '.state.js"
 file_contains "$status_html" 'NINJA PAWS'
 file_contains "$status_html" 'Task list'
 file_contains "$status_html" 'Live Console'
