@@ -133,6 +133,7 @@ file_contains "$REPO_ROOT/app.js" 'fixed_version: FIXED_VERSION'
 file_contains "$REPO_ROOT/app.js" 'runtimeVerification.vulnerability_detected === true'
 file_contains "$REPO_ROOT/app.js" "app.get('/health'"
 file_contains "$REPO_ROOT/app.js" "app.get('/api/status'"
+file_contains "$REPO_ROOT/app.js" 'runtime_verification.map_regex_enabled'
 file_contains "$REPO_ROOT/entrypoint.sh" 'VULNERABILITY_DETECTED=false'
 file_contains "$REPO_ROOT/entrypoint.sh" 'detection_reason'
 file_contains "$REPO_ROOT/nginx.conf" '127.0.0.1:__APP_PORT__'
