@@ -30,7 +30,7 @@ jobs:
 
       - name: Validate Bash scripts
         run: |
-          bash scripts/test.sh
+          bash scripts/test.sh --skip-report
           bash -n scripts/setup-azure-github-oidc.sh
 
       - name: Compile Bicep

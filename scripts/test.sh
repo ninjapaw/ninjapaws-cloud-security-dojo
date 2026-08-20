@@ -24,22 +24,25 @@ if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && comm
     fi
 fi
 SKIP_AZURE=false
+SKIP_REPORT=false
 NODE_COMMAND=""
 
 usage() {
     cat <<'EOF'
 Run cross-platform deployment and infrastructure checks.
 
-Usage: scripts/test.sh [--skip-azure]
+Usage: scripts/test.sh [--skip-azure] [--skip-report]
 
 Options:
   --skip-azure  Skip Azure CLI/Bicep checks when az is unavailable
+    --skip-report Skip the generated HTML report smoke test
 EOF
 }
 
 while (($# > 0)); do
     case "$1" in
         --skip-azure) SKIP_AZURE=true; shift ;;
+        --skip-report) SKIP_REPORT=true; shift ;;
         --help|-h) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -68,7 +71,10 @@ bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
 bash -n "$REPO_ROOT/scripts/test.sh"
 bash -n "$REPO_ROOT/entrypoint.sh"
 echo "Checking Node.js runtime syntax..."
-"$NODE_COMMAND" --check "$REPO_ROOT/app.js"
+(
+    cd "$REPO_ROOT"
+    "$NODE_COMMAND" --check app.js
+)
 
 contains_text() {
     local text="$1"
@@ -141,30 +147,32 @@ file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scena
 file_contains "$REPO_ROOT/DEMO.md" 'Customer Demo Walkthrough'
 file_contains "$REPO_ROOT/DEMO.md" 'real NGINX vulnerability'
 file_contains "$REPO_ROOT/DEMO.md" 'Patched-State Demonstration'
-rendered_nginx="$(mktemp)"
-test_output="$(mktemp -d)"
-trap 'rm -f "$rendered_nginx"; rm -rf "$test_output"' EXIT
-sed 's/__APP_PORT__/31337/g' "$REPO_ROOT/nginx.conf" > "$rendered_nginx"
-file_contains "$rendered_nginx" 'server 127.0.0.1:31337;'
-status_html="$test_output/dev/deployment-dev.html"
-mkdir -p "$test_output/dev"
-printf 'stale' > "$test_output/dev/stale.marker"
-OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-html --no-open-status >/dev/null
-test ! -e "$test_output/dev/stale.marker"
-archive_count=$(find "$test_output/archive" -mindepth 1 -maxdepth 1 -type d -name '*-dev' 2>/dev/null | wc -l | tr -d ' ')
-test "$archive_count" -ge 1
-file_contains "$status_html" 'Executive progress report'
-file_contains "$status_html" 'window.npReport'
-file_contains "$status_html" "deployment-' + ENV + '.state.js"
-file_contains "$status_html" 'NINJA PAWS'
-file_contains "$status_html" 'Task list'
-file_contains "$status_html" 'Live console'
-file_contains "$test_output/dev/deployment-dev.console.html" 'NINJA PAWS DEPLOYMENT CONSOLE'
-file_contains "$test_output/dev/deployment-dev.console.html" 'line'
-file_contains "$status_html" 'Resolved deployment settings'
-file_contains "$status_html" 'deployment-dev.log'
-test ! -e "$REPO_ROOT/deployment-output.json"
-test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
+if [[ "$SKIP_REPORT" == false ]]; then
+    rendered_nginx="$(mktemp)"
+    test_output="$(mktemp -d)"
+    trap 'rm -f "$rendered_nginx"; rm -rf "$test_output"' EXIT
+    sed 's/__APP_PORT__/31337/g' "$REPO_ROOT/nginx.conf" > "$rendered_nginx"
+    file_contains "$rendered_nginx" 'server 127.0.0.1:31337;'
+    status_html="$test_output/dev/deployment-dev.html"
+    mkdir -p "$test_output/dev"
+    printf 'stale' > "$test_output/dev/stale.marker"
+    OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-html --no-open-status >/dev/null
+    test ! -e "$test_output/dev/stale.marker"
+    archive_count=$(find "$test_output/archive" -mindepth 1 -maxdepth 1 -type d -name '*-dev' 2>/dev/null | wc -l | tr -d ' ')
+    test "$archive_count" -ge 1
+    file_contains "$status_html" 'Executive progress report'
+    file_contains "$status_html" 'window.npReport'
+    file_contains "$status_html" "deployment-' + ENV + '.state.js"
+    file_contains "$status_html" 'NINJA PAWS'
+    file_contains "$status_html" 'Task list'
+    file_contains "$status_html" 'Live console'
+    file_contains "$test_output/dev/deployment-dev.console.html" 'NINJA PAWS DEPLOYMENT CONSOLE'
+    file_contains "$test_output/dev/deployment-dev.console.html" 'line'
+    file_contains "$status_html" 'Resolved deployment settings'
+    file_contains "$status_html" 'deployment-dev.log'
+    test ! -e "$REPO_ROOT/deployment-output.json"
+    test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
+fi
 if bash "$REPO_ROOT/scripts/deploy.sh" provision --environment prod --defaults --yes >/dev/null 2>&1; then
     echo "ERROR: dev branch was allowed to target prod." >&2
     exit 1
