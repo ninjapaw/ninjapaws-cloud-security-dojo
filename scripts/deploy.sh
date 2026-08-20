@@ -596,11 +596,12 @@ open_status_html() {
     [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
     local native
     native="$(native_path "$STATUS_HTML")"
+    [[ -f "$native" ]] || return 0
     print_report_link
     if [[ "$native" == *:\\* ]]; then
         # MSYS rewrites a bare "/c" into "C:\", which turns cmd.exe /c into an interactive shell.
         if command -v powershell.exe >/dev/null 2>&1; then
-            powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+            NINJA_PAWS_REPORT="$native" powershell.exe -NoProfile -NonInteractive -Command '$path = [Environment]::GetEnvironmentVariable("NINJA_PAWS_REPORT"); if (Test-Path -LiteralPath $path) { Start-Process -FilePath $path }' >/dev/null 2>&1 &
         elif command -v cmd.exe >/dev/null 2>&1; then
             MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
         fi
