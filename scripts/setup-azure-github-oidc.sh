@@ -119,9 +119,9 @@ case "$environment_name" in
     ;;
   prod)
     deployment_branch=main
-    resource_group="${resource_group:-NP-ninjapaws-dojo-CentralUS}"
-    registry_name="${registry_name:-ninjapawsdojo}"
-    app_service_name="${app_service_name:-ninjapaws-dojo-app}"
+    resource_group="${resource_group:-NP-ninjapaws-dojo-Prod-CentralUS}"
+    registry_name="${registry_name:-ninjapawsdojoprod}"
+    app_service_name="${app_service_name:-ninjapaws-dojo-app-prod}"
     ;;
   *)
     printf '%s\n' '--environment must be dev or prod.' >&2

@@ -11,14 +11,14 @@
     },
     "containerRegistryName": {
       "type": "string",
-      "defaultValue": "ninjapawsdojo",
+      "defaultValue": "ninjapawsdojoprod",
       "metadata": {
         "description": "Globally unique Azure Container Registry name"
       }
     },
     "appServiceName": {
       "type": "string",
-      "defaultValue": "ninjapaws-dojo-app",
+      "defaultValue": "ninjapaws-dojo-app-prod",
       "metadata": {
         "description": "Name of the Azure App Service"
       }
