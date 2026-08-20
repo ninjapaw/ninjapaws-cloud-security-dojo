@@ -55,7 +55,7 @@ jobs:
         run: |
           docker run -d \
             --name dojo-test \
-            -p 3000:3000 \
+            -p 3000:80 \
             ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
           
           echo "Waiting for application to start..."
