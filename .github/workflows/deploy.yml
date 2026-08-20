@@ -28,6 +28,8 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    # Azure deployment is an explicit promotion action; validation workflows handle pushes and PRs.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
     env:

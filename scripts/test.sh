@@ -153,12 +153,12 @@ OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environmen
 test ! -e "$test_output/dev/stale.marker"
 archive_count=$(find "$test_output/archive" -mindepth 1 -maxdepth 1 -type d -name '*-dev' 2>/dev/null | wc -l | tr -d ' ')
 test "$archive_count" -ge 1
-file_contains "$status_html" 'Live Azure deployment status'
+file_contains "$status_html" 'Executive progress report'
 file_contains "$status_html" 'meta http-equiv="refresh"'
 file_contains "$status_html" 'NINJA PAWS'
-file_contains "$status_html" 'Deployment control room'
+file_contains "$status_html" 'Task list'
 file_contains "$status_html" 'Live Console'
-file_contains "$status_html" 'Complete deployment console'
+file_contains "$status_html" 'Live console'
 file_contains "$test_output/dev/deployment-dev.console.html" 'NINJA PAWS DEPLOYMENT CONSOLE'
 file_contains "$test_output/dev/deployment-dev.console.html" 'line'
 file_contains "$status_html" 'Resolved deployment settings'

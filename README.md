@@ -231,10 +231,10 @@ The bootstrap creates the Entra federated credential, assigns deployment roles, 
 ## Promotion and Releases
 
 1. Develop on feature branches and merge into `dev` after validation.
-2. `dev` deploys to the `dev` GitHub Environment.
+2. Run **Deploy to Azure** manually from `dev` when the `dev` GitHub Environment is ready.
 3. Run **Promote dev to main** from `dev` to open a promotion PR.
 4. Review and merge that PR through protected `main`.
-5. `main` deploys to the `prod` GitHub Environment.
+5. Run **Deploy to Azure** manually from `main` to promote the stable baseline to the `prod` GitHub Environment.
 
 For releases, run **Request release from dev** and choose `patch`, `minor`, `major`, or `custom`. It creates a release PR that updates `package.json` and `package-lock.json`. After merge, **Publish main release** validates metadata, rejects duplicate/backward versions, creates `vX.Y.Z`, publishes the GitHub Release, and pushes the versioned and `latest` ACR images.
 
