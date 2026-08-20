@@ -144,7 +144,7 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'mask_identifier'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
 file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
 file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation'
-file_contains "$REPO_ROOT/DEMO.md" 'Customer Demo Walkthrough'
+file_contains "$REPO_ROOT/DEMO.md" 'Defender for Cloud - Scenario 1'
 file_contains "$REPO_ROOT/DEMO.md" 'real NGINX vulnerability'
 file_contains "$REPO_ROOT/DEMO.md" 'Patched-State Demonstration'
 if [[ "$SKIP_REPORT" == false ]]; then
