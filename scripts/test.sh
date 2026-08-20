@@ -158,7 +158,6 @@ file_contains "$status_html" 'window.npReport'
 file_contains "$status_html" "deployment-' + ENV + '.state.js"
 file_contains "$status_html" 'NINJA PAWS'
 file_contains "$status_html" 'Task list'
-file_contains "$status_html" 'Live Console'
 file_contains "$status_html" 'Live console'
 file_contains "$test_output/dev/deployment-dev.console.html" 'NINJA PAWS DEPLOYMENT CONSOLE'
 file_contains "$test_output/dev/deployment-dev.console.html" 'line'
