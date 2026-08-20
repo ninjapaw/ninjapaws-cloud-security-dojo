@@ -48,26 +48,30 @@ az() {
 }
 
 COMMAND="deploy"
+# Precedence for every setting: CLI flag > environment variable > config file > built-in fallback.
+# The workflow exports the unprefixed names, so both spellings are accepted.
+CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
 ENVIRONMENT="${DEPLOY_ENVIRONMENT:-auto}"
-SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-}"
-LOCATION="${AZURE_LOCATION:-}"
-RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-}"
-REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-}"
-APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-}"
-IMAGE_NAME="${IMAGE_NAME:-ninjapaws-dojo}"
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-${SUBSCRIPTION_ID:-}}"
+LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
+RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
+REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-${CONTAINER_REGISTRY_NAME:-${REGISTRY_NAME:-}}}"
+APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-${APP_SERVICE_NAME:-}}"
+IMAGE_NAME="${IMAGE_NAME:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
-BASE_OS_IMAGE="${BASE_OS_IMAGE:-ubuntu}"
-BASE_OS_VERSION="${BASE_OS_VERSION:-24.04}"
-NGINX_VERSION="${NGINX_VERSION:-1.30.3}"
-VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-vulnerable}"
-NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-20}"
-PORT="${PORT:-3000}"
-DEFENDER_ENABLED="${DEFENDER_ENABLED:-false}"
+BASE_OS_IMAGE="${BASE_OS_IMAGE:-}"
+BASE_OS_VERSION="${BASE_OS_VERSION:-}"
+NGINX_VERSION="${NGINX_VERSION:-}"
+VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-}"
+NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-}"
+PORT="${PORT:-}"
+DEFENDER_ENABLED="${DEFENDER_ENABLED:-}"
 ASSUME_YES=false
 FORCE=false
 FORCE_REBUILD=false
 WAIT_FOR_DELETE=false
 STATE_FILE=""
+STATE_JS=""
 STATUS_HTML=""
 STATUS_CONSOLE=""
 STATUS_RAW_CONSOLE=""
@@ -80,6 +84,73 @@ IMAGE_TAG_EXPLICIT=false
 USE_DEFAULTS=false
 OPEN_STATUS_HTML=true
 RUN_STARTED_AT="$(date +%s)"
+RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_ENDED_ISO=""
+RUN_ID=""
+RUN_INVOCATION="$*"
+
+# Read a dotted path of string values out of the config file without requiring jq.
+config_lookup() {
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    awk -v want="$1" '
+        BEGIN { depth = 0 }
+        {
+            line = $0
+            gsub(/^[ \t]+|[ \t]+$/, "", line)
+            if (line ~ /^"[^"]+"[ \t]*:[ \t]*\{/) {
+                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
+                depth++; stack[depth] = key; next
+            }
+            if (line ~ /^\}/) { if (depth > 0) depth--; next }
+            if (line ~ /^"[^"]+"[ \t]*:[ \t]*".*"/) {
+                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
+                val = line
+                sub(/^"[^"]+"[ \t]*:[ \t]*"/, "", val); sub(/",?$/, "", val)
+                path = ""
+                for (i = 1; i <= depth; i++) path = path stack[i] "."
+                if (path key == want) { print val; exit }
+            }
+        }
+    ' "$CONFIG_FILE"
+}
+
+# Environment override first, then the shared default, then the built-in fallback.
+config_setting() {
+    local key="$1" fallback="$2" value
+    value="$(config_lookup "environments.$ENVIRONMENT.$key")"
+    [[ -n "$value" ]] || value="$(config_lookup "defaults.$key")"
+    printf '%s' "${value:-$fallback}"
+}
+
+project_meta() {
+    local value
+    value="$(config_lookup "project.$1")"
+    printf '%s' "${value:-$2}"
+}
+
+resolve_audit_context() {
+    RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    APP_VERSION="$(sed -n 's/.*"version"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" 2>/dev/null | head -1)"
+    APP_VERSION="${APP_VERSION:-unknown}"
+    CONFIG_VERSION="$(config_lookup configVersion)"
+    CONFIG_VERSION="${CONFIG_VERSION:-unknown}"
+    GIT_BRANCH="${GITHUB_REF_NAME:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')}"
+    GIT_COMMIT="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')}"
+    if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+        GIT_DIRTY="modified (uncommitted changes present)"
+    else
+        GIT_DIRTY="clean"
+    fi
+    RUN_OPERATOR="${GITHUB_ACTOR:-${USER:-${USERNAME:-unknown}}}"
+    RUN_HOST="$(hostname 2>/dev/null || printf 'unknown')"
+    if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+        RUN_ORIGIN="GitHub Actions"
+        RUN_ORIGIN_DETAIL="workflow ${GITHUB_WORKFLOW:-unknown}, run ${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT:-1}, triggered by ${GITHUB_EVENT_NAME:-unknown}"
+    else
+        RUN_ORIGIN="Local workstation"
+        RUN_ORIGIN_DETAIL="interactive shell on $RUN_HOST"
+    fi
+}
 
 TASK_KEYS=()
 TASK_LABELS=()
@@ -98,6 +169,9 @@ APP_URL=""
 APP_HTTP_CODE=""
 HEALTH_HTTP_CODE=""
 APP_RESPONSE_TIME=""
+APP_READY_ATTEMPTS=0
+APP_CONTAINER_ID=""
+APP_STATUS_BODY=""
 BUILD_FINGERPRINT=""
 FINGERPRINT_TAG=""
 IMAGE_DIGEST=""
@@ -308,6 +382,22 @@ html_escape() {
         printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
 }
 
+# The browser reloads these files every 3s, so never leave a half-written page on disk.
+# Windows rename fails while a reader holds the target open, so retry before the non-atomic fallback.
+publish_atomically() {
+    local source="$1" target="$2" attempt=0
+    while ((attempt < 20)); do
+        if mv -f "$source" "$target" 2>/dev/null; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.05 2>/dev/null || true
+    done
+    cp -f "$source" "$target" 2>/dev/null || true
+    rm -f "$source" 2>/dev/null || true
+    return 0
+}
+
 line_seen() {
     local needle="$1"
     local line
@@ -319,12 +409,13 @@ line_seen() {
 }
 
 write_console_html() {
-        local line line_number=0 reload_script=""
+        local line line_number=0 reload_script="" console_tmp
         [[ -n "$STATUS_CONSOLE" ]] || return 0
         if [[ "${CONSOLE_AUTORELOAD:-true}" == true ]]; then
             reload_script='        window.setTimeout(function () { window.location.reload(); }, 3000);'
         fi
-        cat > "$STATUS_CONSOLE" <<EOF
+        console_tmp="$STATUS_CONSOLE.tmp"
+        cat > "$console_tmp" <<EOF
 <!doctype html>
 <html lang="en">
 <head>
@@ -340,6 +431,11 @@ write_console_html() {
         header strong { font-size: 12px; letter-spacing: .1em; }
         header small { display: block; color: #8fa6bc; font-size: 10px; letter-spacing: .12em; margin-top: 3px; }
         .terminal { flex: 1 1 auto; min-height: 0; border: 1px solid #28415c; border-radius: 12px; overflow: auto; overscroll-behavior: contain; background: #0d1a2b; box-shadow: 0 12px 30px #0006; }
+        .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px 18px; padding: 10px 14px; margin-bottom: 10px; border: 1px solid #28415c; border-radius: 10px; background: #0d1a2b; flex: 0 0 auto; font-size: 11px; }
+        .meta span { color: #8fa6bc; }
+        .meta b { color: #d9e7f5; font-weight: 600; }
+        .warn-strip { flex: 0 0 auto; margin-bottom: 10px; padding: 8px 14px; border-radius: 8px; background: #3a1c1c; border: 1px solid #6d2b2b; color: #f0b4b4; font-size: 11px; }
+        .foot { flex: 0 0 auto; padding: 10px 2px 0; color: #58718b; font-size: 10px; }
         .line { display: grid; grid-template-columns: 52px 1fr; min-width: max-content; border-bottom: 1px solid #ffffff0b; }
         .number { padding: 5px 10px; color: #58718b; text-align: right; user-select: none; background: #0a1524; }
         .text { padding: 5px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -347,18 +443,30 @@ write_console_html() {
     </style>
 </head>
 <body>
-    <header><span class="mark">NP</span><span><strong>NINJA PAWS DEPLOYMENT CONSOLE</strong><small>LIVE RAW TERMINAL STREAM &middot; $(html_escape "$ENVIRONMENT")</small></span></header>
+    <header><span class="mark">NP</span><span><strong>NINJA PAWS DEPLOYMENT CONSOLE</strong><small>LIVE RAW TERMINAL STREAM &middot; $(html_escape "$ENVIRONMENT") &middot; RUN $(html_escape "$RUN_ID")</small></span></header>
+    <div class="meta">
+        <span>Command <b>$(html_escape "$COMMAND")</b></span>
+        <span>Environment <b>$(html_escape "$ENVIRONMENT")</b></span>
+        <span>Started <b>$(html_escape "$RUN_STARTED_ISO")</b></span>
+        <span>Operator <b>$(html_escape "$RUN_OPERATOR")</b></span>
+        <span>Origin <b>$(html_escape "$RUN_ORIGIN")</b></span>
+        <span>Branch <b>$(html_escape "$GIT_BRANCH")</b></span>
+        <span>Commit <b>$(html_escape "${GIT_COMMIT:0:12}")</b></span>
+        <span>Subscription <b>$(html_escape "${SUBSCRIPTION_ID:-unknown}")</b></span>
+        <span>Version <b>v$(html_escape "$APP_VERSION")</b></span>
+    </div>
+    <div class="warn-strip"><strong>USE AT YOUR OWN RISK.</strong> Intentionally vulnerable training environment &mdash; keep it isolated and delete it when the exercise ends.</div>
     <div class="terminal" id="terminal">
 EOF
         if [[ -s "$STATUS_RAW_CONSOLE" ]]; then
                 while IFS= read -r line; do
                         line_number=$((line_number + 1))
-                        printf '    <div class="line"><span class="number">%s</span><span class="text">%s</span></div>\n' "$line_number" "$(html_escape "$line")" >> "$STATUS_CONSOLE"
+                        printf '    <div class="line"><span class="number">%s</span><span class="text">%s</span></div>\n' "$line_number" "$(html_escape "$line")" >> "$console_tmp"
                     done < "$STATUS_RAW_CONSOLE"
         else
-                    printf '    <div class="empty">Waiting for deployment output...</div>\n' >> "$STATUS_CONSOLE"
+                    printf '    <div class="empty">Waiting for deployment output...</div>\n' >> "$console_tmp"
         fi
-                cat >> "$STATUS_CONSOLE" <<EOF
+                cat >> "$console_tmp" <<EOF
     </div>
     <script>
     (function () {
@@ -387,46 +495,68 @@ EOF
 $reload_script
     })();
     </script>
+    <div class="foot">$(html_escape "$(project_meta copyright 'Copyright (c) Ninja Paws')") &middot; v$(html_escape "$APP_VERSION") &middot; Licensed under $(html_escape "$(project_meta license MIT)") &middot; Provided as-is, without warranty. Generated $(date -u +%Y-%m-%dT%H:%M:%SZ).</div>
 </body>
 </html>
 EOF
+        publish_atomically "$console_tmp" "$STATUS_CONSOLE"
 }
 
 open_status_html() {
     [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
-    local windows_path
+    local native
+    native="$(native_path "$STATUS_HTML")"
     print_report_link
-    if command -v xdg-open >/dev/null 2>&1; then
+    if [[ "$native" == *:\\* ]]; then
+        # MSYS rewrites a bare "/c" into "C:\", which turns cmd.exe /c into an interactive shell.
+        if command -v powershell.exe >/dev/null 2>&1; then
+            powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+        elif command -v cmd.exe >/dev/null 2>&1; then
+            MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
+        fi
+    elif command -v xdg-open >/dev/null 2>&1; then
         xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
     elif command -v open >/dev/null 2>&1; then
         open "$STATUS_HTML" >/dev/null 2>&1 &
-    elif command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
-        windows_path="$(wslpath -w "$STATUS_HTML")"
-        cmd.exe /c start "" "$windows_path" >/dev/null 2>&1 &
-    elif command -v powershell.exe >/dev/null 2>&1; then
-        powershell.exe -NoProfile -Command "Start-Process '$STATUS_HTML'" >/dev/null 2>&1 &
+    fi
+    return 0
+}
+
+# The browser needs a host-native path: MSYS and WSL paths are not valid file:// URLs on Windows.
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    elif command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+report_url() {
+    local native
+    native="$(native_path "$1")"
+    if [[ "$native" == *:\\* ]]; then
+        printf 'file:///%s' "${native//\\//}"
+    else
+        printf 'file://%s' "$native"
     fi
 }
 
 print_report_link() {
     [[ -n "$STATUS_HTML" ]] || return 0
-    local report_url="file://$STATUS_HTML"
-    local copy_command=""
+    local url copy_note=""
+    url="$(report_url "$STATUS_HTML")"
     if command -v clip.exe >/dev/null 2>&1; then
-        printf '%s' "$report_url" | clip.exe 2>/dev/null || true
-        copy_command="copied to clipboard"
+        printf '%s' "$url" | clip.exe 2>/dev/null && copy_note="(copied to clipboard)"
     elif command -v pbcopy >/dev/null 2>&1; then
-        printf '%s' "$report_url" | pbcopy 2>/dev/null || true
-        copy_command="copied to clipboard"
+        printf '%s' "$url" | pbcopy 2>/dev/null && copy_note="(copied to clipboard)"
     elif command -v wl-copy >/dev/null 2>&1; then
-        printf '%s' "$report_url" | wl-copy 2>/dev/null || true
-        copy_command="copied to clipboard"
+        printf '%s' "$url" | wl-copy 2>/dev/null && copy_note="(copied to clipboard)"
     fi
-    echo -e "${BLUE}╭─ LIVE DEPLOYMENT REPORT ─────────────────────────────╮${NC}"
-    printf "${BLUE}│${NC} %-50s ${BLUE}│${NC}\n" "Environment: $ENVIRONMENT"
-    printf "${BLUE}│${NC} ${CYAN:-\033[0;36m}Report: %s${NC} ${BLUE}│${NC}\n" "$report_url"
-    printf "${BLUE}│${NC} %-50s ${BLUE}│${NC}\n" "${copy_command:-Copy the URL above to open it}"
-    echo -e "${BLUE}╰──────────────────────────────────────────────────────╯${NC}"
+    echo -e "${BLUE}--- LIVE DEPLOYMENT REPORT (${ENVIRONMENT}) ---${NC}"
+    echo -e "  ${CYAN:-\033[0;36m}${url}${NC} ${copy_note}"
+    return 0
 }
 
 print_terminal_status() {
@@ -458,7 +588,7 @@ start_console_capture() {
 }
 
 render_task_rows() {
-    local i status label detail started ended elapsed icon cls text
+    local i status label detail started ended elapsed icon cls text since_attr
     if ((${#TASK_KEYS[@]} == 0)); then
         printf '        <p>No lifecycle tasks were registered for this command.</p>\n'
         return 0
@@ -470,11 +600,13 @@ render_task_rows() {
         started="${TASK_STARTED[$i]}"
         ended="${TASK_ENDED[$i]}"
         elapsed=-1
+        since_attr=""
         if ((started > 0)); then
             if ((ended > 0)); then
                 elapsed=$((ended - started))
             else
                 elapsed=$(( $(date +%s) - started ))
+                since_attr=" data-since=\"$started\""
             fi
         fi
         case "$status" in
@@ -493,8 +625,8 @@ render_task_rows() {
         fi
         printf '<div class="task-body"><div class="task-name">%s. %s</div><div class="task-detail">%s</div></div>' \
             "$((i + 1))" "$(html_escape "$label")" "$(html_escape "$detail")"
-        printf '<div class="task-meta"><span class="pill %s">%s</span><span class="elapsed">%s</span></div></div>\n' \
-            "$cls" "$text" "$(format_duration "$elapsed")"
+        printf '<div class="task-meta"><span class="pill %s">%s</span><span class="elapsed"%s>%s</span></div></div>\n' \
+            "$cls" "$text" "$since_attr" "$(format_duration "$elapsed")"
     done
 }
 
@@ -603,6 +735,101 @@ render_environment_links() {
         "$(html_escape "$acr_url")" "$(html_escape "$ACR_NAME")"
 }
 
+render_summary_counts() {
+    printf '<div class="item"><div class="label">Tasks succeeded</div><div class="value">%s / %s</div></div>' "$TASK_DONE" "$TASK_TOTAL"
+    printf '<div class="item"><div class="label">Tasks failed</div><div class="value">%s</div></div>' "$TASK_FAILED"
+    printf '<div class="item"><div class="label">Checks passed</div><div class="value">%s / %s</div></div>' "$CHECK_PASS" "$CHECK_TOTAL"
+    printf '<div class="item"><div class="label">Checks failed / not sure</div><div class="value">%s / %s</div></div>' "$CHECK_FAIL" "$CHECK_UNKNOWN"
+}
+
+render_run_facts() {
+    printf '<div class="item"><div class="label">Environment</div><div class="value">%s</div></div>' "$(html_escape "$ENVIRONMENT")"
+    printf '<div class="item"><div class="label">Subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$SUBSCRIPTION_ID")"
+    printf '<div class="item"><div class="label">Resource group</div><div class="value">%s</div></div>' "$(html_escape "$RESOURCE_GROUP")"
+    printf '<div class="item"><div class="label">Region</div><div class="value">%s</div></div>' "$(html_escape "$LOCATION")"
+    printf '<div class="item"><div class="label">Registry</div><div class="value">%s</div></div>' "$(html_escape "$ACR_NAME")"
+    printf '<div class="item"><div class="label">App Service</div><div class="value">%s</div></div>' "$(html_escape "$APP_SERVICE_NAME")"
+    printf '<div class="item"><div class="label">Image</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$IMAGE_NAME:$IMAGE_TAG")"
+    printf '<div class="item"><div class="label">Image digest</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${IMAGE_DIGEST:-not resolved}")"
+    printf '<div class="item"><div class="label">Build fingerprint</div><div class="value"><code>%s</code><br>%s</div></div>' "$(html_escape "${BUILD_FINGERPRINT:-not computed}")" "$1"
+    printf '<div class="item"><div class="label">Training status</div><div class="value">%s on NGINX %s</div></div>' "$(html_escape "$VULNERABILITY_STATUS")" "$(html_escape "$NGINX_VERSION")"
+    printf '<div class="item"><div class="label">Updated</div><div class="value">%s</div></div>' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+render_console_lines() {
+    local line line_number total
+    if [[ ! -s "$STATUS_RAW_CONSOLE" ]]; then
+        printf '<div class="empty">Waiting for deployment output...</div>'
+        return 0
+    fi
+    total="$(wc -l < "$STATUS_RAW_CONSOLE" 2>/dev/null || printf '0')"
+    line_number=$(( total > 400 ? total - 400 : 0 ))
+    while IFS= read -r line; do
+        line_number=$((line_number + 1))
+        printf '<div class="line"><span class="number">%s</span><span class="text">%s</span></div>' \
+            "$line_number" "$(html_escape "$line")"
+    done < <(tail -n 400 "$STATUS_RAW_CONSOLE")
+    return 0
+}
+
+# Escape an HTML fragment for embedding in a JavaScript string literal.
+# sed escapes per line (its N-join quits early on single-line input); awk then joins with literal \n.
+json_escape() {
+    printf '%s' "$1" \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\r//g' -e 's|</|<\\/|g' \
+        | awk 'BEGIN { ORS = "" } NR > 1 { printf "\\n" } { print }'
+}
+
+# Live feed for the report. fetch() is blocked on file:// origins, so the page polls this by
+# injecting it as a <script>, which file:// does allow.
+write_state_js() {
+    local phase="$1" percent="$2" detail="$3" final="$4"
+    local verdict="$5" verdict_class="$6" headline="$7" verdict_note="$8" build_badge="$9" steps_outcome="${10}"
+    local state_tmp
+    [[ -n "$STATE_JS" ]] || return 0
+    state_tmp="$STATE_JS.tmp"
+    {
+        printf 'window.npReport && window.npReport({'
+        printf '"final":%s,' "$final"
+        printf '"percent":%s,' "$percent"
+        printf '"runStartedAt":%s,' "$RUN_STARTED_AT"
+        printf '"phase":"%s",' "$(json_escape "$phase")"
+        printf '"detail":"%s",' "$(json_escape "$detail")"
+        printf '"headline":"%s",' "$(json_escape "$headline")"
+        printf '"verdict":"%s",' "$(json_escape "$verdict")"
+        printf '"verdictClass":"%s",' "$(json_escape "$verdict_class")"
+        printf '"verdictNote":"%s",' "$(json_escape "$verdict_note")"
+        printf '"elapsed":%s,' "$(( $(date +%s) - RUN_STARTED_AT ))"
+        printf '"summaryHtml":"%s",' "$(json_escape "$(render_summary_counts)")"
+        printf '"tasksHtml":"%s",' "$(json_escape "$(render_task_rows)")"
+        printf '"checksHtml":"%s",' "$(json_escape "$(render_check_rows)")"
+        printf '"linksHtml":"%s",' "$(json_escape "$(render_environment_links)")"
+        printf '"factsHtml":"%s",' "$(json_escape "$(render_run_facts "$build_badge")")"
+        printf '"auditHtml":"%s",' "$(json_escape "$(render_audit_facts)")"
+        printf '"stepsHtml":"%s",' "$(json_escape "$(render_next_steps "$steps_outcome")")"
+        printf '"consoleHtml":"%s"' "$(json_escape "$(render_console_lines)")"
+        printf '});\n'
+    } > "$state_tmp"
+    publish_atomically "$state_tmp" "$STATE_JS"
+}
+
+render_audit_facts() {
+    local ended="${RUN_ENDED_ISO:-in progress}"
+    printf '<div class="item"><div class="label">Run ID</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$RUN_ID")"
+    printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$COMMAND $RUN_INVOCATION")"
+    printf '<div class="item"><div class="label">Started (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$RUN_STARTED_ISO")"
+    printf '<div class="item"><div class="label">Ended (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$ended")"
+    printf '<div class="item"><div class="label">Duration</div><div class="value">%s</div></div>' "$(format_duration "$(( $(date +%s) - RUN_STARTED_AT ))")"
+    printf '<div class="item"><div class="label">Operator</div><div class="value">%s</div></div>' "$(html_escape "$RUN_OPERATOR")"
+    printf '<div class="item"><div class="label">Origin</div><div class="value">%s<br><span class="hint">%s</span></div></div>' "$(html_escape "$RUN_ORIGIN")" "$(html_escape "$RUN_ORIGIN_DETAIL")"
+    printf '<div class="item"><div class="label">Git branch</div><div class="value">%s</div></div>' "$(html_escape "$GIT_BRANCH")"
+    printf '<div class="item"><div class="label">Git commit</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$GIT_COMMIT")"
+    printf '<div class="item"><div class="label">Working tree</div><div class="value">%s</div></div>' "$(html_escape "$GIT_DIRTY")"
+    printf '<div class="item"><div class="label">Tool version</div><div class="value">v%s (config v%s)</div></div>' "$(html_escape "$APP_VERSION")" "$(html_escape "$CONFIG_VERSION")"
+    printf '<div class="item"><div class="label">Config source</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(basename "$CONFIG_FILE")")"
+    printf '<div class="item"><div class="label">Tenant / subscription</div><div class="value"><code>%s</code></div></div>' "$(html_escape "${AZURE_TENANT_ID:-not recorded} / ${SUBSCRIPTION_ID:-unknown}")"
+}
+
 command_noun() {
     case "$COMMAND" in
         uninstall)              printf 'teardown' ;;
@@ -704,6 +931,40 @@ EOF
     esac
 }
 
+print_final_banner() {
+    local result="$1" color label
+    if [[ "$result" == failure ]]; then
+        color="$RED"
+        label="FAILED"
+    else
+        color="$GREEN"
+        label="COMPLETE"
+    fi
+    echo
+    echo -e "${color}==================================================================${NC}"
+    echo -e "${color}  $COMMAND ($ENVIRONMENT): $label${NC}"
+    echo -e "${color}==================================================================${NC}"
+    if [[ -n "$STATUS_HTML" ]]; then
+        echo -e "  Executive report : ${CYAN:-\033[0;36m}$(report_url "$STATUS_HTML")${NC}"
+        echo    "  Report file      : $(native_path "$STATUS_HTML")"
+    fi
+    if [[ -n "$APP_URL" ]]; then
+        echo -e "  Live application : ${CYAN:-\033[0;36m}$APP_URL${NC}"
+    fi
+    if [[ -n "$OUTPUT_DIR" ]]; then
+        echo    "  Output directory : $(native_path "$OUTPUT_DIR")"
+    fi
+    echo    "  Run ID           : $RUN_ID"
+    echo    "  Started (UTC)    : $RUN_STARTED_ISO"
+    echo    "  Ended (UTC)      : ${RUN_ENDED_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    echo    "  Operator/origin  : $RUN_OPERATOR via $RUN_ORIGIN"
+    echo    "  Version          : v$APP_VERSION (config v$CONFIG_VERSION), commit ${GIT_COMMIT:0:12} on $GIT_BRANCH"
+    echo -e "  ${YELLOW}USE AT YOUR OWN RISK${NC} - intentionally vulnerable training environment."
+    echo    "  $(project_meta copyright 'Copyright (c) Ninja Paws') - Licensed under $(project_meta license MIT)"
+    echo
+    return 0
+}
+
 finalize_report() {
     local result="$1"
     local detail="${2:-}"
@@ -712,11 +973,13 @@ finalize_report() {
     fi
     RUN_FINAL=true
     RUN_RESULT="$result"
+    RUN_ENDED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [[ "$result" == failure ]]; then
         write_status_html complete failed 100 "$detail"
     else
         write_status_html complete success 100 "$detail"
     fi
+    print_final_banner "$result"
 }
 
 on_exit() {
@@ -739,16 +1002,26 @@ write_status_html() {
         local status="$2"
         local percent="$3"
         local detail="${4:-}"
-        local refresh="" final=false verdict verdict_class verdict_note headline build_badge
-        local total_elapsed
+        local final=false verdict verdict_class verdict_note headline build_badge live_badge total_since_attr
+        local total_elapsed report_tmp steps_outcome
         [[ -n "$STATUS_HTML" ]] || return 0
         printf '[%s] %s: %s\n' "$(date -u +%H:%M:%SZ)" "$phase" "$detail" >> "$STATUS_RAW_CONSOLE"
         if [[ "$status" == running || "$status" == starting || "$status" == waiting ]]; then
             CONSOLE_AUTORELOAD=true
-            refresh='        window.setTimeout(function () { window.location.reload(); }, 3000);'
+            live_badge=' <span class="pill run" id="refresh-badge">Live</span>'
+            total_since_attr=" data-since=\"$RUN_STARTED_AT\""
         else
             CONSOLE_AUTORELOAD=false
             final=true
+            live_badge=''
+            total_since_attr=''
+        fi
+        if [[ "$status" == failed ]]; then
+            steps_outcome=failure
+        elif [[ "$final" == true ]]; then
+            steps_outcome=success
+        else
+            steps_outcome=progress
         fi
         write_console_html
         print_terminal_status "$phase" "$status" "$percent" "$detail"
@@ -791,7 +1064,8 @@ write_status_html() {
         fi
 
         mkdir -p "$(dirname "$STATUS_HTML")"
-        cat > "$STATUS_HTML" <<EOF
+        report_tmp="$STATUS_HTML.tmp"
+        cat > "$report_tmp" <<EOF
 <!doctype html>
 <html lang="en">
 <head>
@@ -851,37 +1125,68 @@ write_status_html() {
         th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #68758a; }
         ol.steps li, ul.steps li { margin-bottom: 10px; color: #3c4759; }
         .banner { padding: 14px 16px; border-radius: 10px; background: #fdeaea; border: 1px solid #f3c9c9; color: #7d1f1f; margin-top: 14px; }
+        .console-panel { background: #101b2d; color: #d9e7f5; border-radius: 10px; padding: 10px 0; height: 420px; overflow: auto; overscroll-behavior: contain; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+        .console-panel .line { display: grid; grid-template-columns: 56px 1fr; border-bottom: 1px solid #ffffff0b; }
+        .console-panel .number { padding: 3px 10px; color: #58718b; text-align: right; user-select: none; }
+        .console-panel .text { padding: 3px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .console-panel .empty { color: #58718b; padding: 24px; text-align: center; }
+        .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+        button.pdf { font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; padding: 12px 20px; background: #102f4d; color: #fff; box-shadow: 0 6px 16px #102f4d33; }
+        button.pdf:hover { background: #17436e; }
+        .hint { color: #77869a; font-size: 13px; }
+        footer { margin: 24px 0 8px; padding: 20px 22px; border-top: 3px solid #d98932; background: #fff; border-radius: 14px; border: 1px solid #dbe3ee; }
+        footer p { margin: 5px 0; font-size: 12px; color: #68758a; }
+        footer .disclaimer { color: #7d1f1f; background: #fdeaea; border: 1px solid #f3c9c9; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+        .print-only { display: none; }
         @media (max-width: 600px) { body { padding: 14px; } h1 { font-size: 23px; } .task { grid-template-columns: 28px 1fr; } .task-meta { grid-column: 2; align-items: flex-start; } }
+        @media print {
+            @page { size: A4; margin: 14mm 12mm; }
+            :root, body { background: #fff !important; }
+            body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            main { max-width: none; }
+            header, section { box-shadow: none; border: 1px solid #d4dbe6; border-radius: 8px; break-inside: avoid; page-break-inside: avoid; }
+            header { padding: 16px; margin-bottom: 10px; }
+            section { padding: 14px; margin: 10px 0; }
+            h1 { font-size: 21px; margin: 12px 0 6px; }
+            h2 { font-size: 15px; }
+            p, td, th, li { font-size: 11px; }
+            .task { break-inside: avoid; page-break-inside: avoid; padding: 8px 10px; margin-bottom: 5px; }
+            .ico.run.spinner { animation: none; border-top-color: #1769aa; }
+            thead { display: table-header-group; }
+            tr { break-inside: avoid; page-break-inside: avoid; }
+            .no-print { display: none !important; }
+            .print-only { display: block; }
+            .grid { grid-template-columns: repeat(3, 1fr); }
+            a { color: #14548c; text-decoration: none; }
+        }
     </style>
 </head>
 <body>
 <main>
     <header>
         <div class="brand"><span class="mark">NP</span><span><strong>NINJA PAWS</strong><small> CLOUD SECURITY DOJO</small></span></div>
-        <h1>$headline</h1>
+        <h1 id="headline">$headline</h1>
         <p>Azure lifecycle command <code>$(html_escape "$COMMAND")</code> targeting environment <strong>$(html_escape "$ENVIRONMENT")</strong>.</p>
-        <p><span class="pill $verdict_class verdict">$(html_escape "$verdict")</span></p>
-        <p>$verdict_note</p>
+        <p><span class="pill $verdict_class verdict" id="verdict-pill">$(html_escape "$verdict")</span></p>
+        <p id="verdict-note">$verdict_note</p>
+        <p class="print-only">Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) &middot; subscription $(html_escape "$SUBSCRIPTION_ID")</p>
     </header>
 
     <section>
         <h2>Executive summary</h2>
-        <div class="bar"><div class="fill"></div></div>
-        <p><strong>${percent}%</strong> &middot; current phase <strong>$(html_escape "$phase")</strong> &middot; elapsed $(format_duration "$total_elapsed")</p>
-        <p>$(html_escape "$detail")</p>
-        <div class="grid" style="margin-top:14px">
-            <div class="item"><div class="label">Tasks succeeded</div><div class="value">$TASK_DONE / $TASK_TOTAL</div></div>
-            <div class="item"><div class="label">Tasks failed</div><div class="value">$TASK_FAILED</div></div>
-            <div class="item"><div class="label">Checks passed</div><div class="value">$CHECK_PASS / $CHECK_TOTAL</div></div>
-            <div class="item"><div class="label">Checks failed / not sure</div><div class="value">$CHECK_FAIL / $CHECK_UNKNOWN</div></div>
-        </div>
-$( [[ "$status" == failed ]] && printf '        <div class="banner"><strong>Failure cause:</strong> %s</div>\n' "$(html_escape "${FAILURE_MESSAGE:-$detail}")" )
+        <div class="bar"><div class="fill" id="progress-fill"></div></div>
+        <p><strong id="progress-percent">${percent}%</strong> &middot; current phase <strong id="phase-name">$(html_escape "$phase")</strong> &middot; elapsed <span id="total-elapsed"$total_since_attr>$(format_duration "$total_elapsed")</span>$live_badge</p>
+        <p id="phase-detail">$(html_escape "$detail")</p>
+        <div class="grid" style="margin-top:14px" id="summary-counts">$(render_summary_counts)</div>
+        <div id="failure-banner">$( [[ "$status" == failed ]] && printf '<div class="banner"><strong>Failure cause:</strong> %s</div>' "$(html_escape "${FAILURE_MESSAGE:-$detail}")" )</div>
     </section>
 
     <section>
         <h2>Task list</h2>
         <p>Every stage in this run, with its live state and duration.</p>
+        <div id="task-list">
 $(render_task_rows)
+        </div>
     </section>
 
     <section>
@@ -889,7 +1194,7 @@ $(render_task_rows)
         <p>Each check is recorded as Pass, Failure, Not sure, or Not applicable with the evidence used to decide.</p>
         <table>
             <thead><tr><th style="width:32%">Check</th><th style="width:14%">Result</th><th>Evidence</th></tr></thead>
-            <tbody>
+            <tbody id="check-rows">
 $(render_check_rows)
             </tbody>
         </table>
@@ -898,70 +1203,169 @@ $(render_check_rows)
     <section>
         <h2>Environment access</h2>
         <p>Clickable entry points for the deployed environment and its Azure resources.</p>
-        <div class="grid">
+        <div class="grid" id="env-links">
 $(render_environment_links)
         </div>
     </section>
 
     <section>
         <h2>Run facts</h2>
-        <div class="grid">
-            <div class="item"><div class="label">Environment</div><div class="value">$(html_escape "$ENVIRONMENT")</div></div>
-            <div class="item"><div class="label">Subscription</div><div class="value"><code>$(html_escape "$SUBSCRIPTION_ID")</code></div></div>
-            <div class="item"><div class="label">Resource group</div><div class="value">$(html_escape "$RESOURCE_GROUP")</div></div>
-            <div class="item"><div class="label">Region</div><div class="value">$(html_escape "$LOCATION")</div></div>
-            <div class="item"><div class="label">Registry</div><div class="value">$(html_escape "$ACR_NAME")</div></div>
-            <div class="item"><div class="label">App Service</div><div class="value">$(html_escape "$APP_SERVICE_NAME")</div></div>
-            <div class="item"><div class="label">Image</div><div class="value"><code>$(html_escape "$IMAGE_NAME:$IMAGE_TAG")</code></div></div>
-            <div class="item"><div class="label">Image digest</div><div class="value"><code>$(html_escape "${IMAGE_DIGEST:-not resolved}")</code></div></div>
-            <div class="item"><div class="label">Build fingerprint</div><div class="value"><code>$(html_escape "${BUILD_FINGERPRINT:-not computed}")</code><br>$build_badge</div></div>
-            <div class="item"><div class="label">Training status</div><div class="value">$(html_escape "$VULNERABILITY_STATUS") on NGINX $(html_escape "$NGINX_VERSION")</div></div>
-            <div class="item"><div class="label">Updated</div><div class="value">$(date -u +%Y-%m-%dT%H:%M:%SZ)</div></div>
-        </div>
+        <div class="grid" id="run-facts">$(render_run_facts "$build_badge")</div>
     </section>
 
     <section>
         <h2>Next steps</h2>
-        <ul class="steps">
-$(render_next_steps "$([[ "$status" == failed ]] && printf failure || { [[ "$final" == true ]] && printf success || printf progress; })")
+        <ul class="steps" id="next-steps">
+$(render_next_steps "$steps_outcome")
         </ul>
     </section>
 
     <section>
+        <h2>Audit trail</h2>
+        <p>Provenance for this run, retained alongside the archived report under <code>output/archive/</code>.</p>
+        <div class="grid" id="audit-facts">$(render_audit_facts)</div>
+    </section>
+
+    <section class="no-print">
         <h2>Live console</h2>
-        <p>Raw terminal stream. Scroll inside the panel to read back; it snaps to the newest line unless you scroll up.</p>
-        <iframe src="deployment-$ENVIRONMENT.console.html" title="Complete deployment console" scrolling="no"></iframe>
+        <p>Raw terminal stream, last 400 lines. Scroll inside the panel to read back; it snaps to the newest line unless you scroll up.</p>
+        <div class="console-panel" id="console-panel"><div id="console-lines">$(render_console_lines)</div></div>
     </section>
 
     <section>
-        <h2>Diagnostics</h2>
+        <h2>Report</h2>
+        <p class="print-only">Raw console output is excluded from this PDF. See the diagnostics files listed below.</p>
+        <div class="actions no-print">
+            <button type="button" class="pdf" id="pdf-button">Generate PDF</button>
+            <span class="hint">Opens your browser's print dialog &mdash; choose <strong>Save as PDF</strong>. Always reflects the latest data on screen.</span>
+        </div>
         <p>Azure CLI log: <a href="deployment-$ENVIRONMENT.log"><code>deployment-$ENVIRONMENT.log</code></a></p>
         <p>State manifest: <a href="deployment-$ENVIRONMENT.json"><code>deployment-$ENVIRONMENT.json</code></a></p>
         <p>Console stream: <a href="deployment-$ENVIRONMENT.console.html"><code>deployment-$ENVIRONMENT.console.html</code></a></p>
-        <p>$( [[ "$final" == true ]] && printf 'Live auto-refresh has stopped; this is the final report for the run.' || printf 'This page auto-refreshes every 3 seconds while the run is active and keeps your scroll position.' )</p>
+        <p id="live-note">$( [[ "$final" == true ]] && printf 'This is the final report for the run; live updates have stopped.' || printf 'This page updates itself in place every 2 seconds. It never reloads, so your scroll position and the PDF button stay put.' )</p>
     </section>
+
+    <footer>
+        <p class="disclaimer"><strong>USE AT YOUR OWN RISK.</strong> $(html_escape "$(project_meta disclaimer 'Provided as-is, without warranty of any kind.')")</p>
+        <p>$(html_escape "$(project_meta name 'Ninja Paws Cloud Security Dojo')") v$(html_escape "$APP_VERSION") &middot; $(html_escape "$(project_meta copyright 'Copyright (c) Ninja Paws')") &middot; Licensed under $(html_escape "$(project_meta license MIT)")</p>
+        <p>Author: $(html_escape "$(project_meta author 'Ninja Paws')") &middot; <a href="$(html_escape "$(project_meta repository '')")">Source repository</a> &middot; <a href="$(html_escape "$(project_meta support '')")">Report an issue</a></p>
+        <p>Report generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by <code>scripts/deploy.sh</code> &middot; run <code>$(html_escape "$RUN_ID")</code> &middot; commit <code>$(html_escape "${GIT_COMMIT:0:12}")</code></p>
+        <p class="print-only">This document is a point-in-time snapshot. Verify against the live environment before relying on it for audit evidence.</p>
+    </footer>
 </main>
 <script>
 (function () {
-    var KEY = 'np-report-scroll-$ENVIRONMENT';
-    var store = null;
-    try { store = window.sessionStorage; store.getItem(KEY); } catch (error) { store = null; }
+    var ENV = '$ENVIRONMENT';
+    var POLL_MS = 2000;
+    var finished = $final;
 
-    // Reloading to pick up new output must not throw the reader back to the top.
-    if (store) {
-        var saved = store.getItem(KEY);
-        if (saved !== null) { window.scrollTo(0, parseInt(saved, 10)); }
-        window.addEventListener('scroll', function () {
-            store.setItem(KEY, String(window.scrollY));
-        }, { passive: true });
+    function byId(id) { return document.getElementById(id); }
+    function setHtml(id, html) {
+        var el = byId(id);
+        if (el && typeof html === 'string' && el.innerHTML !== html) { el.innerHTML = html; }
+    }
+    function setText(id, text) {
+        var el = byId(id);
+        if (el && typeof text === 'string' && el.textContent !== text) { el.textContent = text; }
     }
 
-$refresh
+    function humanise(seconds) {
+        var minutes = Math.floor(seconds / 60);
+        var rest = seconds % 60;
+        return minutes + 'm ' + (rest < 10 ? '0' : '') + rest + 's';
+    }
+    function tickDurations() {
+        var now = Math.floor(Date.now() / 1000);
+        var timers = document.querySelectorAll('[data-since]');
+        for (var i = 0; i < timers.length; i++) {
+            var since = parseInt(timers[i].getAttribute('data-since'), 10);
+            if (since > 0) { timers[i].textContent = humanise(Math.max(0, now - since)); }
+        }
+    }
+    window.setInterval(tickDurations, 1000);
+
+    // Keep the console pinned to the newest line unless the reader scrolled up.
+    var panel = byId('console-panel');
+    var pinned = true;
+    if (panel) {
+        panel.addEventListener('scroll', function () {
+            pinned = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
+        }, { passive: true });
+        panel.scrollTop = panel.scrollHeight;
+    }
+
+    window.npReport = function (state) {
+        setHtml('headline', state.headline);
+        setHtml('verdict-note', state.verdictNote);
+        var pill = byId('verdict-pill');
+        if (pill) {
+            pill.className = 'pill ' + state.verdictClass + ' verdict';
+            pill.textContent = state.verdict;
+        }
+        var fill = byId('progress-fill');
+        if (fill) { fill.style.width = state.percent + '%'; }
+        setText('progress-percent', state.percent + '%');
+        setText('phase-name', state.phase);
+        setText('phase-detail', state.detail);
+        setHtml('summary-counts', state.summaryHtml);
+        setHtml('task-list', state.tasksHtml);
+        setHtml('check-rows', state.checksHtml);
+        setHtml('env-links', state.linksHtml);
+        setHtml('run-facts', state.factsHtml);
+        setHtml('audit-facts', state.auditHtml);
+        setHtml('next-steps', state.stepsHtml);
+
+        if (panel) {
+            var lines = byId('console-lines');
+            if (lines && lines.innerHTML !== state.consoleHtml) {
+                lines.innerHTML = state.consoleHtml;
+                if (pinned) { panel.scrollTop = panel.scrollHeight; }
+            }
+        }
+
+        var elapsed = byId('total-elapsed');
+        if (elapsed && !state.final) { elapsed.setAttribute('data-since', String(state.runStartedAt)); }
+        tickDurations();
+
+        if (state.final && !finished) {
+            finished = true;
+            var badge = byId('refresh-badge');
+            if (badge) { badge.parentNode.removeChild(badge); }
+            if (elapsed) { elapsed.removeAttribute('data-since'); elapsed.textContent = humanise(state.elapsed); }
+            setText('live-note', 'This is the final report for the run; live updates have stopped.');
+        }
+    };
+
+    function poll() {
+        if (finished) { return; }
+        var s = document.createElement('script');
+        s.src = 'deployment-' + ENV + '.state.js?t=' + Date.now();
+        s.onload = s.onerror = function () {
+            if (s.parentNode) { s.parentNode.removeChild(s); }
+            window.setTimeout(poll, POLL_MS);
+        };
+        document.body.appendChild(s);
+    }
+    if (!finished) { window.setTimeout(poll, POLL_MS); }
+
+    var badge = byId('refresh-badge');
+    if (badge && !finished) {
+        var remaining = POLL_MS / 1000;
+        window.setInterval(function () {
+            remaining = remaining > 0 ? remaining - 1 : POLL_MS / 1000;
+            badge.textContent = 'Live \u00b7 updating';
+        }, 1000);
+    }
+
+    var pdf = byId('pdf-button');
+    if (pdf) { pdf.addEventListener('click', function () { window.print(); }); }
 })();
 </script>
 </body>
 </html>
 EOF
+        publish_atomically "$report_tmp" "$STATUS_HTML"
+        write_state_js "$phase" "$percent" "$detail" "$final" "$verdict" "$verdict_class" "$headline" "$verdict_note" "$build_badge" "$steps_outcome"
 }
 
 write_state() {
@@ -1003,22 +1407,24 @@ resolve_settings() {
     fi
 
     case "$ENVIRONMENT" in
-        dev)
-            LOCATION="${LOCATION:-centralus}"
-            RESOURCE_GROUP="${RESOURCE_GROUP:-NP-ninjapaws-dojo-Dev-CentralUS}"
-            REGISTRY_NAME="${REGISTRY_NAME:-ninjapawsdojodev}"
-            APP_SERVICE_NAME="${APP_SERVICE_NAME:-ninjapaws-dojo-app-dev}"
-            ;;
-        prod)
-            LOCATION="${LOCATION:-centralus}"
-            RESOURCE_GROUP="${RESOURCE_GROUP:-NP-ninjapaws-dojo-CentralUS}"
-            REGISTRY_NAME="${REGISTRY_NAME:-ninjapawsdojo}"
-            APP_SERVICE_NAME="${APP_SERVICE_NAME:-ninjapaws-dojo-app}"
-            ;;
-        *)
-            fail "--environment must be dev, prod, or auto."
-            ;;
+        dev|prod) ;;
+        *) fail "--environment must be dev, prod, or auto." ;;
     esac
+    LOCATION="${LOCATION:-$(config_setting location centralus)}"
+    RESOURCE_GROUP="${RESOURCE_GROUP:-$(config_setting resourceGroup "")}"
+    REGISTRY_NAME="${REGISTRY_NAME:-$(config_setting registryName "")}"
+    APP_SERVICE_NAME="${APP_SERVICE_NAME:-$(config_setting appServiceName "")}"
+    IMAGE_NAME="${IMAGE_NAME:-$(config_setting imageName ninjapaws-dojo)}"
+    BASE_OS_IMAGE="${BASE_OS_IMAGE:-$(config_setting baseOsImage ubuntu)}"
+    BASE_OS_VERSION="${BASE_OS_VERSION:-$(config_setting baseOsVersion 24.04)}"
+    NGINX_VERSION="${NGINX_VERSION:-$(config_setting nginxVersion 1.30.3)}"
+    NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-$(config_setting nodeMajorVersion 20)}"
+    VULNERABILITY_STATUS="${VULNERABILITY_STATUS:-$(config_setting vulnerabilityStatus vulnerable)}"
+    PORT="${PORT:-$(config_setting port 3000)}"
+    DEFENDER_ENABLED="${DEFENDER_ENABLED:-$(config_setting defenderEnabled false)}"
+    [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
+    [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
+    [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
 
     if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
         LOCATION="$(prompt_default 'Azure region' "$LOCATION")"
@@ -1034,11 +1440,14 @@ resolve_settings() {
     if [[ -d "$OUTPUT_DIR" ]]; then
         if [[ "$ARCHIVE_OUTPUTS" == true ]]; then
             archive_dir="$output_base/archive/$(date -u +%Y%m%dT%H%M%SZ)-$ENVIRONMENT"
-            mkdir -p "$output_base/archive"
-            if ! mv "$OUTPUT_DIR" "$archive_dir" 2>/dev/null; then
-                OUTPUT_DIR="$output_base/$ENVIRONMENT/$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
-                echo -e "${YELLOW}Previous output is locked; using fresh run directory: $OUTPUT_DIR${NC}"
-            fi
+            mkdir -p "$archive_dir"
+            cp -a "$OUTPUT_DIR/." "$archive_dir/" 2>/dev/null || true
+            # Copy rather than move: an open browser tab must never see the report path disappear.
+            find "$OUTPUT_DIR" -maxdepth 1 -type f \
+                ! -name "deployment-$ENVIRONMENT.html" \
+                ! -name "deployment-$ENVIRONMENT.console.html" \
+                ! -name "deployment-$ENVIRONMENT.state.js" \
+                -delete 2>/dev/null || true
         else
             rm -rf "$OUTPUT_DIR"
         fi
@@ -1046,6 +1455,7 @@ resolve_settings() {
     mkdir -p "$OUTPUT_DIR"
     rm -f "$REPO_ROOT/deployment-output.json"
     STATE_FILE="$OUTPUT_DIR/deployment-$ENVIRONMENT.json"
+    STATE_JS="$OUTPUT_DIR/deployment-$ENVIRONMENT.state.js"
     [[ "${NO_STATUS_HTML:-false}" == true ]] || STATUS_HTML="$OUTPUT_DIR/deployment-$ENVIRONMENT.html"
     STATUS_CONSOLE="$OUTPUT_DIR/deployment-$ENVIRONMENT.console.html"
     STATUS_RAW_CONSOLE="$OUTPUT_DIR/.deployment-$ENVIRONMENT.console.raw"
@@ -1111,7 +1521,10 @@ print_plan() {
     echo "Image: $IMAGE_NAME:$IMAGE_TAG"
     echo "Bicep: $REPO_ROOT/infra/main.bicep"
     echo "State: $STATE_FILE"
-    [[ -n "$STATUS_HTML" ]] && echo "Live status: $STATUS_HTML"
+    if [[ -n "$STATUS_HTML" ]]; then
+        echo "Live report: $(report_url "$STATUS_HTML")"
+    fi
+    return 0
 }
 
 run_bicep_deployment() {
@@ -1256,6 +1669,7 @@ acr_alias_tag() {
 
 build_image() {
     local registry_login existing_digest tag aliased=0
+    local build_log build_pid build_elapsed build_lines build_tail build_percent build_started
     set_task fingerprint in_progress "Hashing the build context and build arguments."
     registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv)" || fail "ACR '$ACR_NAME' was not found. Run provision first."
 
@@ -1287,6 +1701,7 @@ build_image() {
         IMAGE_DIGEST="$existing_digest"
         echo -e "${GREEN}Identical image content already in ACR ($IMAGE_DIGEST). Skipping the build.${NC}"
         for tag in "$IMAGE_TAG" latest "$VULNERABILITY_STATUS"; do
+            write_status_html building running "$(auto_percent 50)" "Checking whether tag $tag already points at $IMAGE_DIGEST."
             if [[ "$(acr_tag_digest "$tag")" != "$IMAGE_DIGEST" ]]; then
                 acr_alias_tag "$IMAGE_DIGEST" "$tag" "$registry_login" || fail "Could not alias tag '$tag' to digest $IMAGE_DIGEST. Re-run with --force-rebuild."
                 echo "  aliased $IMAGE_NAME:$tag -> $IMAGE_DIGEST"
@@ -1304,6 +1719,9 @@ build_image() {
     set_task image in_progress "Running a remote ACR build for $IMAGE_NAME:$IMAGE_TAG."
     echo -e "${YELLOW}Building and pushing $registry_login/$IMAGE_NAME:$IMAGE_TAG...${NC}"
     write_status_html building running "$(auto_percent 10)" "Building and pushing the versioned, latest, fingerprint, and training-status images to ACR."
+    build_log="$OUTPUT_DIR/acr-build-$ENVIRONMENT.log"
+    : > "$build_log"
+    build_started="$(date +%s)"
     az acr build \
         --registry "$ACR_NAME" \
         --image "$IMAGE_NAME:$IMAGE_TAG" \
@@ -1317,7 +1735,27 @@ build_image() {
         --build-arg "VULNERABILITY_STATUS=$VULNERABILITY_STATUS" \
         --build-arg "PORT=$PORT" \
         --build-arg "DEFENDER_ENABLED=$DEFENDER_ENABLED" \
-        "$AZURE_REPO_ROOT"
+        "$AZURE_REPO_ROOT" > "$build_log" 2>&1 &
+    build_pid=$!
+
+    # The remote build is silent for minutes; heartbeat so the report keeps moving.
+    while kill -0 "$build_pid" 2>/dev/null; do
+        build_elapsed=$(( $(date +%s) - build_started ))
+        build_lines="$(wc -l < "$build_log" 2>/dev/null || printf '0')"
+        build_tail="$(tail -n 1 "$build_log" 2>/dev/null || true)"
+        build_percent=$((build_elapsed * 100 / 180))
+        ((build_percent > 95)) && build_percent=95
+        printf '[%3s%%] acr build running %ss (%s log lines)\n' "$build_percent" "$build_elapsed" "$build_lines"
+        write_status_html building running "$(auto_percent "$build_percent")" "ACR build running for ${build_elapsed}s; ${build_lines} log lines. Latest: ${build_tail:-waiting for the build agent}"
+        sleep 5
+    done
+    if ! wait "$build_pid"; then
+        FAILURE_MESSAGE="The ACR build for $IMAGE_NAME:$IMAGE_TAG failed. Full output is in acr-build-$ENVIRONMENT.log."
+        echo -e "${RED}ACR build failed. Full output:${NC}"
+        cat "$build_log"
+        fail "$FAILURE_MESSAGE"
+    fi
+    cat "$build_log"
     IMAGE_DIGEST="$(acr_tag_digest "$IMAGE_TAG")"
     record_check "Container image is present in the registry" pass "Built and pushed $IMAGE_NAME with tags $IMAGE_TAG, latest, $FINGERPRINT_TAG, $VULNERABILITY_STATUS (digest ${IMAGE_DIGEST:-unresolved})."
     set_task image success "Pushed $IMAGE_NAME:$IMAGE_TAG plus latest, $FINGERPRINT_TAG, and $VULNERABILITY_STATUS (digest ${IMAGE_DIGEST:-unknown})."
@@ -1327,7 +1765,7 @@ build_image() {
 
 rollout_image() {
     local registry_login identity_client_id image_reference configured_image health_code app_host
-    local attempt=0 max_attempts=18
+    local previous_container
     set_task appconfig in_progress "Comparing the live App Service configuration against the target image."
     registry_login="$(az acr show --resource-group "$RESOURCE_GROUP" --name "$ACR_NAME" --query loginServer -o tsv)"
     az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$IMAGE_TAG" --output none || fail "Image '$IMAGE_NAME:$IMAGE_TAG' is not present in ACR."
@@ -1370,22 +1808,14 @@ rollout_image() {
 
     set_task restart in_progress "Restarting App Service and waiting for the new container to answer."
     write_status_html deploying running "$(auto_percent 20)" "Restarting App Service and waiting for the container to warm up."
+    previous_container="$(status_field host "$(fetch_app_status "$app_host")")"
     az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_SERVICE_NAME" --output none
-    while ((attempt < max_attempts)); do
-        attempt=$((attempt + 1))
-        health_code="$(http_probe "https://$app_host/health")"
-        health_code="${health_code%% *}"
-        [[ "$health_code" == 200 ]] && break
-        echo "  waiting for container start (attempt $attempt/$max_attempts, last HTTP $health_code)"
-        write_status_html deploying running "$(auto_percent $((attempt * 90 / max_attempts)))" "Waiting for the container to answer /health (attempt $attempt of $max_attempts, last HTTP $health_code)."
-        sleep 10
-    done
-    if [[ "$health_code" == 200 ]]; then
-        record_check "App Service restart was required" pass "Restarted and the container answered /health with HTTP 200 after $attempt attempt(s)."
-        set_task restart success "Container is serving traffic; /health returned HTTP 200 after $attempt attempt(s)."
+    if wait_for_app_ready "$app_host" "$previous_container"; then
+        record_check "App Service restart was required" pass "Restarted and container ${APP_CONTAINER_ID:-unknown} answered /health and /api/status with the expected build after $APP_READY_ATTEMPTS attempt(s)."
+        set_task restart success "New container ${APP_CONTAINER_ID:-unknown} is serving traffic and reporting NGINX $NGINX_VERSION / $VULNERABILITY_STATUS after $APP_READY_ATTEMPTS attempt(s)."
     else
-        record_check "App Service restart was required" fail "Restarted but /health still returned HTTP $health_code after $attempt attempt(s). The container is not starting."
-        set_task restart failure "The container did not answer /health within $max_attempts attempts; last response was HTTP $health_code."
+        record_check "App Service restart was required" fail "Restarted but the container never served the expected build; last health response was HTTP ${HEALTH_HTTP_CODE:-000} after $APP_READY_ATTEMPTS attempt(s)."
+        set_task restart failure "The container did not serve the expected build within $APP_READY_ATTEMPTS attempts; last health response was HTTP ${HEALTH_HTTP_CODE:-000}."
         FAILURE_MESSAGE="App Service '$APP_SERVICE_NAME' restarted but never became healthy. Check the container logs with: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME"
         write_state rolled-out failure "Container did not become healthy"
         fail "$FAILURE_MESSAGE"
@@ -1398,9 +1828,48 @@ http_probe() {
     curl -o /dev/null -sS -w '%{http_code} %{time_total}' --max-time 30 "$1" 2>/dev/null || printf '000 0'
 }
 
+fetch_app_status() {
+    curl -fsS --max-time 20 "https://$1/api/status" 2>/dev/null || true
+}
+
+status_field() {
+    printf '%s' "${2:-}" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"
+}
+
+# A restart keeps the outgoing container answering for a few seconds, so "healthy" alone proves
+# nothing. Wait until a *different* container reports the build we just published.
+wait_for_app_ready() {
+    local host="$1" previous_container="${2:-}" max_attempts="${3:-24}"
+    local attempt=0 body container probe
+    APP_READY_ATTEMPTS=0
+    APP_CONTAINER_ID=""
+    while ((attempt < max_attempts)); do
+        attempt=$((attempt + 1))
+        APP_READY_ATTEMPTS="$attempt"
+        probe="$(http_probe "https://$host/health")"
+        HEALTH_HTTP_CODE="${probe%% *}"
+        if [[ "$HEALTH_HTTP_CODE" == 200 ]]; then
+            body="$(fetch_app_status "$host")"
+            container="$(status_field host "$body")"
+            if [[ -n "$body" \
+                && "$body" == *"\"$NGINX_VERSION\""* \
+                && "$body" == *"\"$VULNERABILITY_STATUS\""* \
+                && ( -z "$previous_container" || "$container" != "$previous_container" ) ]]; then
+                APP_CONTAINER_ID="$container"
+                APP_STATUS_BODY="$body"
+                return 0
+            fi
+        fi
+        echo "  waiting for the new container (attempt $attempt/$max_attempts, health HTTP $HEALTH_HTTP_CODE, container ${container:-none})"
+        write_status_html deploying running "$(auto_percent $((attempt * 90 / max_attempts)))" "Waiting for the replacement container to serve the new image (attempt $attempt of $max_attempts, health HTTP $HEALTH_HTTP_CODE)."
+        sleep 10
+    done
+    return 1
+}
+
 verify() {
     local app_host registry_login configured_image expected_image identity_name identity_principal role_count
-    local status_json probe fingerprint_digest failures=0
+    local status_json probe fingerprint_digest settle_attempts failures=0
     set_task verify in_progress "Running the Azure configuration, identity, and endpoint verification matrix."
     write_status_html verifying running "$(auto_percent 10)" "Checking image configuration, ACR pull permissions, and application endpoints."
 
@@ -1474,19 +1943,31 @@ verify() {
     if [[ -z "$APP_URL" ]]; then
         record_check "Public site responds over HTTPS" not_applicable "No public hostname is available yet."
         record_check "Health endpoint responds over HTTPS" not_applicable "No public hostname is available yet."
+        record_check "Runtime status API is serving JSON" not_applicable "No public hostname is available yet."
         record_check "Runtime reports the expected NGINX version" not_applicable "No public hostname is available yet."
         record_check "Runtime reports the expected training status" not_applicable "No public hostname is available yet."
     else
+        # A container that is still swapping answers 502 for a few seconds; retry before judging it.
+        settle_attempts=0
+        while ((settle_attempts < 12)); do
+            settle_attempts=$((settle_attempts + 1))
+            probe="$(http_probe "$APP_URL/health")"
+            [[ "${probe%% *}" == 200 ]] && break
+            echo "  endpoint not ready yet (attempt $settle_attempts/12, HTTP ${probe%% *}); retrying"
+            write_status_html verifying running "$(auto_percent $((settle_attempts * 60 / 12)))" "Waiting for the application to answer before recording endpoint results (attempt $settle_attempts of 12)."
+            sleep 10
+        done
+
         probe="$(http_probe "$APP_URL/")"
         APP_HTTP_CODE="${probe%% *}"
         APP_RESPONSE_TIME="${probe##* }"
         if [[ "$APP_HTTP_CODE" == 200 ]]; then
             record_check "Public site responds over HTTPS" pass "GET $APP_URL/ returned HTTP 200 in ${APP_RESPONSE_TIME}s."
         elif [[ "$APP_HTTP_CODE" == 000 ]]; then
-            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ did not complete (DNS, TLS, or container start failure). The container may still be warming up."
+            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ did not complete after $settle_attempts attempt(s) (DNS, TLS, or container start failure)."
             failures=$((failures + 1))
         else
-            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ returned HTTP $APP_HTTP_CODE."
+            record_check "Public site responds over HTTPS" fail "GET $APP_URL/ returned HTTP $APP_HTTP_CODE after $settle_attempts attempt(s)."
             failures=$((failures + 1))
         fi
 
@@ -1495,11 +1976,11 @@ verify() {
         if [[ "$HEALTH_HTTP_CODE" == 200 ]]; then
             record_check "Health endpoint responds over HTTPS" pass "GET $APP_URL/health returned HTTP 200."
         else
-            record_check "Health endpoint responds over HTTPS" fail "GET $APP_URL/health returned HTTP $HEALTH_HTTP_CODE."
+            record_check "Health endpoint responds over HTTPS" fail "GET $APP_URL/health returned HTTP $HEALTH_HTTP_CODE after $settle_attempts attempt(s)."
             failures=$((failures + 1))
         fi
 
-        status_json="$(curl -fsS --max-time 30 "$APP_URL/api/status" 2>/dev/null || true)"
+        status_json="$(fetch_app_status "${APP_URL#https://}")"
         if [[ -z "$status_json" ]]; then
             record_check "Runtime status API is serving JSON" fail "GET $APP_URL/api/status returned no body; the container is not serving the application."
             failures=$((failures + 1))
@@ -1507,7 +1988,7 @@ verify() {
             record_check "Runtime reports the expected training status" unknown "The status payload was unavailable, so the training status could not be confirmed."
         else
             echo "$status_json"
-            record_check "Runtime status API is serving JSON" pass "GET $APP_URL/api/status returned a payload of ${#status_json} bytes."
+            record_check "Runtime status API is serving JSON" pass "GET $APP_URL/api/status returned a payload of ${#status_json} bytes from container $(status_field host "$status_json")."
             if [[ "$status_json" == *"\"${NGINX_VERSION}\""* ]]; then
                 record_check "Runtime reports the expected NGINX version" pass "Status payload contains the expected NGINX version $NGINX_VERSION."
             else
@@ -1669,6 +2150,7 @@ done
 
 register_lifecycle_tasks
 trap on_exit EXIT
+resolve_audit_context
 resolve_settings
 enforce_branch_environment
 if [[ "$COMMAND" == plan ]]; then

@@ -77,6 +77,10 @@ Each lifecycle run also writes an auto-refreshing HTML status dashboard to `outp
 
 While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as *Not started*, *In progress* (animated spinner), *Success*, *Failure*, *Skipped*, or *Not applicable*, each with its own duration and a one-line detail. A failed stage shows the reason inline.
 
+The page never reloads itself. It polls a small state feed (`deployment-<environment>.state.js`) every 2 seconds and patches the DOM in place, so the progress bar, task list, verification matrix, run facts, next steps, and live console all update without flicker and without losing your scroll position. `fetch()` is blocked on `file://` origins, so the feed is loaded by injecting a `<script>` tag, which `file://` does permit.
+
+A **Generate PDF** button at the bottom renders the report through a dedicated print stylesheet (A4, page-break-safe sections and table rows, repeated table headers, preserved status colours) and opens the browser's print dialog — choose *Save as PDF*. It always reflects whatever is on screen at that moment, so you can take a snapshot mid-run or after completion. The raw console is excluded from the PDF to keep it to the executive content.
+
 The task list is built dynamically from the command you ran, so it always reflects the real work:
 
 | Command | Tasks after preflight and planning |
