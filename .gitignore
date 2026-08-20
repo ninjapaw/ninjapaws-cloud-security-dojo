@@ -25,10 +25,9 @@ Thumbs.db
 dist/
 build/
 
-# Generated deployment outputs
-.azure/*
-!.azure/
-!.azure/deployment-plan.md
+# Local deployment metadata and dev-container configuration
+.azure/
+.devcontainer/
 output/
 
 # Docker
