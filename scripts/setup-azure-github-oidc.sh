@@ -260,6 +260,7 @@ gh variable set DEFENDER_TARGET_CVE --env "$environment_name" --repo "$repositor
 gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
 gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
 gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_ARM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
 gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body 'true'
 gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body 'true'
 gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body 'true'

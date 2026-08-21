@@ -33,7 +33,8 @@
       "plans": {
         "AppServices": "Standard",
         "Containers": "Standard",
-        "CloudPosture": "Standard"
+        "CloudPosture": "Standard",
+        "Arm": "Standard"
       },
       "cspmExtensions": {
         "AgentlessServerlessPosture": "true",

@@ -54,11 +54,13 @@ function getDefenderMonitoring() {
     plans: {
       defender_for_app_service: process.env.DEFENDER_APPSERVICES_TIER || 'unknown',
       defender_for_containers: process.env.DEFENDER_CONTAINERS_TIER || 'unknown',
-      defender_cspm: process.env.DEFENDER_CSPM_TIER || 'unknown'
+      defender_cspm: process.env.DEFENDER_CSPM_TIER || 'unknown',
+      defender_for_resource_manager: process.env.DEFENDER_ARM_TIER || 'unknown'
     },
     monitoring: {
       defender_dashboard_flag: isEnabled('DEFENDER_ENABLED'),
       app_service_threat_protection: isTier('DEFENDER_APPSERVICES_TIER', 'Standard'),
+      resource_manager_threat_detection: isTier('DEFENDER_ARM_TIER', 'Standard'),
       container_registry_vulnerability_assessment: isEnabled('DEFENDER_REGISTRY_ASSESSMENT'),
       cspm_serverless_protection: isEnabled('DEFENDER_SERVERLESS_PROTECTION'),
       cspm_serverless_containers: isEnabled('DEFENDER_SERVERLESS_CONTAINERS'),
@@ -386,6 +388,7 @@ app.get('/', (req, res) => {
       <h3>Defender for Cloud Monitoring</h3>
       <ul class="endpoint-list">
         ${monitoringRow('app_service_threat_protection', defenderMonitoring.monitoring.app_service_threat_protection)}
+        ${monitoringRow('resource_manager_threat_detection', defenderMonitoring.monitoring.resource_manager_threat_detection)}
         ${monitoringRow('container_registry_vulnerability_assessment', defenderMonitoring.monitoring.container_registry_vulnerability_assessment)}
         ${monitoringRow('cspm_serverless_protection', defenderMonitoring.monitoring.cspm_serverless_protection)}
         ${monitoringRow('cspm_serverless_containers', defenderMonitoring.monitoring.cspm_serverless_containers)}
