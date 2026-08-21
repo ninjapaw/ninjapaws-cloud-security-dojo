@@ -85,7 +85,30 @@ jobs:
             VULNERABILITY_STATUS \
             NODE_MAJOR_VERSION \
             PORT \
-            DEFENDER_ENABLED; do
+            DEFENDER_ENABLED \
+            DEFENDER_SCAN_ENABLED \
+            DEFENDER_MANAGE_PLANS \
+            DEFENDER_TARGET_CVE \
+            DEFENDER_APPSERVICES_TIER \
+            DEFENDER_CONTAINERS_TIER \
+            DEFENDER_CSPM_TIER \
+            DEFENDER_MANAGE_EXTENSIONS \
+            DEFENDER_CSPM_SERVERLESS_PROTECTION \
+            DEFENDER_CSPM_SERVERLESS_CONTAINERS \
+            DEFENDER_CSPM_REGISTRY_ASSESSMENT \
+            DEFENDER_CSPM_KUBERNETES_DISCOVERY \
+            DEFENDER_CSPM_VM_SCANNING \
+            DEFENDER_CSPM_SENSITIVE_DATA \
+            DEFENDER_CSPM_PERMISSIONS_MANAGEMENT \
+            DEFENDER_CSPM_API_POSTURE \
+            DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT \
+            DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY \
+            DEFENDER_CONTAINERS_VM_SCANNING \
+            DEFENDER_CONTAINERS_SENSOR \
+            DEFENDER_DEVOPS_CONNECTOR_ENABLED \
+            DEFENDER_DEVOPS_CONNECTOR_NAME \
+            DEFENDER_DEVOPS_GITHUB_OWNER \
+            GITHUB_ADVANCED_SECURITY_EXPECTED; do
             gh variable delete "$variable_name" --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true
           done
           # Remove the legacy secret form as well as the managed variable form.

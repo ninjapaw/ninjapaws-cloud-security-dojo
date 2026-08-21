@@ -47,6 +47,25 @@ The direct application listens on `http://localhost:3000`.
 | `/health` | Lightweight JSON health probe | Public application route; used by App Service and rollout checks |
 | `/api/status` | JSON CVE metadata, package/config evidence, image host, and runtime state | Public evidence route for the demo |
 
+`/api/status` reports two different classes of truth, and the payload keeps them separate on purpose. `runtime_verification` is proven inside the container by reading the actual NGINX binary, Debian package, and rendered configuration. `defender_monitoring` reports the Defender coverage the deployment **requested**, because the container holds no Azure credentials and cannot query subscription plan state. Each monitoring flag is a plain `true`/`false`, and the block names Defender for Cloud as the authoritative source:
+
+```json
+"defender_monitoring": {
+  "source": "deployment-configuration",
+  "plans": { "defender_for_app_service": "Standard", "defender_for_containers": "Standard", "defender_cspm": "Standard" },
+  "monitoring": {
+    "app_service_threat_protection": true,
+    "container_registry_vulnerability_assessment": true,
+    "cspm_serverless_protection": true,
+    "cspm_serverless_containers": true,
+    "devops_connector_requested": true,
+    "github_advanced_security_expected": true
+  }
+}
+```
+
+The deployment report's verification matrix is where those requests are checked against Azure, so a flag reading `true` here means "configured", while the matrix says whether Azure agrees.
+
 `map` is an internal NGINX configuration directive rendered by `entrypoint.sh` into `/etc/nginx/scenario.conf`. In the affected image it combines regex matching and captures; the detector reports this as `runtime_verification.map_regex_enabled: true`. Inspect that evidence through `/api/status`.
 
 The current production deployment is available at [ninjapaws-dojo-app-prod.azurewebsites.net](https://ninjapaws-dojo-app-prod.azurewebsites.net/). Its [health endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/health) is suitable for probes; its [status endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/api/status) is the authoritative demo evidence surface.
@@ -89,9 +108,47 @@ Defender for Cloud settings live under the `defender` object in `config/deploy.c
 | `defender.targetCve` | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload |
 | `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
 | `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
-| `defender.plans.CloudPosture` | `Free` | Foundational Defender CSPM posture visibility |
+| `defender.plans.CloudPosture` | `Standard` | Defender CSPM: attack paths, cloud security explorer, and the serverless/registry extensions below |
+| `defender.manageExtensions` | `true` | Allows the lifecycle to apply the plan extension sets below |
 
-These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_TARGET_CVE`, `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, and `DEFENDER_CSPM_TIER`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
+`CloudPosture` defaults to `Standard` rather than `Free` because the capabilities this scenario demonstrates — attack path analysis, serverless posture, and registry access for container image posture — are Defender CSPM features. Foundational CSPM (`Free`) provides recommendations and secure score only.
+
+Defender CSPM extensions are applied as one set, because the API replaces the whole collection on every write:
+
+| CSPM extension | Default | Why |
+| --- | --- | --- |
+| `AgentlessServerlessPosture` | `true` | Serverless protection covers App Service and Functions, which is exactly the workload this project deploys |
+| `ServerlessContainers` | `true` | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
+| `ContainerRegistriesVulnerabilityAssessments` | `true` | Registry access, required for full serverless container and image posture |
+| `AgentlessDiscoveryForKubernetes` | `false` | No AKS or Kubernetes workload is deployed |
+| `AgentlessVmScanning` | `false` | No virtual machines are deployed; leaving it off avoids scanning unrelated machines in a shared subscription |
+| `SensitiveDataDiscovery` | `false` | This project stores no data; the extension reads customer data, so it stays opt-in |
+| `EntraPermissionsManagement` | `false` | CIEM has tenant-wide scope beyond this scenario |
+| `ApiPosture` | `false` | No API Management APIs are deployed |
+
+Defender for Containers extensions follow the same pattern:
+
+| Containers extension | Default | Why |
+| --- | --- | --- |
+| `ContainerRegistriesVulnerabilityAssessments` | `true` | This is the registry protection that scans the ACR image and surfaces the target CVE |
+| `AgentlessDiscoveryForKubernetes` | `false` | Not applicable to App Service |
+| `AgentlessVmScanning` | `false` | Applies to Kubernetes node VMs, which are not deployed |
+| `ContainerSensor` | `false` | The runtime threat sensor is an AKS component |
+
+DevOps and code security settings:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `defender.devops.connectorEnabled` | `true` | Creates the Defender for Cloud GitHub connector if the subscription has none |
+| `defender.devops.connectorName` | `ninjapaws-github` | Name of the `Microsoft.Security/securityConnectors` resource |
+| `defender.devops.githubOwner` | `ninjapaw` | GitHub organization reported in the connector guidance |
+| `defender.devops.advancedSecurityExpected` | `true` | Reports GitHub Advanced Security state in the verification matrix |
+
+The lifecycle creates the GitHub connector resource, but **it cannot finish onboarding non-interactively**. Authorizing the connector and installing the DevOps security GitHub application is an interactive consent flow, so the report records the connector as **Not sure** with the remaining manual step rather than claiming coverage it has not proven. Complete it under **Defender for Cloud > Environment settings > Add environment > GitHub**, following [Connect your GitHub environment](https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github). Once authorized, DevOps resources can take up to 8 hours to appear.
+
+GitHub Advanced Security is a GitHub product, not an Azure plan, so the lifecycle reports it rather than enabling it. Code scanning already runs in this repository through the checked-in CodeQL workflow, which is free for public repositories. When a GitHub connector is authorized, Defender for Cloud maps GHAS findings to the running workload and prioritizes them with runtime risk factors such as internet exposure. Private repositories require a GitHub Advanced Security licence.
+
+These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_MANAGE_EXTENSIONS`, `DEFENDER_TARGET_CVE`, `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, `DEFENDER_CSPM_TIER`, `DEFENDER_CSPM_SERVERLESS_PROTECTION`, `DEFENDER_CSPM_SERVERLESS_CONTAINERS`, `DEFENDER_CSPM_REGISTRY_ASSESSMENT`, `DEFENDER_CSPM_KUBERNETES_DISCOVERY`, `DEFENDER_CSPM_VM_SCANNING`, `DEFENDER_CSPM_SENSITIVE_DATA`, `DEFENDER_CSPM_PERMISSIONS_MANAGEMENT`, `DEFENDER_CSPM_API_POSTURE`, `DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT`, `DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY`, `DEFENDER_CONTAINERS_VM_SCANNING`, `DEFENDER_CONTAINERS_SENSOR`, `DEFENDER_DEVOPS_CONNECTOR_ENABLED`, `DEFENDER_DEVOPS_CONNECTOR_NAME`, `DEFENDER_DEVOPS_GITHUB_OWNER`, and `GITHUB_ADVANCED_SECURITY_EXPECTED`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
 
 The lifecycle does **not** automatically deactivate an already-enabled Defender plan when a workload is set to `disabled`; pricing plans apply at subscription scope, so silently turning off protection from an application deployment would be unsafe. The report instead records unrequested plans as **Not applicable** and leaves subscription-wide deactivation to an explicit Defender for Cloud administrator action.
 

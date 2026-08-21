@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "11591800224058233069"
+      "templateHash": "5156187108269862880"
     }
   },
   "parameters": {
@@ -46,6 +46,38 @@
     "defenderEnabled": {
       "type": "bool",
       "defaultValue": false
+    },
+    "defenderAppServicesTier": {
+      "type": "string",
+      "defaultValue": "Standard"
+    },
+    "defenderContainersTier": {
+      "type": "string",
+      "defaultValue": "Standard"
+    },
+    "defenderCspmTier": {
+      "type": "string",
+      "defaultValue": "Standard"
+    },
+    "defenderServerlessProtection": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "defenderServerlessContainers": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "defenderRegistryAssessment": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "defenderDevOpsConnector": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "githubAdvancedSecurity": {
+      "type": "bool",
+      "defaultValue": true
     }
   },
   "resources": [
@@ -147,6 +179,38 @@
             {
               "name": "DEFENDER_ENABLED",
               "value": "[string(parameters('defenderEnabled'))]"
+            },
+            {
+              "name": "DEFENDER_APPSERVICES_TIER",
+              "value": "[parameters('defenderAppServicesTier')]"
+            },
+            {
+              "name": "DEFENDER_CONTAINERS_TIER",
+              "value": "[parameters('defenderContainersTier')]"
+            },
+            {
+              "name": "DEFENDER_CSPM_TIER",
+              "value": "[parameters('defenderCspmTier')]"
+            },
+            {
+              "name": "DEFENDER_SERVERLESS_PROTECTION",
+              "value": "[string(parameters('defenderServerlessProtection'))]"
+            },
+            {
+              "name": "DEFENDER_SERVERLESS_CONTAINERS",
+              "value": "[string(parameters('defenderServerlessContainers'))]"
+            },
+            {
+              "name": "DEFENDER_REGISTRY_ASSESSMENT",
+              "value": "[string(parameters('defenderRegistryAssessment'))]"
+            },
+            {
+              "name": "DEFENDER_DEVOPS_CONNECTOR",
+              "value": "[string(parameters('defenderDevOpsConnector'))]"
+            },
+            {
+              "name": "GITHUB_ADVANCED_SECURITY",
+              "value": "[string(parameters('githubAdvancedSecurity'))]"
             }
           ]
         }

@@ -77,6 +77,25 @@ DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-}"
 DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-}"
 DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-}"
 DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-}"
+DEFENDER_MANAGE_EXTENSIONS="${DEFENDER_MANAGE_EXTENSIONS:-}"
+DEFENDER_CSPM_SERVERLESS_PROTECTION="${DEFENDER_CSPM_SERVERLESS_PROTECTION:-}"
+DEFENDER_CSPM_SERVERLESS_CONTAINERS="${DEFENDER_CSPM_SERVERLESS_CONTAINERS:-}"
+DEFENDER_CSPM_REGISTRY_ASSESSMENT="${DEFENDER_CSPM_REGISTRY_ASSESSMENT:-}"
+DEFENDER_CSPM_KUBERNETES_DISCOVERY="${DEFENDER_CSPM_KUBERNETES_DISCOVERY:-}"
+DEFENDER_CSPM_VM_SCANNING="${DEFENDER_CSPM_VM_SCANNING:-}"
+DEFENDER_CSPM_SENSITIVE_DATA="${DEFENDER_CSPM_SENSITIVE_DATA:-}"
+DEFENDER_CSPM_PERMISSIONS_MANAGEMENT="${DEFENDER_CSPM_PERMISSIONS_MANAGEMENT:-}"
+DEFENDER_CSPM_API_POSTURE="${DEFENDER_CSPM_API_POSTURE:-}"
+DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT="${DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT:-}"
+DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY="${DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY:-}"
+DEFENDER_CONTAINERS_VM_SCANNING="${DEFENDER_CONTAINERS_VM_SCANNING:-}"
+DEFENDER_CONTAINERS_SENSOR="${DEFENDER_CONTAINERS_SENSOR:-}"
+DEFENDER_DEVOPS_CONNECTOR_ENABLED="${DEFENDER_DEVOPS_CONNECTOR_ENABLED:-}"
+DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-}"
+DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-}"
+GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-}"
+DEFENDER_DEVOPS_CONNECTOR_STATE=not_evaluated
+GITHUB_ADVANCED_SECURITY_STATE=not_evaluated
 SCENARIO_NAME=""
 SCENARIO_SHORT_NAME=""
 SCENARIO_CVE=""
@@ -1535,7 +1554,24 @@ resolve_settings() {
     DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-$SCENARIO_CVE}"
     DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-$(config_setting defender.plans.AppServices Standard)}"
     DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-$(config_setting defender.plans.Containers Standard)}"
-    DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-$(config_setting defender.plans.CloudPosture Free)}"
+    DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-$(config_setting defender.plans.CloudPosture Standard)}"
+    DEFENDER_MANAGE_EXTENSIONS="${DEFENDER_MANAGE_EXTENSIONS:-$(config_setting defender.manageExtensions true)}"
+    DEFENDER_CSPM_SERVERLESS_PROTECTION="${DEFENDER_CSPM_SERVERLESS_PROTECTION:-$(config_setting defender.cspmExtensions.AgentlessServerlessPosture true)}"
+    DEFENDER_CSPM_SERVERLESS_CONTAINERS="${DEFENDER_CSPM_SERVERLESS_CONTAINERS:-$(config_setting defender.cspmExtensions.ServerlessContainers true)}"
+    DEFENDER_CSPM_REGISTRY_ASSESSMENT="${DEFENDER_CSPM_REGISTRY_ASSESSMENT:-$(config_setting defender.cspmExtensions.ContainerRegistriesVulnerabilityAssessments true)}"
+    DEFENDER_CSPM_KUBERNETES_DISCOVERY="${DEFENDER_CSPM_KUBERNETES_DISCOVERY:-$(config_setting defender.cspmExtensions.AgentlessDiscoveryForKubernetes false)}"
+    DEFENDER_CSPM_VM_SCANNING="${DEFENDER_CSPM_VM_SCANNING:-$(config_setting defender.cspmExtensions.AgentlessVmScanning false)}"
+    DEFENDER_CSPM_SENSITIVE_DATA="${DEFENDER_CSPM_SENSITIVE_DATA:-$(config_setting defender.cspmExtensions.SensitiveDataDiscovery false)}"
+    DEFENDER_CSPM_PERMISSIONS_MANAGEMENT="${DEFENDER_CSPM_PERMISSIONS_MANAGEMENT:-$(config_setting defender.cspmExtensions.EntraPermissionsManagement false)}"
+    DEFENDER_CSPM_API_POSTURE="${DEFENDER_CSPM_API_POSTURE:-$(config_setting defender.cspmExtensions.ApiPosture false)}"
+    DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT="${DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT:-$(config_setting defender.containersExtensions.ContainerRegistriesVulnerabilityAssessments true)}"
+    DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY="${DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY:-$(config_setting defender.containersExtensions.AgentlessDiscoveryForKubernetes false)}"
+    DEFENDER_CONTAINERS_VM_SCANNING="${DEFENDER_CONTAINERS_VM_SCANNING:-$(config_setting defender.containersExtensions.AgentlessVmScanning false)}"
+    DEFENDER_CONTAINERS_SENSOR="${DEFENDER_CONTAINERS_SENSOR:-$(config_setting defender.containersExtensions.ContainerSensor false)}"
+    DEFENDER_DEVOPS_CONNECTOR_ENABLED="${DEFENDER_DEVOPS_CONNECTOR_ENABLED:-$(config_setting defender.devops.connectorEnabled true)}"
+    DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-$(config_setting defender.devops.connectorName ninjapaws-github)}"
+    DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-$(config_setting defender.devops.githubOwner ninjapaw)}"
+    GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-$(config_setting defender.devops.advancedSecurityExpected true)}"
     [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
     [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
     [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
@@ -1711,6 +1747,14 @@ run_bicep_deployment() {
             vulnerabilityStatus="$VULNERABILITY_STATUS" \
             port="$PORT" \
             defenderEnabled="$DEFENDER_ENABLED" \
+            defenderAppServicesTier="$DEFENDER_APPSERVICES_TIER" \
+            defenderContainersTier="$DEFENDER_CONTAINERS_TIER" \
+            defenderCspmTier="$DEFENDER_CSPM_TIER" \
+            defenderServerlessProtection="$DEFENDER_CSPM_SERVERLESS_PROTECTION" \
+            defenderServerlessContainers="$DEFENDER_CSPM_SERVERLESS_CONTAINERS" \
+            defenderRegistryAssessment="$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" \
+            defenderDevOpsConnector="$DEFENDER_DEVOPS_CONNECTOR_ENABLED" \
+            githubAdvancedSecurity="$GITHUB_ADVANCED_SECURITY_EXPECTED" \
         --output json > "$deployment_output" 2> "$deployment_log" &
     deployment_pid=$!
 
@@ -2042,15 +2086,157 @@ wait_for_app_ready() {
     return 1
 }
 
+# The connector needs a caller-supplied identifier; any stable UUID is accepted.
+generate_uuid() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        printf '%08x-%04x-4%03x-a%03x-%012x\n' \
+            $((RANDOM * RANDOM)) $((RANDOM % 65536)) $((RANDOM % 4096)) \
+            $((RANDOM % 4096)) $((RANDOM * RANDOM * RANDOM))
+    fi
+}
+
 defender_plan_tier() {
     az security pricing show --name "$1" --query pricingTier -o tsv 2>/dev/null || true
 }
 
+# Azure reports extension state as the strings "True"/"False"; normalize for comparison.
+defender_extension_state() {
+    local value
+    value="$(az security pricing show --name "$1" --query "extensions[?name=='$2'].isEnabled | [0]" -o tsv 2>/dev/null || true)"
+    case "$value" in
+        True|true) printf 'true' ;;
+        False|false) printf 'false' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+# Applies every extension for a plan in one call, because the API replaces the whole set.
+apply_plan_extensions() {
+    local plan="$1" tier="$2" spec="$3"
+    local extension desired current drift=0 args=()
+
+    [[ "$tier" == Standard ]] || return 0
+
+    while IFS='=' read -r extension desired; do
+        [[ -n "$extension" ]] || continue
+        if [[ "$desired" == true ]]; then
+            args+=(--extensions "name=$extension" isEnabled=True)
+        else
+            args+=(--extensions "name=$extension" isEnabled=False)
+        fi
+        current="$(defender_extension_state "$plan" "$extension")"
+        [[ "$current" == "$desired" ]] || drift=1
+    done <<<"$spec"
+
+    ((${#args[@]} > 0)) || return 0
+    if [[ "$DEFENDER_MANAGE_EXTENSIONS" != true ]]; then
+        return 2
+    fi
+    ((drift == 1)) || return 0
+    az security pricing create --name "$plan" --tier "$tier" "${args[@]}" --output none 2>/dev/null || return 1
+    return 0
+}
+
+record_extension_checks() {
+    local plan="$1" plan_label="$2" spec="$3"
+    local extension desired current label
+
+    while IFS='|' read -r extension desired label; do
+        [[ -n "$extension" ]] || continue
+        current="$(defender_extension_state "$plan" "$extension")"
+        if [[ "$current" == "$desired" ]]; then
+            if [[ "$desired" == true ]]; then
+                record_check "$plan_label: $label" pass "Azure reports the extension enabled."
+            else
+                record_check "$plan_label: $label" not_applicable "Intentionally disabled; this scenario does not deploy that workload."
+            fi
+        elif [[ "$current" == unknown ]]; then
+            record_check "$plan_label: $label" unknown "Azure did not report a state for this extension. It may be unavailable in this subscription or region."
+        else
+            record_check "$plan_label: $label" unknown "Azure reports '$current' while configuration requests '$desired'."
+        fi
+    done <<<"$spec"
+}
+
+# Creates the ARM connector only; the GitHub App authorization remains a manual portal step.
+ensure_devops_connector() {
+    local existing connector_name connector_state
+
+    if [[ "$DEFENDER_DEVOPS_CONNECTOR_ENABLED" != true ]]; then
+        record_check "Defender for Cloud GitHub DevOps connector" not_applicable "Disabled by configuration (defender.devops.connectorEnabled=$DEFENDER_DEVOPS_CONNECTOR_ENABLED)."
+        return 0
+    fi
+
+    existing="$(az security security-connector list --query "[?environmentName=='Github' || environmentName=='GitHub'].name | [0]" -o tsv 2>/dev/null || true)"
+    if [[ -n "$existing" ]]; then
+        record_check "Defender for Cloud GitHub DevOps connector" pass "Connector '$existing' exists in subscription $SUBSCRIPTION_ID."
+        DEFENDER_DEVOPS_CONNECTOR_STATE=connected
+        return 0
+    fi
+
+    if az security security-connector create \
+        --name "$DEFENDER_DEVOPS_CONNECTOR_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$LOCATION" \
+        --hierarchy-identifier "$(generate_uuid)" \
+        --environment-name GitHub \
+        --environment-data github-scope='{}' \
+        --offerings '[0].cspm-monitor-github={}' \
+        --output none 2>/dev/null; then
+        connector_name="$DEFENDER_DEVOPS_CONNECTOR_NAME"
+        DEFENDER_DEVOPS_CONNECTOR_STATE=authorization_required
+        record_check "Defender for Cloud GitHub DevOps connector" unknown "Created connector '$connector_name' in $RESOURCE_GROUP. Repository discovery stays empty until the DevOps security GitHub app is authorized and installed for the '$DEFENDER_DEVOPS_GITHUB_OWNER' organization; that step is interactive. See https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github."
+    else
+        DEFENDER_DEVOPS_CONNECTOR_STATE=unavailable
+        record_check "Defender for Cloud GitHub DevOps connector" unknown "Could not create the connector automatically. Create it in Defender for Cloud > Environment settings > Add environment > GitHub, then authorize and install the DevOps security GitHub app. See https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github."
+    fi
+}
+
+# GitHub is the source of truth for Advanced Security; report it rather than assume it.
+record_advanced_security_state() {
+    local repository analysis status
+
+    if [[ "$GITHUB_ADVANCED_SECURITY_EXPECTED" != true ]]; then
+        record_check "GitHub Advanced Security code scanning" not_applicable "Not expected by configuration (defender.devops.advancedSecurityExpected=$GITHUB_ADVANCED_SECURITY_EXPECTED)."
+        GITHUB_ADVANCED_SECURITY_STATE=not_expected
+        return 0
+    fi
+
+    repository="$(project_meta repository '')"
+    repository="${repository#https://github.com/}"
+    repository="${repository%.git}"
+    if [[ -z "$repository" ]] || ! command -v gh >/dev/null 2>&1; then
+        GITHUB_ADVANCED_SECURITY_STATE=unknown
+        record_check "GitHub Advanced Security code scanning" unknown "GitHub CLI is unavailable here, so Advanced Security state was not read. CodeQL runs in this repository's validation workflow; confirm scanning under the repository Security tab."
+        return 0
+    fi
+
+    analysis="$(gh api "repos/$repository" --jq '.security_and_analysis.advanced_security.status // "unknown"' 2>/dev/null || printf 'unknown')"
+    case "$analysis" in
+        enabled)
+            GITHUB_ADVANCED_SECURITY_STATE=enabled
+            record_check "GitHub Advanced Security code scanning" pass "GitHub reports Advanced Security enabled for $repository."
+            ;;
+        disabled)
+            GITHUB_ADVANCED_SECURITY_STATE=disabled
+            record_check "GitHub Advanced Security code scanning" unknown "GitHub reports Advanced Security disabled for $repository. Public repositories still get CodeQL through the checked-in workflow."
+            ;;
+        *)
+            GITHUB_ADVANCED_SECURITY_STATE=unknown
+            record_check "GitHub Advanced Security code scanning" unknown "GitHub did not report an Advanced Security state for $repository; the token may lack repository administration scope."
+            ;;
+    esac
+}
+
 run_defender_scan() {
     local appservices_tier containers_tier cspm_tier assessment_json target_found=1 failures=0
-    local plan_name desired_tier current_tier plan_label
+    local plan_name desired_tier current_tier plan_label cspm_spec containers_spec extension_result
     set_task defender in_progress "Activating configured Defender plans and requesting the latest assessment inventory."
-    write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service and Defender for Containers coverage, then scanning for $DEFENDER_TARGET_CVE."
+    write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service, Defender for Containers, and Defender CSPM coverage, then scanning for $DEFENDER_TARGET_CVE."
 
     if [[ "$DEFENDER_SCAN_ENABLED" != true ]]; then
         record_check "Defender for Cloud post-verification scan" not_applicable "Disabled by configuration (defender.scanAfterVerify=$DEFENDER_SCAN_ENABLED)."
@@ -2088,7 +2274,61 @@ Containers|$containers_tier|Defender for Containers
 CloudPosture|$cspm_tier|Defender CSPM
 EOF
 
-    write_status_html defender running "$(auto_percent 55)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
+    write_status_html defender running "$(auto_percent 35)" "Applying Defender CSPM and Defender for Containers extension configuration."
+    cspm_spec="AgentlessServerlessPosture=$DEFENDER_CSPM_SERVERLESS_PROTECTION
+ServerlessContainers=$DEFENDER_CSPM_SERVERLESS_CONTAINERS
+ContainerRegistriesVulnerabilityAssessments=$DEFENDER_CSPM_REGISTRY_ASSESSMENT
+AgentlessDiscoveryForKubernetes=$DEFENDER_CSPM_KUBERNETES_DISCOVERY
+AgentlessVmScanning=$DEFENDER_CSPM_VM_SCANNING
+SensitiveDataDiscovery=$DEFENDER_CSPM_SENSITIVE_DATA
+EntraPermissionsManagement=$DEFENDER_CSPM_PERMISSIONS_MANAGEMENT
+ApiPosture=$DEFENDER_CSPM_API_POSTURE"
+    containers_spec="ContainerRegistriesVulnerabilityAssessments=$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT
+AgentlessDiscoveryForKubernetes=$DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY
+AgentlessVmScanning=$DEFENDER_CONTAINERS_VM_SCANNING
+ContainerSensor=$DEFENDER_CONTAINERS_SENSOR"
+
+    extension_result=0
+    apply_plan_extensions CloudPosture "$cspm_tier" "$cspm_spec" || extension_result=$?
+    if ((extension_result == 1)); then
+        record_check "Defender CSPM extension configuration applied" fail "Azure rejected the Defender CSPM extension update. Check Microsoft.Security/pricings write permission and extension availability."
+        failures=$((failures + 1))
+    fi
+    extension_result=0
+    apply_plan_extensions Containers "$containers_tier" "$containers_spec" || extension_result=$?
+    if ((extension_result == 1)); then
+        record_check "Defender for Containers extension configuration applied" fail "Azure rejected the Defender for Containers extension update. Check Microsoft.Security/pricings write permission and extension availability."
+        failures=$((failures + 1))
+    fi
+
+    if [[ "$cspm_tier" == Standard ]]; then
+        record_extension_checks CloudPosture "Defender CSPM" \
+"AgentlessServerlessPosture|$DEFENDER_CSPM_SERVERLESS_PROTECTION|Serverless protection for App Service and Functions
+ServerlessContainers|$DEFENDER_CSPM_SERVERLESS_CONTAINERS|Serverless container posture for Container Apps and Container Instances
+ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CSPM_REGISTRY_ASSESSMENT|Registry access for container image posture
+AgentlessDiscoveryForKubernetes|$DEFENDER_CSPM_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
+AgentlessVmScanning|$DEFENDER_CSPM_VM_SCANNING|Agentless machine scanning
+SensitiveDataDiscovery|$DEFENDER_CSPM_SENSITIVE_DATA|Sensitive data discovery
+EntraPermissionsManagement|$DEFENDER_CSPM_PERMISSIONS_MANAGEMENT|Cloud infrastructure entitlement management
+ApiPosture|$DEFENDER_CSPM_API_POSTURE|API security posture"
+    else
+        record_check "Defender CSPM extensions" not_applicable "Defender CSPM is not at the Standard tier, so its extensions do not apply."
+    fi
+    if [[ "$containers_tier" == Standard ]]; then
+        record_extension_checks Containers "Defender for Containers" \
+"ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT|Azure Container Registry vulnerability assessment
+AgentlessDiscoveryForKubernetes|$DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
+AgentlessVmScanning|$DEFENDER_CONTAINERS_VM_SCANNING|Agentless scanning for Kubernetes nodes
+ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
+    else
+        record_check "Defender for Containers extensions" not_applicable "Defender for Containers is not at the Standard tier, so its extensions do not apply."
+    fi
+
+    write_status_html defender running "$(auto_percent 50)" "Checking the Defender for Cloud DevOps connector and GitHub Advanced Security state."
+    ensure_devops_connector
+    record_advanced_security_state
+
+    write_status_html defender running "$(auto_percent 65)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
     assessment_json="$(az security assessment list --resource-group "$RESOURCE_GROUP" -o json 2>/dev/null || true)"
     if [[ -z "$assessment_json" ]]; then
         record_check "Defender assessment inventory returned data" unknown "The assessment query returned no payload. Defender may still be initializing, or the account may lack Microsoft.Security/assessments/read."
@@ -2121,11 +2361,11 @@ EOF
         fail "$FAILURE_MESSAGE"
     fi
     if ((target_found != 0)); then
-        set_task defender success "Defender plans and workload coverage were verified; CVE findings remain asynchronous and are recorded as Not sure when absent."
+        set_task defender success "Defender plans, extensions, and workload coverage were verified; CVE findings remain asynchronous and are recorded as Not sure when absent."
     else
-        set_task defender success "Defender plans and workload coverage were verified; $DEFENDER_TARGET_CVE was found in the assessment payload."
+        set_task defender success "Defender plans, extensions, and workload coverage were verified; $DEFENDER_TARGET_CVE was found in the assessment payload."
     fi
-    write_status_html defender success "$(auto_percent)" "Defender for Cloud scan and workload coverage verification completed."
+    write_status_html defender success "$(auto_percent)" "Defender for Cloud scan, extension configuration, and workload coverage verification completed."
 }
 
 verify() {

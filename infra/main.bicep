@@ -8,6 +8,14 @@ param nginxVersion string = '1.30.3'
 param vulnerabilityStatus string = 'vulnerable'
 param port int = 3000
 param defenderEnabled bool = false
+param defenderAppServicesTier string = 'Standard'
+param defenderContainersTier string = 'Standard'
+param defenderCspmTier string = 'Standard'
+param defenderServerlessProtection bool = true
+param defenderServerlessContainers bool = true
+param defenderRegistryAssessment bool = true
+param defenderDevOpsConnector bool = true
+param githubAdvancedSecurity bool = true
 
 // Azure Container Registry
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -102,6 +110,38 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
         {
           name: 'DEFENDER_ENABLED'
           value: string(defenderEnabled)
+        }
+        {
+          name: 'DEFENDER_APPSERVICES_TIER'
+          value: defenderAppServicesTier
+        }
+        {
+          name: 'DEFENDER_CONTAINERS_TIER'
+          value: defenderContainersTier
+        }
+        {
+          name: 'DEFENDER_CSPM_TIER'
+          value: defenderCspmTier
+        }
+        {
+          name: 'DEFENDER_SERVERLESS_PROTECTION'
+          value: string(defenderServerlessProtection)
+        }
+        {
+          name: 'DEFENDER_SERVERLESS_CONTAINERS'
+          value: string(defenderServerlessContainers)
+        }
+        {
+          name: 'DEFENDER_REGISTRY_ASSESSMENT'
+          value: string(defenderRegistryAssessment)
+        }
+        {
+          name: 'DEFENDER_DEVOPS_CONNECTOR'
+          value: string(defenderDevOpsConnector)
+        }
+        {
+          name: 'GITHUB_ADVANCED_SECURITY'
+          value: string(githubAdvancedSecurity)
         }
       ]
     }

@@ -142,6 +142,19 @@ file_contains "$REPO_ROOT/entrypoint.sh" 'scenario_config_state'
 file_contains "$REPO_ROOT/entrypoint.sh" 'map_regex_enabled'
 file_contains "$REPO_ROOT/README.md" 'map` is an internal NGINX configuration directive'
 file_contains "$REPO_ROOT/DEMO.md" 'The CVE-relevant `map` is an internal NGINX directive'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"CloudPosture": "Standard"'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"AgentlessServerlessPosture": "true"'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"ServerlessContainers": "true"'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"connectorEnabled": "true"'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'apply_plan_extensions'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'ensure_devops_connector'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'record_advanced_security_state'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'cspm-monitor-github'
+file_contains "$REPO_ROOT/app.js" 'defender_monitoring'
+file_contains "$REPO_ROOT/app.js" 'cspm_serverless_protection'
+file_contains "$REPO_ROOT/app.js" 'container_registry_vulnerability_assessment'
+file_contains "$REPO_ROOT/infra/main.bicep" 'defenderCspmTier'
+file_contains "$REPO_ROOT/infra/main.bicep" 'DEFENDER_SERVERLESS_PROTECTION'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Scenario 1 vulnerable map/regex configuration'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Select a region by number or name'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure subscriptions available to this account:'
@@ -178,11 +191,25 @@ if [[ "$SKIP_REPORT" == false ]]; then
     test ! -e "$REPO_ROOT/deployment-output.json"
     test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
 fi
-if bash "$REPO_ROOT/scripts/deploy.sh" provision --environment prod --defaults --yes >/dev/null 2>&1; then
-    echo "ERROR: dev branch was allowed to target prod." >&2
-    exit 1
+# The guard must refuse whichever environment does not belong to the current branch.
+case "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" in
+    dev) guard_environment=prod ;;
+    main) guard_environment=dev ;;
+    *) guard_environment='' ;;
+esac
+if [[ -n "$guard_environment" ]]; then
+    echo "Checking branch environment guard..."
+    guard_config="$(mktemp -d)"
+    # An empty Azure config keeps a regressed guard from reaching a real subscription.
+    guard_output="$(AZURE_CONFIG_DIR="$guard_config" bash "$REPO_ROOT/scripts/deploy.sh" provision --environment "$guard_environment" --defaults --yes 2>&1 || true)"
+    rm -rf "$guard_config"
+    if [[ "$guard_output" != *"can only target environment"* ]]; then
+        echo "ERROR: the branch guard did not refuse environment '$guard_environment'." >&2
+        printf '%s\n' "$guard_output" >&2
+        exit 1
+    fi
 fi
-for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT NPM_REGISTRY_URL NPM_USE_MIRROR NPM_NETWORK_MODE DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER; do
+for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT NPM_REGISTRY_URL NPM_USE_MIRROR NPM_NETWORK_MODE DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER DEFENDER_MANAGE_EXTENSIONS DEFENDER_CSPM_SERVERLESS_PROTECTION DEFENDER_CSPM_SERVERLESS_CONTAINERS DEFENDER_CSPM_REGISTRY_ASSESSMENT DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT DEFENDER_DEVOPS_CONNECTOR_ENABLED GITHUB_ADVANCED_SECURITY_EXPECTED; do
     file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" "gh variable set $variable_name"
     file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "$variable_name"
 done

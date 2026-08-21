@@ -259,7 +259,24 @@ gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$reposit
 gh variable set DEFENDER_TARGET_CVE --env "$environment_name" --repo "$repository" --body 'CVE-2026-42533'
 gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
 gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
-gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Free'
+gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_SENSITIVE_DATA --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_PERMISSIONS_MANAGEMENT --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_API_POSTURE --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_DEVOPS_CONNECTOR_NAME --env "$environment_name" --repo "$repository" --body "ninjapaws-github-$environment_name"
+gh variable set DEFENDER_DEVOPS_GITHUB_OWNER --env "$environment_name" --repo "$repository" --body "${repository%%/*}"
+gh variable set GITHUB_ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 

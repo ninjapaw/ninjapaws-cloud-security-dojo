@@ -28,11 +28,34 @@
     "defender": {
       "scanAfterVerify": "true",
       "managePlans": "true",
+      "manageExtensions": "true",
       "targetCve": "CVE-2026-42533",
       "plans": {
         "AppServices": "Standard",
         "Containers": "Standard",
-        "CloudPosture": "Free"
+        "CloudPosture": "Standard"
+      },
+      "cspmExtensions": {
+        "AgentlessServerlessPosture": "true",
+        "ServerlessContainers": "true",
+        "ContainerRegistriesVulnerabilityAssessments": "true",
+        "AgentlessDiscoveryForKubernetes": "false",
+        "AgentlessVmScanning": "false",
+        "SensitiveDataDiscovery": "false",
+        "EntraPermissionsManagement": "false",
+        "ApiPosture": "false"
+      },
+      "containersExtensions": {
+        "ContainerRegistriesVulnerabilityAssessments": "true",
+        "AgentlessDiscoveryForKubernetes": "false",
+        "AgentlessVmScanning": "false",
+        "ContainerSensor": "false"
+      },
+      "devops": {
+        "connectorEnabled": "true",
+        "connectorName": "ninjapaws-github",
+        "githubOwner": "ninjapaw",
+        "advancedSecurityExpected": "true"
       }
     }
   },
