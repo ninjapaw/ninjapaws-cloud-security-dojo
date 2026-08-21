@@ -10,7 +10,58 @@ A defensive cloud-security training environment demonstrating container vulnerab
 
 **NGINX CVE Detection and Remediation** is the default scenario. It deploys the intentionally affected NGINX `1.30.3` workload and advisory-relevant `map`/regex configuration to Azure App Service with Azure Container Registry, Defender for App Service, Defender for Containers, and Defender CSPM coverage. The demo proves the running package and configuration, reviews Defender findings, then swaps to fixed NGINX `1.30.4` with the affected configuration removed.
 
-Scenarios are registered in `config/deploy.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
+Scenarios are registered in `config/shared.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
+
+### One-click deploy (Scenario 1 defaults)
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fninjapaw%2Fninjapaws-cloud-security-dojo%2Fmain%2Finfra%2Fmain.json)
+
+This deploys [`infra/main.bicep`](infra/main.bicep) straight from `main` (via its compiled `infra/main.json`, which CI keeps in sync on every change) with every Scenario 1 default already applied: vulnerable NGINX `1.30.3`, Defender for App Service/Containers/CSPM/Resource Manager at `Standard`, and the cheapest viable tiers (`Basic` ACR, `B1` App Service Plan - see [Infrastructure sizing and cost](#infrastructure-sizing-and-cost)). The portal will prompt for two values that must be globally unique and therefore have no default:
+
+| Parameter | What to enter |
+| --- | --- |
+| `containerRegistryName` | A globally unique Azure Container Registry name |
+| `appServiceName` | A globally unique App Service name |
+
+**This button provisions infrastructure only - it does not build or push the container image.** The new registry is empty, so App Service has nothing to pull until an image exists. After the button deployment finishes, build and push the image yourself:
+
+```bash
+git clone https://github.com/ninjapaw/ninjapaws-cloud-security-dojo.git
+cd ninjapaws-cloud-security-dojo
+scripts/deploy.sh build \
+  --resource-group <your-resource-group> \
+  --registry-name <the-registry-name-you-entered> \
+  --app-service-name <the-app-service-name-you-entered> \
+  --image-tag latest
+```
+
+For the full guided experience instead - infrastructure, image build/push, Defender for Cloud activation, and verification in one command with an interactive or `--defaults` prompt flow - use `scripts/deploy.sh deploy` (see [Quick Start](#quick-start)) rather than the button.
+
+## Configuration Layout
+
+Configuration is split into two files so that operator-tunable settings are clearly separated from project facts that must stay accurate.
+
+| File | Edit it? | Contains |
+| --- | --- | --- |
+| `config/deploy.config.json` | Yes - this is yours to tune | `defaults` (image, NGINX version, npm, and the whole `defender` block) and `environments` (resource group, registry, app name, region, per-environment overrides) |
+| `config/shared.config.json` | **No - do not edit** | `configVersion`, `project` identity/license/disclaimer, and the `scenarios` catalog (CVE ID, advisory URL, affected and fixed versions) |
+
+`config/shared.config.json` is project-managed. The scenario entries are statements of fact about a real published advisory - changing the CVE ID, advisory URL, or affected/fixed versions would make the demo report something untrue. Both files carry a `_notice` key restating this.
+
+Lookup order is operator file first, then shared file, so `config/deploy.config.json` stays the single place you touch. Override the paths with `DEPLOY_CONFIG_FILE` and `DEPLOY_SHARED_CONFIG_FILE` if you need to.
+
+### Where Defaults Live
+
+`config/deploy.config.json`'s `defaults` block is the **only** place a fallback value (NGINX version, base OS, npm registry, Defender tiers, and so on) is hand-authored. Everything else resolves from it instead of repeating the literal:
+
+- `scripts/deploy.sh` reads it directly via `config_setting`.
+- `scripts/setup-azure-github-oidc.sh` reads it via a small `cfg()` Node helper when seeding GitHub Environment variables.
+- `deploy.yml`, `publish-release.yml`, `request-release.yml`, `publish-dev-prerelease.yml`, and `uninstall.yml` call the local `.github/actions/resolve-defaults` composite action, which reads the same file once and lets a GitHub Environment variable override any individual value - no workflow YAML hardcodes a fallback literal.
+- `Dockerfile`, `docker-compose.yml`, and `infra/main.bicep` keep their own local fallback defaults (Docker/Bicep can't read a JSON file at build/deploy time), but `scripts/test.sh` asserts those literals still match `config/deploy.config.json` so drift fails CI instead of going unnoticed.
+
+### Environment Naming
+
+The `dev` environment sets `"nameTag": "(Preview)"`, which flows through the `appNameTag` Bicep parameter into the `APP_NAME_TAG` app setting. The application renders it in the page title, the dashboard heading, and the `/api/status` response, so a dev deployment presents as **Ninja Paws Cloud Security Dojo (Preview)**. The `prod` environment omits `nameTag` entirely and presents the untagged production name.
 
 ## What It Demonstrates
 
@@ -100,13 +151,26 @@ Branch isolation is explicit: `dev` deploys to `NP-ninjapaws-dojo-Dev-CentralUS`
 | `NPM_NETWORK_MODE` | `online` | `online` downloads dependencies; `offline` disables npm network access and requires a populated npm cache |
 | `DEFENDER_ENABLED` | `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans |
 
+### Infrastructure sizing and cost
+
+The scenario picks sane infrastructure defaults so a first deployment "just works," and every one of them is an explicit override point - nothing here is hardcoded in Bicep.
+
+| Variable / flag | Default | Purpose |
+| --- | --- | --- |
+| `CONTAINER_REGISTRY_SKU` / `--registry-sku` | `Basic` | Azure Container Registry tier. `Basic` is the cheapest tier and this scenario needs only one repository/image |
+| `APP_SERVICE_PLAN_SKU` / `--plan-sku` | `B1` | App Service Plan tier |
+| `APP_SERVICE_PLAN_CAPACITY` / `--plan-capacity` | `1` | App Service Plan instance count |
+
+`B1` (Basic), not `F1` (Free), is the cheapest default here because **Azure App Service does not support the Free or Shared tier for Linux Web App for Containers** - custom Docker images require Basic or higher. `B1` is the least expensive tier that can run this scenario at all; it is the "free where possible, cheapest otherwise" default for this specific workload. If you don't need a container (a future code-only scenario, for example) `F1` would be the correct free default instead.
+
+Override any of these the same way as every other setting: set `CONTAINER_REGISTRY_SKU`/`APP_SERVICE_PLAN_SKU`/`APP_SERVICE_PLAN_CAPACITY` as a GitHub Environment variable for CI/CD, or pass `--registry-sku`/`--plan-sku`/`--plan-capacity` to `scripts/deploy.sh` locally. Scale up (for example `S1`/`P1v3` and a higher `--plan-capacity`) for a persistent or higher-traffic deployment; the defaults are sized for a single-user training demo, not production load.
+
 Defender for Cloud settings live under the `defender` object in `config/deploy.config.json`. The checked-in defaults are intentionally suited to this vulnerable App Service container scenario:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `defender.scanAfterVerify` | `true` | Adds a post-verification Defender scan task to `deploy`, `rollout`, `repair`, and `verify` |
 | `defender.managePlans` | `true` | Allows the lifecycle to activate the configured Microsoft Security pricing tiers |
-| `defender.targetCve` | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload |
 | `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
 | `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
 | `defender.plans.CloudPosture` | `Standard` | Defender CSPM: attack paths, cloud security explorer, and the serverless/registry extensions below |
@@ -147,12 +211,32 @@ DevOps and code security settings:
 | `defender.devops.connectorName` | `ninjapaws-github` | Name of the `Microsoft.Security/securityConnectors` resource |
 | `defender.devops.githubOwner` | `ninjapaw` | GitHub organization reported in the connector guidance |
 | `defender.devops.advancedSecurityExpected` | `true` | Reports GitHub Advanced Security state in the verification matrix |
+| `defender.devops.agentlessCodeScanningExpected` | `true` | Reports the DevOps connector's agentless code scanning (and the SBOM it generates) in the verification matrix |
 
-The lifecycle creates the GitHub connector resource, but **it cannot finish onboarding non-interactively**. Authorizing the connector and installing the DevOps security GitHub application is an interactive consent flow, so the report records the connector as **Not sure** with the remaining manual step rather than claiming coverage it has not proven. Complete it under **Defender for Cloud > Environment settings > Add environment > GitHub**, following [Connect your GitHub environment](https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github). Once authorized, DevOps resources can take up to 8 hours to appear.
+The lifecycle creates the GitHub connector resource, but **it cannot finish onboarding non-interactively**. Authorizing the connector and installing the DevOps security GitHub application is an interactive consent flow, so the report records the connector as **Not sure** with the remaining manual step rather than claiming coverage it has not proven. Complete it under **Defender for Cloud > Environment settings > Add environment > GitHub**, following [Connect your GitHub environment](https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github). Once authorized, DevOps resources can take up to 8 hours to appear. To change the token, onboarded organizations, or reauthorize the connector later, see [Edit DevOps connectors](https://learn.microsoft.com/azure/defender-for-cloud/edit-devops-connector).
 
 GitHub Advanced Security is a GitHub product, not an Azure plan, so the lifecycle reports it rather than enabling it. Code scanning already runs in this repository through the checked-in CodeQL workflow, which is free for public repositories. When a GitHub connector is authorized, Defender for Cloud maps GHAS findings to the running workload and prioritizes them with runtime risk factors such as internet exposure. Private repositories require a GitHub Advanced Security licence.
 
-These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_MANAGE_EXTENSIONS`, `DEFENDER_TARGET_CVE`, `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, `DEFENDER_CSPM_TIER`, `DEFENDER_CSPM_SERVERLESS_PROTECTION`, `DEFENDER_CSPM_SERVERLESS_CONTAINERS`, `DEFENDER_CSPM_REGISTRY_ASSESSMENT`, `DEFENDER_CSPM_KUBERNETES_DISCOVERY`, `DEFENDER_CSPM_VM_SCANNING`, `DEFENDER_CSPM_SENSITIVE_DATA`, `DEFENDER_CSPM_PERMISSIONS_MANAGEMENT`, `DEFENDER_CSPM_API_POSTURE`, `DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT`, `DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY`, `DEFENDER_CONTAINERS_VM_SCANNING`, `DEFENDER_CONTAINERS_SENSOR`, `DEFENDER_DEVOPS_CONNECTOR_ENABLED`, `DEFENDER_DEVOPS_CONNECTOR_NAME`, `DEFENDER_DEVOPS_GITHUB_OWNER`, and `GITHUB_ADVANCED_SECURITY_EXPECTED`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
+#### Microsoft Security DevOps GitHub Action and pull request annotations
+
+[.github/workflows/msdevopssec.yml](.github/workflows/msdevopssec.yml) runs the [Microsoft Security DevOps GitHub action](https://learn.microsoft.com/azure/defender-for-cloud/github-action) (Checkov, ESLint, Template Analyzer, Terrascan, Trivy, and more) on every push and pull request to `dev`/`main`, and uploads results to the GitHub Security tab. Because it triggers on `pull_request` and this is a public repository (GitHub Advanced Security is free for public repos), pull requests get inline security annotations automatically - this is the whole mechanism the [Enable pull request annotations](https://learn.microsoft.com/azure/defender-for-cloud/enable-pull-request-annotations) guide describes for GitHub (Azure DevOps instead requires an explicit connector API call, which does not apply here).
+
+This in-pipeline scan complements, rather than replaces, the DevOps connector's own **agentless code scanning**: agentless scanning runs independently of any pipeline once the GitHub connector is authorized (daily, no workflow required), while `msdevopssec.yml` gives near-real-time feedback in the pull request itself. See [Configure agentless code scanning](https://learn.microsoft.com/azure/defender-for-cloud/agentless-code-scanning) for how the two compare.
+
+#### Software Bill of Materials (SBOM)
+
+SBOM generation is **enabled by default** - it is not a separate toggle. The moment the GitHub connector's agentless code scanning runs (automatically, once the connector is authorized), Defender for Cloud generates a Software Bill of Materials for the repository on every scan and publishes it to the [cloud security graph](https://learn.microsoft.com/azure/defender-for-cloud/concept-attack-path#what-is-the-cloud-security-graph). There is no `defender.devops.sbomEnabled`-style variable in this project, because Microsoft's own documentation states SBOM enablement isn't configurable - it always runs alongside agentless code scanning, and the SBOM itself cannot be downloaded, only queried.
+
+To generate and query this repository's SBOM:
+
+1. Confirm the GitHub connector is authorized (see above) and wait for the first scan to finish - this is what actually "generates" the SBOM; there is no manual trigger.
+2. In the Azure portal, go to **Microsoft Defender for Cloud > Cloud Security Explorer**.
+3. Build a query: **Resource Type > DevOps**, select **GitHub repositories**, then add **Has installed software > Name** (and optionally **Version**) to search for a specific package, for example `express` or `pdfkit`.
+4. Run the query to see every repository that depends on that package/version, which is the fastest way to assess blast radius when a new CVE lands in a dependency.
+
+Full instructions: [Query software bill of materials (SBOM)](https://learn.microsoft.com/azure/defender-for-cloud/query-software-bill-of-materials).
+
+These settings are configurable per environment and can also be overridden with `DEFENDER_SCAN_ENABLED`, `DEFENDER_MANAGE_PLANS`, `DEFENDER_MANAGE_EXTENSIONS`, `DEFENDER_TARGET_CVE` (optional; unset by default and falls back to the active scenario's own CVE - only set it to search Defender findings for a different CVE), `DEFENDER_APPSERVICES_TIER`, `DEFENDER_CONTAINERS_TIER`, `DEFENDER_CSPM_TIER`, `DEFENDER_CSPM_SERVERLESS_PROTECTION`, `DEFENDER_CSPM_SERVERLESS_CONTAINERS`, `DEFENDER_CSPM_REGISTRY_ASSESSMENT`, `DEFENDER_CSPM_KUBERNETES_DISCOVERY`, `DEFENDER_CSPM_VM_SCANNING`, `DEFENDER_CSPM_SENSITIVE_DATA`, `DEFENDER_CSPM_PERMISSIONS_MANAGEMENT`, `DEFENDER_CSPM_API_POSTURE`, `DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT`, `DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY`, `DEFENDER_CONTAINERS_VM_SCANNING`, `DEFENDER_CONTAINERS_SENSOR`, `DEFENDER_DEVOPS_CONNECTOR_ENABLED`, `DEFENDER_DEVOPS_CONNECTOR_NAME`, `DEFENDER_DEVOPS_GITHUB_OWNER`, `GITHUB_ADVANCED_SECURITY_EXPECTED`, and `DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED`. Set a plan tier to `disabled` to mark that workload as **Not applicable** without changing the subscription plan. Plan activation can incur Azure charges; review subscription pricing and permissions before enabling `defender.managePlans` in a shared or production subscription.
 
 The lifecycle does **not** automatically deactivate an already-enabled Defender plan when a workload is set to `disabled`; pricing plans apply at subscription scope, so silently turning off protection from an application deployment would be unsafe. The report instead records unrequested plans as **Not applicable** and leaves subscription-wide deactivation to an explicit Defender for Cloud administrator action.
 
@@ -328,7 +412,9 @@ The bootstrap creates the Entra federated credential, assigns deployment roles, 
 4. Review and merge that PR through protected `main`.
 5. Run **Deploy to Azure** manually from `main` to promote the stable baseline to the `prod` GitHub Environment.
 
-For releases, run **Request release from dev** and choose `patch`, `minor`, `major`, or `custom`. It creates a release PR that updates `package.json` and `package-lock.json`. After merge, **Publish main release** validates metadata, rejects duplicate/backward versions, creates `vX.Y.Z`, publishes the GitHub Release, and pushes the versioned and `latest` ACR images.
+For releases, run **Request release from dev** and choose `auto`, `patch`, `minor`, `major`, or `custom`. `auto` (the default) classifies commits since the last release with `scripts/determine-version-bump.sh` - a Conventional Commits heuristic that GitHub Models may escalate (never downgrade) when a token is available. The workflow creates a release PR that updates `package.json`, `package-lock.json`, and `config/shared.config.json`'s `configVersion` in lockstep. After merge, **Publish main release** validates metadata (including that `configVersion` matches `package.json`), rejects duplicate/backward versions, creates `vX.Y.Z`, publishes the GitHub Release explicitly marked `latest`, and pushes the versioned and `latest` ACR images.
+
+Run **Publish dev prerelease** from `dev` to preview the next version at any time without touching `package.json`. It reuses the same bump determination, tags `vX.Y.Z-dev.<run-number>`, and publishes a GitHub prerelease that is explicitly marked `--prerelease` and never `latest` - so it can never shadow the production release.
 
 Package metadata must match the repository name and description, remain MIT licensed, retain the repository URL, and keep the lockfile synchronized. `NODE_MAJOR_VERSION` controls release validation and Docker builds.
 
@@ -336,10 +422,12 @@ Package metadata must match the repository name and description, remain MIT lice
 
 - `validate-infrastructure.yml`: Bash, package, ARM JSON, and Bicep checks
 - `validate-remediation.yml`: container remediation and endpoint validation
+- `msdevopssec.yml`: Microsoft Security DevOps scan on every push/PR; also enables GitHub PR annotations
 - `deploy.yml`: branch-aware staged Azure deployment
 - `promote-dev-to-main.yml`: opens the dev-to-main promotion PR
 - `request-release.yml`: prepares a versioned release PR
 - `publish-release.yml`: publishes tags, GitHub Releases, and ACR images
+- `publish-dev-prerelease.yml`: publishes a `vX.Y.Z-dev.<run>` GitHub prerelease from `dev`, never marked `latest`
 - `uninstall.yml`: protected, exact-name-confirmed Azure and Environment cleanup
 
 Run the shared checks locally:

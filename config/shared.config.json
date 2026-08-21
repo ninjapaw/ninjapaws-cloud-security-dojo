@@ -1,0 +1,26 @@
+{
+  "_notice": "DO NOT EDIT. Project identity and scenario facts are maintained by this repository. Operator-tunable settings live in config/deploy.config.json.",
+  "_editableConfig": "config/deploy.config.json",
+  "configVersion": "1.1.0",
+  "project": {
+    "name": "Ninja Paws Cloud Security Dojo",
+    "author": "Dr Bill Mcilhargey",
+    "organization": "Ninja Paw",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Dr Bill Mcilhargey / Ninja Paw",
+    "repository": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo",
+    "support": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues",
+    "disclaimer": "This project provisions an INTENTIONALLY VULNERABLE training environment. Deploy only to an isolated subscription you control. Provided as-is, without warranty of any kind. USE AT YOUR OWN RISK."
+  },
+  "scenarios": {
+    "defender-cloud-scenario-1": {
+      "name": "Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation",
+      "shortName": "NGINX CVE Detection and Remediation",
+      "cve": "CVE-2026-42533",
+      "advisoryUrl": "https://my.f5.com/manage/s/article/K000162097",
+      "affectedVersion": "1.30.3",
+      "fixedVersion": "1.30.4",
+      "workloads": "App Service, Azure Container Registry, Defender for App Service, Defender for Containers, Defender CSPM, Defender for Resource Manager"
+    }
+  }
+}

@@ -35,44 +35,9 @@ jobs:
     env:
       DEPLOY_ENVIRONMENT: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-      LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
       CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
       APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
-      IMAGE_NAME: ${{ vars.AZURE_IMAGE_NAME || 'ninjapaws-dojo' }}
-      BASE_OS_IMAGE: ${{ vars.BASE_OS_IMAGE || 'ubuntu' }}
-      BASE_OS_VERSION: ${{ vars.BASE_OS_VERSION || '24.04' }}
-      NGINX_VERSION: ${{ vars.NGINX_VERSION || '1.30.3' }}
-      VULNERABILITY_STATUS: ${{ vars.VULNERABILITY_STATUS || 'vulnerable' }}
-      NODE_MAJOR_VERSION: ${{ vars.NODE_MAJOR_VERSION || '20' }}
-      PORT: ${{ vars.PORT || '3000' }}
-      NPM_REGISTRY_URL: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
-      NPM_USE_MIRROR: ${{ vars.NPM_USE_MIRROR || 'true' }}
-      NPM_NETWORK_MODE: ${{ vars.NPM_NETWORK_MODE || 'online' }}
-      DEFENDER_ENABLED: ${{ vars.DEFENDER_ENABLED || 'true' }}
-      DEFENDER_SCAN_ENABLED: ${{ vars.DEFENDER_SCAN_ENABLED || 'true' }}
-      DEFENDER_MANAGE_PLANS: ${{ vars.DEFENDER_MANAGE_PLANS || 'true' }}
-      DEFENDER_TARGET_CVE: ${{ vars.DEFENDER_TARGET_CVE || 'CVE-2026-42533' }}
-      DEFENDER_APPSERVICES_TIER: ${{ vars.DEFENDER_APPSERVICES_TIER || 'Standard' }}
-      DEFENDER_CONTAINERS_TIER: ${{ vars.DEFENDER_CONTAINERS_TIER || 'Standard' }}
-      DEFENDER_CSPM_TIER: ${{ vars.DEFENDER_CSPM_TIER || 'Standard' }}
-      DEFENDER_ARM_TIER: ${{ vars.DEFENDER_ARM_TIER || 'Standard' }}
-      DEFENDER_MANAGE_EXTENSIONS: ${{ vars.DEFENDER_MANAGE_EXTENSIONS || 'true' }}
-      DEFENDER_CSPM_SERVERLESS_PROTECTION: ${{ vars.DEFENDER_CSPM_SERVERLESS_PROTECTION || 'true' }}
-      DEFENDER_CSPM_SERVERLESS_CONTAINERS: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
-      DEFENDER_CSPM_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
-      DEFENDER_CSPM_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CSPM_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CSPM_VM_SCANNING: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}
-      DEFENDER_CSPM_SENSITIVE_DATA: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
-      DEFENDER_CSPM_PERMISSIONS_MANAGEMENT: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
-      DEFENDER_CSPM_API_POSTURE: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}
-      DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT || 'true' }}
-      DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CONTAINERS_VM_SCANNING: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}
-      DEFENDER_CONTAINERS_SENSOR: ${{ vars.DEFENDER_CONTAINERS_SENSOR || 'false' }}
-      DEFENDER_DEVOPS_CONNECTOR_ENABLED: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
-      DEFENDER_DEVOPS_CONNECTOR_NAME: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
       DEFENDER_DEVOPS_GITHUB_OWNER: ${{ vars.DEFENDER_DEVOPS_GITHUB_OWNER || github.repository_owner }}
-      GITHUB_ADVANCED_SECURITY_EXPECTED: ${{ vars.GITHUB_ADVANCED_SECURITY_EXPECTED || 'true' }}
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
       DEPLOY_STAGE: ${{ inputs.stage || 'full' }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -82,6 +47,11 @@ jobs:
     steps:
       - name: 🥷 Checkout repository
         uses: actions/checkout@v4
+
+      - name: 🧮 Resolve runtime defaults
+        uses: ./.github/actions/resolve-defaults
+        with:
+          vars-json: ${{ toJSON(vars) }}
 
       - name: 🧭 Verify branch matches environment
         env:

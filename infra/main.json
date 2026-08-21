@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "8775484709021674300"
+      "templateHash": "10779236064637072042"
     }
   },
   "parameters": {
@@ -22,6 +22,46 @@
     "appServicePlanName": {
       "type": "string",
       "defaultValue": "[format('{0}-plan', parameters('appServiceName'))]"
+    },
+    "containerRegistrySku": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "Standard",
+        "Premium"
+      ],
+      "metadata": {
+        "description": "Azure Container Registry SKU. Basic is the cheapest tier and sufficient for this single-image training scenario."
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "allowedValues": [
+        "B1",
+        "B2",
+        "B3",
+        "S1",
+        "S2",
+        "S3",
+        "P0v3",
+        "P1v3",
+        "P2v3",
+        "P3v3"
+      ],
+      "metadata": {
+        "description": "App Service Plan SKU. Linux Web App for Containers requires Basic or higher; Free and Shared tiers do not support custom containers, so B1 is the cheapest viable tier."
+      }
+    },
+    "appServicePlanCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 10,
+      "metadata": {
+        "description": "App Service Plan instance count."
+      }
     },
     "imageName": {
       "type": "string",
@@ -63,6 +103,10 @@
       "type": "string",
       "defaultValue": "Standard"
     },
+    "appNameTag": {
+      "type": "string",
+      "defaultValue": ""
+    },
     "defenderServerlessProtection": {
       "type": "bool",
       "defaultValue": true
@@ -82,6 +126,10 @@
     "githubAdvancedSecurity": {
       "type": "bool",
       "defaultValue": true
+    },
+    "agentlessCodeScanningExpected": {
+      "type": "bool",
+      "defaultValue": true
     }
   },
   "resources": [
@@ -91,7 +139,7 @@
       "name": "[replace(parameters('containerRegistryName'), '-', '')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "Basic"
+        "name": "[parameters('containerRegistrySku')]"
       },
       "properties": {
         "adminUserEnabled": false,
@@ -127,8 +175,8 @@
       "location": "[parameters('location')]",
       "kind": "linux",
       "sku": {
-        "name": "B1",
-        "capacity": 1
+        "name": "[parameters('appServicePlanSku')]",
+        "capacity": "[parameters('appServicePlanCapacity')]"
       },
       "properties": {
         "reserved": true
@@ -201,6 +249,10 @@
               "value": "[parameters('defenderArmTier')]"
             },
             {
+              "name": "APP_NAME_TAG",
+              "value": "[parameters('appNameTag')]"
+            },
+            {
               "name": "DEFENDER_SERVERLESS_PROTECTION",
               "value": "[string(parameters('defenderServerlessProtection'))]"
             },
@@ -219,6 +271,10 @@
             {
               "name": "GITHUB_ADVANCED_SECURITY",
               "value": "[string(parameters('githubAdvancedSecurity'))]"
+            },
+            {
+              "name": "DEFENDER_AGENTLESS_CODE_SCANNING",
+              "value": "[string(parameters('agentlessCodeScanningExpected'))]"
             }
           ]
         }

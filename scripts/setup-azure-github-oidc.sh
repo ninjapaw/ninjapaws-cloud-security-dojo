@@ -110,6 +110,25 @@ for command_name in az gh tr; do
   command -v "$command_name" >/dev/null || { printf "ERROR: '%s' is required.\n" "$command_name" >&2; exit 1; }
 done
 
+# config/deploy.config.json is the single source of truth for these defaults;
+# do not duplicate literal values here.
+NODE_COMMAND=node
+if ! command -v node >/dev/null 2>&1; then
+  if command -v node.exe >/dev/null 2>&1; then
+    NODE_COMMAND=node.exe
+  elif [[ -x /mnt/c/Program\ Files/nodejs/node.exe ]]; then
+    NODE_COMMAND='/mnt/c/Program Files/nodejs/node.exe'
+  elif [[ -x /c/Program\ Files/nodejs/node.exe ]]; then
+    NODE_COMMAND='/c/Program Files/nodejs/node.exe'
+  else
+    printf 'ERROR: Node.js is required to read config/deploy.config.json defaults.\n' >&2
+    exit 1
+  fi
+fi
+cfg() {
+  (cd "$REPO_ROOT" && "$NODE_COMMAND" -p "require('./config/deploy.config.json').defaults$1")
+}
+
 case "$environment_name" in
   dev)
     deployment_branch=dev
@@ -243,41 +262,46 @@ gh variable set AZURE_LOCATION --env "$environment_name" --repo "$repository" --
 gh variable set AZURE_RESOURCE_GROUP --env "$environment_name" --repo "$repository" --body "$resource_group"
 gh variable set AZURE_CONTAINER_REGISTRY_NAME --env "$environment_name" --repo "$repository" --body "$acr_name"
 gh variable set AZURE_APP_SERVICE_NAME --env "$environment_name" --repo "$repository" --body "$app_service_name"
-gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body 'ninjapaws-dojo'
-gh variable set BASE_OS_IMAGE --env "$environment_name" --repo "$repository" --body 'ubuntu'
-gh variable set BASE_OS_VERSION --env "$environment_name" --repo "$repository" --body '24.04'
-gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body '1.30.3'
-gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body 'vulnerable'
-gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body '20'
-gh variable set PORT --env "$environment_name" --repo "$repository" --body '3000'
-gh variable set NPM_REGISTRY_URL --env "$environment_name" --repo "$repository" --body 'https://registry.npmjs.org'
-gh variable set NPM_USE_MIRROR --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set NPM_NETWORK_MODE --env "$environment_name" --repo "$repository" --body 'online'
-gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_SCAN_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_TARGET_CVE --env "$environment_name" --repo "$repository" --body 'CVE-2026-42533'
-gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
-gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
-gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
-gh variable set DEFENDER_ARM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
-gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_CSPM_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_CSPM_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CSPM_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CSPM_SENSITIVE_DATA --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CSPM_PERMISSIONS_MANAGEMENT --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CSPM_API_POSTURE --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CONTAINERS_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$repository" --body 'false'
-gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body "$(cfg .imageName)"
+gh variable set CONTAINER_REGISTRY_SKU --env "$environment_name" --repo "$repository" --body "$(cfg .containerRegistrySku)"
+gh variable set APP_SERVICE_PLAN_SKU --env "$environment_name" --repo "$repository" --body "$(cfg .appServicePlanSku)"
+gh variable set APP_SERVICE_PLAN_CAPACITY --env "$environment_name" --repo "$repository" --body "$(cfg .appServicePlanCapacity)"
+gh variable set BASE_OS_IMAGE --env "$environment_name" --repo "$repository" --body "$(cfg .baseOsImage)"
+gh variable set BASE_OS_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .baseOsVersion)"
+gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .nginxVersion)"
+gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body "$(cfg .vulnerabilityStatus)"
+gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .nodeMajorVersion)"
+gh variable set PORT --env "$environment_name" --repo "$repository" --body "$(cfg .port)"
+gh variable set NPM_REGISTRY_URL --env "$environment_name" --repo "$repository" --body "$(cfg .npmRegistryUrl)"
+gh variable set NPM_USE_MIRROR --env "$environment_name" --repo "$repository" --body "$(cfg .npmUseMirror)"
+gh variable set NPM_NETWORK_MODE --env "$environment_name" --repo "$repository" --body "$(cfg .npmNetworkMode)"
+gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defenderEnabled)"
+gh variable set DEFENDER_SCAN_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.scanAfterVerify)"
+gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.managePlans)"
+# DEFENDER_TARGET_CVE is intentionally not seeded here: scripts/deploy.sh already falls back to the
+# active scenario's own CVE. Only set this Environment variable manually to search for a different CVE.
+gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.AppServices)"
+gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.Containers)"
+gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.CloudPosture)"
+gh variable set DEFENDER_ARM_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.Arm)"
+gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.manageExtensions)"
+gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessServerlessPosture)"
+gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ServerlessContainers)"
+gh variable set DEFENDER_CSPM_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ContainerRegistriesVulnerabilityAssessments)"
+gh variable set DEFENDER_CSPM_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessDiscoveryForKubernetes)"
+gh variable set DEFENDER_CSPM_VM_SCANNING --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessVmScanning)"
+gh variable set DEFENDER_CSPM_SENSITIVE_DATA --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.SensitiveDataDiscovery)"
+gh variable set DEFENDER_CSPM_PERMISSIONS_MANAGEMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.EntraPermissionsManagement)"
+gh variable set DEFENDER_CSPM_API_POSTURE --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ApiPosture)"
+gh variable set DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.ContainerRegistriesVulnerabilityAssessments)"
+gh variable set DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.AgentlessDiscoveryForKubernetes)"
+gh variable set DEFENDER_CONTAINERS_VM_SCANNING --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.AgentlessVmScanning)"
+gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.ContainerSensor)"
+gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.devops.connectorEnabled)"
 gh variable set DEFENDER_DEVOPS_CONNECTOR_NAME --env "$environment_name" --repo "$repository" --body "ninjapaws-github-$environment_name"
 gh variable set DEFENDER_DEVOPS_GITHUB_OWNER --env "$environment_name" --repo "$repository" --body "${repository%%/*}"
 gh variable set GITHUB_ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.devops.agentlessCodeScanningExpected)"
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 

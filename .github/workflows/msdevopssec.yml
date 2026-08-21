@@ -1,0 +1,46 @@
+name: Microsoft Security DevOps
+
+# In-pipeline scanning (Checkov, ESLint, Template Analyzer, Terrascan, Trivy, and more) that
+# complements the DevOps connector's agentless scanning. The pull_request trigger is what
+# enables Defender for Cloud's pull request annotations for this GitHub repository, per
+# https://learn.microsoft.com/azure/defender-for-cloud/enable-pull-request-annotations
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+  security-events: write
+
+concurrency:
+  group: msdo-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  msdo:
+    name: Microsoft Security DevOps
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Microsoft Security DevOps
+        uses: microsoft/security-devops-action@latest
+        id: msdo
+
+      - name: Upload alerts to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.msdo.outputs.sarifFile }}
+
+      - name: Upload alerts file as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msdo-alerts
+          path: ${{ steps.msdo.outputs.sarifFile }}

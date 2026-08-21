@@ -13,6 +13,9 @@ const VULNERABILITY_DESCRIPTION = 'NGINX map directive and regex matching heap b
 const ADVISORY_URL = 'https://my.f5.com/manage/s/article/K000162097';
 const AFFECTED_VERSIONS = 'NGINX Open Source 1.30.0-1.30.3';
 const FIXED_VERSION = '1.30.4';
+const PROJECT_NAME = 'Ninja Paws Cloud Security Dojo';
+const NAME_TAG = (process.env.APP_NAME_TAG || '').trim();
+const DISPLAY_NAME = NAME_TAG ? `${PROJECT_NAME} ${NAME_TAG}` : PROJECT_NAME;
 
 function getRuntimeVerification() {
   try {
@@ -65,7 +68,8 @@ function getDefenderMonitoring() {
       cspm_serverless_protection: isEnabled('DEFENDER_SERVERLESS_PROTECTION'),
       cspm_serverless_containers: isEnabled('DEFENDER_SERVERLESS_CONTAINERS'),
       devops_connector_requested: isEnabled('DEFENDER_DEVOPS_CONNECTOR'),
-      github_advanced_security_expected: isEnabled('GITHUB_ADVANCED_SECURITY')
+      github_advanced_security_expected: isEnabled('GITHUB_ADVANCED_SECURITY'),
+      agentless_code_scanning_expected: isEnabled('DEFENDER_AGENTLESS_CODE_SCANNING')
     }
   };
 }
@@ -86,7 +90,8 @@ app.get('/api/status', (req, res) => {
   const vulnerabilityDetected = runtimeVerification.vulnerability_detected === true;
   
   res.json({
-    environment: 'Ninja Paws Cloud Security Dojo',
+    environment: DISPLAY_NAME,
+    name_tag: NAME_TAG,
     status: 'running',
     nginx_version: nginxVersion,
     vulnerability: {
@@ -121,7 +126,7 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🥷 Ninja Paws Cloud Security Dojo</title>
+  <title>🥷 ${DISPLAY_NAME}</title>
   <style>
     * {
       margin: 0;
@@ -341,7 +346,7 @@ app.get('/', (req, res) => {
   <div class="container">
     <div class="header">
       <div class="logo">🥷🛡🐾</div>
-      <h1>Ninja Paws Cloud Security Dojo</h1>
+      <h1>${DISPLAY_NAME}</h1>
       <p class="tagline">Master the art of cloud security one vulnerability at a time</p>
     </div>
 
@@ -394,6 +399,7 @@ app.get('/', (req, res) => {
         ${monitoringRow('cspm_serverless_containers', defenderMonitoring.monitoring.cspm_serverless_containers)}
         ${monitoringRow('devops_connector_requested', defenderMonitoring.monitoring.devops_connector_requested)}
         ${monitoringRow('github_advanced_security_expected', defenderMonitoring.monitoring.github_advanced_security_expected)}
+        ${monitoringRow('agentless_code_scanning_expected', defenderMonitoring.monitoring.agentless_code_scanning_expected)}
         <li><strong>Declared configuration:</strong> Defender for Cloud remains the authoritative source; see <code>defender_monitoring</code> in <code>/api/status</code>.</li>
       </ul>
     </div>
@@ -435,7 +441,7 @@ app.get('/', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🥷 Ninja Paws Cloud Security Dojo`);
+  console.log(`🥷 ${DISPLAY_NAME}`);
   console.log(`🏯 Server running on port ${PORT}`);
   console.log(`⚔ Remediation Mission: Detect and fix CVE-2026-42533`);
   console.log(`✅ Endpoints: / | /health | /api/status`);

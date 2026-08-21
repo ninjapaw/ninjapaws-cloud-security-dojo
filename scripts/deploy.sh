@@ -51,6 +51,7 @@ COMMAND="deploy"
 # Precedence for every setting: CLI flag > environment variable > config file > built-in fallback.
 # The workflow exports the unprefixed names, so both spellings are accepted.
 CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
+SHARED_CONFIG_FILE="${DEPLOY_SHARED_CONFIG_FILE:-$REPO_ROOT/config/shared.config.json}"
 ENVIRONMENT="${DEPLOY_ENVIRONMENT:-auto}"
 SCENARIO_ID="${DEPLOY_SCENARIO:-}"
 ALL_SCENARIOS=false
@@ -59,6 +60,9 @@ LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
 REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-${CONTAINER_REGISTRY_NAME:-${REGISTRY_NAME:-}}}"
 APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-${APP_SERVICE_NAME:-}}"
+CONTAINER_REGISTRY_SKU="${CONTAINER_REGISTRY_SKU:-}"
+APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-}"
+APP_SERVICE_PLAN_CAPACITY="${APP_SERVICE_PLAN_CAPACITY:-}"
 IMAGE_NAME="${IMAGE_NAME:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 BASE_OS_IMAGE="${BASE_OS_IMAGE:-}"
@@ -95,6 +99,8 @@ DEFENDER_DEVOPS_CONNECTOR_ENABLED="${DEFENDER_DEVOPS_CONNECTOR_ENABLED:-}"
 DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-}"
 DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-}"
 GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-}"
+DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED="${DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED:-}"
+ENVIRONMENT_NAME_TAG="${ENVIRONMENT_NAME_TAG:-}"
 DEFENDER_DEVOPS_CONNECTOR_STATE=not_evaluated
 GITHUB_ADVANCED_SECURITY_STATE=not_evaluated
 SCENARIO_NAME=""
@@ -130,10 +136,10 @@ AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
 AZURE_ACCOUNT_NAME=""
 SUBSCRIPTION_NAME=""
 
-# Read a dotted path of string values out of the config file without requiring jq.
-config_lookup() {
-    [[ -f "$CONFIG_FILE" ]] || return 0
-    awk -v want="$1" '
+# Read a dotted path of string values out of a config file without requiring jq.
+config_lookup_file() {
+    [[ -f "$1" ]] || return 0
+    awk -v want="$2" '
         BEGIN { depth = 0 }
         {
             line = $0
@@ -153,7 +159,15 @@ config_lookup() {
                 if (path key == want) { print val; exit }
             }
         }
-    ' "$CONFIG_FILE"
+    ' "$1"
+}
+
+# Operator settings win; the shared reference file supplies project identity and scenario facts.
+config_lookup() {
+    local value
+    value="$(config_lookup_file "$CONFIG_FILE" "$1")"
+    [[ -n "$value" ]] || value="$(config_lookup_file "$SHARED_CONFIG_FILE" "$1")"
+    printf '%s' "$value"
 }
 
 # Environment override first, then the shared default, then the built-in fallback.
@@ -397,6 +411,9 @@ Options:
   --app-service-name <name> App Service name
   --image-name <name>      Container image repository (default: ninjapaws-dojo)
   --image-tag <tag>        Image tag (default: current Git SHA)
+  --registry-sku <sku>     Azure Container Registry SKU: Basic, Standard, or Premium (default: Basic, cheapest)
+  --plan-sku <sku>         App Service Plan SKU, e.g. B1, S1, P1v3 (default: B1, cheapest tier that supports Linux containers)
+  --plan-capacity <n>      App Service Plan instance count (default: 1)
     --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
     --all-scenarios          Deploy all configured scenarios (currently one scenario)
     --yes                    Skip confirmation; required for non-interactive uninstall
@@ -1538,10 +1555,14 @@ resolve_settings() {
         *) fail "--environment must be dev, prod, or auto." ;;
     esac
     LOCATION="${LOCATION:-$(config_setting location centralus)}"
+    ENVIRONMENT_NAME_TAG="${ENVIRONMENT_NAME_TAG:-$(config_setting nameTag "")}"
     RESOURCE_GROUP="${RESOURCE_GROUP:-$(config_setting resourceGroup "")}"
     REGISTRY_NAME="${REGISTRY_NAME:-$(config_setting registryName "")}"
     APP_SERVICE_NAME="${APP_SERVICE_NAME:-$(config_setting appServiceName "")}"
     IMAGE_NAME="${IMAGE_NAME:-$(config_setting imageName ninjapaws-dojo)}"
+    CONTAINER_REGISTRY_SKU="${CONTAINER_REGISTRY_SKU:-$(config_setting containerRegistrySku Basic)}"
+    APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-$(config_setting appServicePlanSku B1)}"
+    APP_SERVICE_PLAN_CAPACITY="${APP_SERVICE_PLAN_CAPACITY:-$(config_setting appServicePlanCapacity 1)}"
     BASE_OS_IMAGE="${BASE_OS_IMAGE:-$(config_setting baseOsImage ubuntu)}"
     BASE_OS_VERSION="${BASE_OS_VERSION:-$(config_setting baseOsVersion 24.04)}"
     NGINX_VERSION="${NGINX_VERSION:-$(config_setting nginxVersion 1.30.3)}"
@@ -1576,6 +1597,7 @@ resolve_settings() {
     DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-$(config_setting defender.devops.connectorName ninjapaws-github)}"
     DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-$(config_setting defender.devops.githubOwner ninjapaw)}"
     GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-$(config_setting defender.devops.advancedSecurityExpected true)}"
+    DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED="${DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED:-$(config_setting defender.devops.agentlessCodeScanningExpected true)}"
     [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
     [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
     [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
@@ -1711,8 +1733,8 @@ print_plan() {
     echo "Subscription: $(mask_identifier "${SUBSCRIPTION_ID:-current Azure subscription}")"
     echo "Resource group: $RESOURCE_GROUP"
     echo "Location: $LOCATION"
-    echo "Registry: $ACR_NAME"
-    echo "App Service: $APP_SERVICE_NAME"
+    echo "Registry: $ACR_NAME ($CONTAINER_REGISTRY_SKU)"
+    echo "App Service: $APP_SERVICE_NAME (plan $APP_SERVICE_PLAN_SKU x$APP_SERVICE_PLAN_CAPACITY)"
     echo "Image: $IMAGE_NAME:$IMAGE_TAG"
     echo "Bicep: $REPO_ROOT/infra/main.bicep"
     echo "State: $STATE_FILE"
@@ -1747,6 +1769,9 @@ run_bicep_deployment() {
             location="$LOCATION" \
             imageName="$IMAGE_NAME" \
             imageTag=latest \
+            containerRegistrySku="$CONTAINER_REGISTRY_SKU" \
+            appServicePlanSku="$APP_SERVICE_PLAN_SKU" \
+            appServicePlanCapacity="$APP_SERVICE_PLAN_CAPACITY" \
             nginxVersion="$NGINX_VERSION" \
             vulnerabilityStatus="$VULNERABILITY_STATUS" \
             port="$PORT" \
@@ -1755,11 +1780,13 @@ run_bicep_deployment() {
             defenderContainersTier="$DEFENDER_CONTAINERS_TIER" \
             defenderCspmTier="$DEFENDER_CSPM_TIER" \
             defenderArmTier="$DEFENDER_ARM_TIER" \
+            appNameTag="$ENVIRONMENT_NAME_TAG" \
             defenderServerlessProtection="$DEFENDER_CSPM_SERVERLESS_PROTECTION" \
             defenderServerlessContainers="$DEFENDER_CSPM_SERVERLESS_CONTAINERS" \
             defenderRegistryAssessment="$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" \
             defenderDevOpsConnector="$DEFENDER_DEVOPS_CONNECTOR_ENABLED" \
             githubAdvancedSecurity="$GITHUB_ADVANCED_SECURITY_EXPECTED" \
+            agentlessCodeScanningExpected="$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED" \
         --output json > "$deployment_output" 2> "$deployment_log" &
     deployment_pid=$!
 
@@ -2237,6 +2264,22 @@ record_advanced_security_state() {
     esac
 }
 
+# Agentless code scanning (and the SBOM it generates) is a preview, portal-only connector
+# setting; it cannot be read or toggled through the az CLI, so this reports the expectation
+# rather than claiming to have verified or enabled it.
+record_agentless_code_scanning_state() {
+    if [[ "$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED" != true ]]; then
+        record_check "Defender for Cloud agentless code scanning (SBOM)" not_applicable "Not expected by configuration (defender.devops.agentlessCodeScanningExpected=$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED)."
+        return 0
+    fi
+
+    if [[ "$DEFENDER_DEVOPS_CONNECTOR_STATE" == connected || "$DEFENDER_DEVOPS_CONNECTOR_STATE" == authorization_required ]]; then
+        record_check "Defender for Cloud agentless code scanning (SBOM)" unknown "Enabled by default once the GitHub connector is authorized; verify or adjust scanner/scope settings under Defender for Cloud > Environment settings > the '$DEFENDER_DEVOPS_CONNECTOR_NAME' connector > Agentless code scanning. SBOM is generated automatically on every scan and is not itself a separate toggle. See https://learn.microsoft.com/azure/defender-for-cloud/agentless-code-scanning."
+    else
+        record_check "Defender for Cloud agentless code scanning (SBOM)" unknown "Depends on the GitHub connector, which was not confirmed as connected. Agentless code scanning turns on automatically once the connector is authorized; no separate action is required. See https://learn.microsoft.com/azure/defender-for-cloud/agentless-code-scanning."
+    fi
+}
+
 run_defender_scan() {
     local appservices_tier containers_tier cspm_tier arm_tier assessment_json target_found=1 failures=0
     local plan_name desired_tier current_tier plan_label cspm_spec containers_spec extension_result plan_error plan_failed
@@ -2340,6 +2383,7 @@ ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     write_status_html defender running "$(auto_percent 50)" "Checking the Defender for Cloud DevOps connector and GitHub Advanced Security state."
     ensure_devops_connector
     record_advanced_security_state
+    record_agentless_code_scanning_state
 
     write_status_html defender running "$(auto_percent 65)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
     assessment_json="$(az security assessment list --resource-group "$RESOURCE_GROUP" -o json 2>/dev/null || true)"
@@ -2656,7 +2700,7 @@ while (($# > 0)); do
             COMMAND="$1"
             shift
             ;;
-        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario)
+        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario|--registry-sku|--plan-sku|--plan-capacity)
             (($# >= 2)) || fail "$1 requires a value."
             case "$1" in
                 --environment) ENVIRONMENT="$2" ;;
@@ -2668,6 +2712,9 @@ while (($# > 0)); do
                 --image-name) IMAGE_NAME="$2" ;;
                 --image-tag) IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=true ;;
                 --scenario) SCENARIO_ID="$2" ;;
+                --registry-sku) CONTAINER_REGISTRY_SKU="$2" ;;
+                --plan-sku) APP_SERVICE_PLAN_SKU="$2" ;;
+                --plan-capacity) APP_SERVICE_PLAN_CAPACITY="$2" ;;
             esac
             shift 2
             ;;
