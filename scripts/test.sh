@@ -153,6 +153,8 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'cspm-monitor-github'
 file_contains "$REPO_ROOT/app.js" 'defender_monitoring'
 file_contains "$REPO_ROOT/app.js" 'cspm_serverless_protection'
 file_contains "$REPO_ROOT/app.js" 'container_registry_vulnerability_assessment'
+# ARM renders string(bool) as "True", so the app must not compare case-sensitively.
+file_contains "$REPO_ROOT/app.js" 'toLowerCase()'
 file_contains "$REPO_ROOT/infra/main.bicep" 'defenderCspmTier'
 file_contains "$REPO_ROOT/infra/main.bicep" 'DEFENDER_SERVERLESS_PROTECTION'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Scenario 1 vulnerable map/regex configuration'
