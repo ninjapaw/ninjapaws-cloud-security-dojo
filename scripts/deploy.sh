@@ -2239,7 +2239,7 @@ record_advanced_security_state() {
 
 run_defender_scan() {
     local appservices_tier containers_tier cspm_tier arm_tier assessment_json target_found=1 failures=0
-    local plan_name desired_tier current_tier plan_label cspm_spec containers_spec extension_result
+    local plan_name desired_tier current_tier plan_label cspm_spec containers_spec extension_result plan_error plan_failed
     set_task defender in_progress "Activating configured Defender plans and requesting the latest assessment inventory."
     write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service, Defender for Containers, and Defender CSPM coverage, then scanning for $DEFENDER_TARGET_CVE."
 
@@ -2262,12 +2262,18 @@ run_defender_scan() {
         fi
         current_tier="$(defender_plan_tier "$plan_name")"
         if [[ "$DEFENDER_MANAGE_PLANS" == true && "$current_tier" != "$desired_tier" ]]; then
-            if az security pricing create --name "$plan_name" --tier "$desired_tier" --output none 2>/dev/null; then
-                current_tier="$(defender_plan_tier "$plan_name")"
-                record_check "Defender plan: $plan_label" pass "Requested $desired_tier tier; Azure reports the plan at ${current_tier:-pending} tier."
-            else
-                record_check "Defender plan: $plan_label" fail "Could not activate the requested $desired_tier tier. Check Microsoft.Security/pricings permissions and subscription eligibility."
+            plan_failed=0
+            plan_error="$(az security pricing create --name "$plan_name" --tier "$desired_tier" --output none 2>&1)" || plan_failed=1
+            if ((plan_failed == 1)); then
+                record_check "Defender plan: $plan_label" fail "Could not activate the requested $desired_tier tier: ${plan_error:-no error detail returned}. Check Microsoft.Security/pricings permissions and subscription eligibility."
                 failures=$((failures + 1))
+            else
+                current_tier="$(defender_plan_tier "$plan_name")"
+                if [[ "$current_tier" == "$desired_tier" ]]; then
+                    record_check "Defender plan: $plan_label" pass "Activated the $desired_tier tier and Azure confirms it."
+                else
+                    record_check "Defender plan: $plan_label" unknown "Requested $desired_tier but Azure still reports '${current_tier:-not available}'. Plan writes can lag; re-run the verify stage to confirm."
+                fi
             fi
         elif [[ "$current_tier" == "$desired_tier" ]]; then
             record_check "Defender plan: $plan_label" pass "Azure reports the configured $desired_tier tier."
