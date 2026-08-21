@@ -65,6 +65,7 @@ The status payload should show:
 - `runtime_verification.map_regex_enabled`: `true`
 - `defender_monitoring.plans.defender_cspm`: `Standard`
 - `defender_monitoring.monitoring.app_service_threat_protection`: `true`
+- `defender_monitoring.monitoring.resource_manager_threat_detection`: `true`
 - `defender_monitoring.monitoring.container_registry_vulnerability_assessment`: `true`
 - `defender_monitoring.monitoring.cspm_serverless_protection`: `true`
 
@@ -78,7 +79,8 @@ The final report's Defender task records:
 
 - **Defender for App Service**: expected `Standard` coverage for App Service attack detection.
 - **Defender for Containers**: expected `Standard` coverage for Azure Container Registry image vulnerability assessment.
-- **Defender CSPM**: expected `Free` foundational posture visibility.
+- **Defender CSPM**: expected `Standard` coverage for attack paths, serverless posture, and registry access.
+- **Defender for Resource Manager**: expected `Standard` coverage for the control-plane operations this lifecycle performs.
 - **Kubernetes runtime**: Not applicable because this demo deploys to App Service, not AKS.
 - **Servers, SQL, Storage, Key Vault, DNS, and Resource Manager plans**: Not activated because those workloads are not deployed by this project.
 

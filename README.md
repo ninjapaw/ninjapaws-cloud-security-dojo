@@ -52,9 +52,10 @@ The direct application listens on `http://localhost:3000`.
 ```json
 "defender_monitoring": {
   "source": "deployment-configuration",
-  "plans": { "defender_for_app_service": "Standard", "defender_for_containers": "Standard", "defender_cspm": "Standard" },
+  "plans": { "defender_for_app_service": "Standard", "defender_for_containers": "Standard", "defender_cspm": "Standard", "defender_for_resource_manager": "Standard" },
   "monitoring": {
     "app_service_threat_protection": true,
+    "resource_manager_threat_detection": true,
     "container_registry_vulnerability_assessment": true,
     "cspm_serverless_protection": true,
     "cspm_serverless_containers": true,
@@ -109,7 +110,10 @@ Defender for Cloud settings live under the `defender` object in `config/deploy.c
 | `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
 | `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
 | `defender.plans.CloudPosture` | `Standard` | Defender CSPM: attack paths, cloud security explorer, and the serverless/registry extensions below |
+| `defender.plans.Arm` | `Standard` | Defender for Resource Manager: threat detection on the control-plane operations this lifecycle performs |
 | `defender.manageExtensions` | `true` | Allows the lifecycle to apply the plan extension sets below |
+
+Defender for Resource Manager is enabled because this project is unusually control-plane heavy: it creates and deletes resource groups, assigns RBAC roles, changes subscription-scoped Defender pricing, creates security connectors, and drives ACR builds — all through ARM. The GitHub OIDC identity it uses holds `Contributor` and `Role Based Access Control Administrator`, which is exactly the kind of identity an attacker would target for privilege escalation. This plan detects suspicious ARM operations, exploitation toolkits such as MicroBurst and PowerZure, and anomalous use of that automation. It bills at a flat subscription rate rather than per resource.
 
 `CloudPosture` defaults to `Standard` rather than `Free` because the capabilities this scenario demonstrates — attack path analysis, serverless posture, and registry access for container image posture — are Defender CSPM features. Foundational CSPM (`Free`) provides recommendations and secure score only.
 
@@ -155,6 +159,21 @@ The lifecycle does **not** automatically deactivate an already-enabled Defender 
 `entrypoint.sh` generates NGINX from `nginx.conf` at startup, replacing `__APP_PORT__` with `PORT`. This is a deliberate dual-port design: **WEBSITES_PORT=80** tells Azure App Service which container port accepts traffic, while **PORT=3000** is the Node.js upstream behind NGINX. Changing `PORT` changes the NGINX upstream automatically; changing `WEBSITES_PORT` requires changing the container listener and App Service configuration together. Startup also records the actual NGINX binary and Debian package versions, which `/api/status` exposes under `runtime_verification` and the deployment report verifies.
 
 Never put credentials in these variables. Runtime secrets belong in Azure Key Vault with managed identity. GitHub Environment secrets are reserved for values GitHub itself must keep confidential when OIDC or Key Vault cannot provide them.
+
+### Why this deployment ships no Key Vault
+
+This project deliberately provisions no Key Vault, because it has no secret to store. Every credential that a container deployment normally needs was designed out rather than protected:
+
+| Normally a secret | How this project avoids it |
+| --- | --- |
+| Registry password | ACR is created with `adminUserEnabled: false`; App Service pulls with a user-assigned managed identity holding `AcrPull` |
+| Azure deployment credential | GitHub Actions uses OIDC federated credentials, so no client secret is ever created |
+| App configuration | NGINX version, port, scenario state, and Defender flags are all non-secret and ship as App Service settings |
+| Database or API credential | No database, queue, or third-party API is deployed |
+
+Adding a Key Vault here would introduce a resource to secure, an access policy or RBAC surface to maintain, and a monthly cost — while protecting nothing. It would also imply this environment holds secrets that it does not, which is misleading in a training demo.
+
+The rule stays unchanged for future work: the moment a real secret is introduced, it belongs in Key Vault, referenced from App Service with the existing managed identity, and `KeyVaults` should move to the `Standard` Defender plan at that point. Until then the report records Defender for Key Vault as **Not applicable** rather than enabling a plan for a resource type that does not exist.
 
 ### Defender endpoint blocks during npm builds
 

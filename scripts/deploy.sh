@@ -77,6 +77,7 @@ DEFENDER_TARGET_CVE="${DEFENDER_TARGET_CVE:-}"
 DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-}"
 DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-}"
 DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-}"
+DEFENDER_ARM_TIER="${DEFENDER_ARM_TIER:-}"
 DEFENDER_MANAGE_EXTENSIONS="${DEFENDER_MANAGE_EXTENSIONS:-}"
 DEFENDER_CSPM_SERVERLESS_PROTECTION="${DEFENDER_CSPM_SERVERLESS_PROTECTION:-}"
 DEFENDER_CSPM_SERVERLESS_CONTAINERS="${DEFENDER_CSPM_SERVERLESS_CONTAINERS:-}"
@@ -1557,6 +1558,7 @@ resolve_settings() {
     DEFENDER_APPSERVICES_TIER="${DEFENDER_APPSERVICES_TIER:-$(config_setting defender.plans.AppServices Standard)}"
     DEFENDER_CONTAINERS_TIER="${DEFENDER_CONTAINERS_TIER:-$(config_setting defender.plans.Containers Standard)}"
     DEFENDER_CSPM_TIER="${DEFENDER_CSPM_TIER:-$(config_setting defender.plans.CloudPosture Standard)}"
+    DEFENDER_ARM_TIER="${DEFENDER_ARM_TIER:-$(config_setting defender.plans.Arm Standard)}"
     DEFENDER_MANAGE_EXTENSIONS="${DEFENDER_MANAGE_EXTENSIONS:-$(config_setting defender.manageExtensions true)}"
     DEFENDER_CSPM_SERVERLESS_PROTECTION="${DEFENDER_CSPM_SERVERLESS_PROTECTION:-$(config_setting defender.cspmExtensions.AgentlessServerlessPosture true)}"
     DEFENDER_CSPM_SERVERLESS_CONTAINERS="${DEFENDER_CSPM_SERVERLESS_CONTAINERS:-$(config_setting defender.cspmExtensions.ServerlessContainers true)}"
@@ -1752,6 +1754,7 @@ run_bicep_deployment() {
             defenderAppServicesTier="$DEFENDER_APPSERVICES_TIER" \
             defenderContainersTier="$DEFENDER_CONTAINERS_TIER" \
             defenderCspmTier="$DEFENDER_CSPM_TIER" \
+            defenderArmTier="$DEFENDER_ARM_TIER" \
             defenderServerlessProtection="$DEFENDER_CSPM_SERVERLESS_PROTECTION" \
             defenderServerlessContainers="$DEFENDER_CSPM_SERVERLESS_CONTAINERS" \
             defenderRegistryAssessment="$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" \
@@ -2235,7 +2238,7 @@ record_advanced_security_state() {
 }
 
 run_defender_scan() {
-    local appservices_tier containers_tier cspm_tier assessment_json target_found=1 failures=0
+    local appservices_tier containers_tier cspm_tier arm_tier assessment_json target_found=1 failures=0
     local plan_name desired_tier current_tier plan_label cspm_spec containers_spec extension_result
     set_task defender in_progress "Activating configured Defender plans and requesting the latest assessment inventory."
     write_status_html defender running "$(auto_percent 10)" "Activating Defender for App Service, Defender for Containers, and Defender CSPM coverage, then scanning for $DEFENDER_TARGET_CVE."
@@ -2250,6 +2253,7 @@ run_defender_scan() {
     appservices_tier="$DEFENDER_APPSERVICES_TIER"
     containers_tier="$DEFENDER_CONTAINERS_TIER"
     cspm_tier="$DEFENDER_CSPM_TIER"
+    arm_tier="$DEFENDER_ARM_TIER"
     while IFS='|' read -r plan_name desired_tier plan_label; do
         [[ -n "$plan_name" ]] || continue
         if [[ "$desired_tier" == disabled || "$desired_tier" == off ]]; then
@@ -2274,6 +2278,7 @@ run_defender_scan() {
 AppServices|$appservices_tier|Defender for App Service
 Containers|$containers_tier|Defender for Containers
 CloudPosture|$cspm_tier|Defender CSPM
+Arm|$arm_tier|Defender for Resource Manager
 EOF
 
     write_status_html defender running "$(auto_percent 35)" "Applying Defender CSPM and Defender for Containers extension configuration."
@@ -2354,8 +2359,13 @@ ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     else
         record_check "ACR image workload is covered for vulnerability assessment" not_applicable "Defender for Containers is not enabled at the configured tier."
     fi
+    if [[ "$arm_tier" == Standard ]]; then
+        record_check "Control plane operations are monitored for threats" pass "Defender for Resource Manager watches the deployment, role assignment, and registry operations this lifecycle performs through ARM."
+    else
+        record_check "Control plane operations are monitored for threats" not_applicable "Defender for Resource Manager is not enabled at the configured tier."
+    fi
     record_check "Kubernetes runtime workload coverage" not_applicable "This deployment runs a custom container on App Service; it does not deploy AKS/Kubernetes nodes or workloads."
-    record_check "Unrequested Defender workload plans" not_applicable "Defender for Servers, SQL, Storage, Key Vault, DNS, and Resource Manager are not activated because this scenario does not deploy those workloads."
+    record_check "Unrequested Defender workload plans" not_applicable "Defender for Servers, SQL, Storage, Key Vault, and DNS are not requested because this scenario deploys no virtual machines, databases, storage accounts, key vaults, or private DNS zones."
 
     if ((failures > 0)); then
         set_task defender failure "$failures Defender plan activation check(s) failed. See the verification matrix for details."

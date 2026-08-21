@@ -11,6 +11,7 @@ param defenderEnabled bool = false
 param defenderAppServicesTier string = 'Standard'
 param defenderContainersTier string = 'Standard'
 param defenderCspmTier string = 'Standard'
+param defenderArmTier string = 'Standard'
 param defenderServerlessProtection bool = true
 param defenderServerlessContainers bool = true
 param defenderRegistryAssessment bool = true
@@ -122,6 +123,10 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
         {
           name: 'DEFENDER_CSPM_TIER'
           value: defenderCspmTier
+        }
+        {
+          name: 'DEFENDER_ARM_TIER'
+          value: defenderArmTier
         }
         {
           name: 'DEFENDER_SERVERLESS_PROTECTION'

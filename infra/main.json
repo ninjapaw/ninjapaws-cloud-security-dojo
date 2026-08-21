@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "5156187108269862880"
+      "templateHash": "8775484709021674300"
     }
   },
   "parameters": {
@@ -56,6 +56,10 @@
       "defaultValue": "Standard"
     },
     "defenderCspmTier": {
+      "type": "string",
+      "defaultValue": "Standard"
+    },
+    "defenderArmTier": {
       "type": "string",
       "defaultValue": "Standard"
     },
@@ -191,6 +195,10 @@
             {
               "name": "DEFENDER_CSPM_TIER",
               "value": "[parameters('defenderCspmTier')]"
+            },
+            {
+              "name": "DEFENDER_ARM_TIER",
+              "value": "[parameters('defenderArmTier')]"
             },
             {
               "name": "DEFENDER_SERVERLESS_PROTECTION",
