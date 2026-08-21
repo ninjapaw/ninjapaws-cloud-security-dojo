@@ -31,13 +31,18 @@ function getRuntimeStatus() {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
     vulnerabilityStatus: runtimeVerification.vulnerability_detected === true ? 'vulnerable' : 'not_detected',
     vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
-    defenderEnabled: process.env.DEFENDER_ENABLED === 'true',
+    defenderEnabled: isEnabled('DEFENDER_ENABLED'),
     detectionReason: runtimeVerification.detection_reason || 'Runtime detection evidence is unavailable.'
   };
 }
 
+// ARM emits string(bool) as "True"/"False", so compare case-insensitively.
 function isEnabled(name) {
-  return process.env[name] === 'true';
+  return String(process.env[name] ?? '').trim().toLowerCase() === 'true';
+}
+
+function isTier(name, tier) {
+  return String(process.env[name] ?? '').trim().toLowerCase() === tier.toLowerCase();
 }
 
 // The container holds no Azure credentials, so this reports deployment-time configuration only.
@@ -53,7 +58,7 @@ function getDefenderMonitoring() {
     },
     monitoring: {
       defender_dashboard_flag: isEnabled('DEFENDER_ENABLED'),
-      app_service_threat_protection: (process.env.DEFENDER_APPSERVICES_TIER || '') === 'Standard',
+      app_service_threat_protection: isTier('DEFENDER_APPSERVICES_TIER', 'Standard'),
       container_registry_vulnerability_assessment: isEnabled('DEFENDER_REGISTRY_ASSESSMENT'),
       cspm_serverless_protection: isEnabled('DEFENDER_SERVERLESS_PROTECTION'),
       cspm_serverless_containers: isEnabled('DEFENDER_SERVERLESS_CONTAINERS'),
