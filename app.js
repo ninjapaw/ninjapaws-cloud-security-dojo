@@ -36,6 +36,33 @@ function getRuntimeStatus() {
   };
 }
 
+function isEnabled(name) {
+  return process.env[name] === 'true';
+}
+
+// The container holds no Azure credentials, so this reports deployment-time configuration only.
+function getDefenderMonitoring() {
+  return {
+    source: 'deployment-configuration',
+    authoritative_source: 'Microsoft Defender for Cloud (Environment settings)',
+    note: 'These flags report what the deployment requested, not a live query of Azure plan state.',
+    plans: {
+      defender_for_app_service: process.env.DEFENDER_APPSERVICES_TIER || 'unknown',
+      defender_for_containers: process.env.DEFENDER_CONTAINERS_TIER || 'unknown',
+      defender_cspm: process.env.DEFENDER_CSPM_TIER || 'unknown'
+    },
+    monitoring: {
+      defender_dashboard_flag: isEnabled('DEFENDER_ENABLED'),
+      app_service_threat_protection: (process.env.DEFENDER_APPSERVICES_TIER || '') === 'Standard',
+      container_registry_vulnerability_assessment: isEnabled('DEFENDER_REGISTRY_ASSESSMENT'),
+      cspm_serverless_protection: isEnabled('DEFENDER_SERVERLESS_PROTECTION'),
+      cspm_serverless_containers: isEnabled('DEFENDER_SERVERLESS_CONTAINERS'),
+      devops_connector_requested: isEnabled('DEFENDER_DEVOPS_CONNECTOR'),
+      github_advanced_security_expected: isEnabled('GITHUB_ADVANCED_SECURITY')
+    }
+  };
+}
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -65,6 +92,7 @@ app.get('/api/status', (req, res) => {
       fixed_version: FIXED_VERSION
     },
     runtime_verification: runtimeVerification,
+    defender_monitoring: getDefenderMonitoring(),
     host: os.hostname(),
     platform: os.platform(),
     arch: os.arch(),
@@ -76,6 +104,9 @@ app.get('/api/status', (req, res) => {
 // Home endpoint
 app.get('/', (req, res) => {
   const { nginxVersion, vulnerabilityStatus, defenderEnabled } = getRuntimeStatus();
+  const defenderMonitoring = getDefenderMonitoring();
+  const monitoringRow = (label, enabled) =>
+    `<li><code>${label}</code> - ${enabled ? '✅ true' : '⚪ false'}</li>`;
 
   const html = `
 <!DOCTYPE html>
@@ -344,6 +375,19 @@ app.get('/', (req, res) => {
         }
       </div>
       ${defenderEnabled ? '<span class="defender-badge">🛡 Microsoft Defender Monitoring Active</span>' : ''}
+    </div>
+
+    <div class="endpoints">
+      <h3>Defender for Cloud Monitoring</h3>
+      <ul class="endpoint-list">
+        ${monitoringRow('app_service_threat_protection', defenderMonitoring.monitoring.app_service_threat_protection)}
+        ${monitoringRow('container_registry_vulnerability_assessment', defenderMonitoring.monitoring.container_registry_vulnerability_assessment)}
+        ${monitoringRow('cspm_serverless_protection', defenderMonitoring.monitoring.cspm_serverless_protection)}
+        ${monitoringRow('cspm_serverless_containers', defenderMonitoring.monitoring.cspm_serverless_containers)}
+        ${monitoringRow('devops_connector_requested', defenderMonitoring.monitoring.devops_connector_requested)}
+        ${monitoringRow('github_advanced_security_expected', defenderMonitoring.monitoring.github_advanced_security_expected)}
+        <li><strong>Declared configuration:</strong> Defender for Cloud remains the authoritative source; see <code>defender_monitoring</code> in <code>/api/status</code>.</li>
+      </ul>
     </div>
 
     <div class="endpoints">

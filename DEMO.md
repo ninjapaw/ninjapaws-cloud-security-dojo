@@ -63,6 +63,12 @@ The status payload should show:
 - `runtime_verification.nginx_package_version`: the installed Debian package version
 - `runtime_verification.scenario_config_state`: `affected`
 - `runtime_verification.map_regex_enabled`: `true`
+- `defender_monitoring.plans.defender_cspm`: `Standard`
+- `defender_monitoring.monitoring.app_service_threat_protection`: `true`
+- `defender_monitoring.monitoring.container_registry_vulnerability_assessment`: `true`
+- `defender_monitoring.monitoring.cspm_serverless_protection`: `true`
+
+Treat `runtime_verification` and `defender_monitoring` differently. The first is proven inside the running container. The second reports the Defender coverage the deployment requested; the verification matrix in the report is what compares those requests against Azure.
 
 The authoritative detection result is `vulnerability.detected`. It is `true` only when the actual NGINX binary version is in the F5 affected list and the rendered NGINX configuration contains the affected `map` directive with regex matching. `vulnerability.status` is derived from that result; `VULNERABILITY_STATUS` selects the demo image configuration but is not itself a detection result.
 
