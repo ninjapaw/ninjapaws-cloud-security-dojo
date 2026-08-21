@@ -201,7 +201,7 @@ if [[ -n "$guard_environment" ]]; then
     echo "Checking branch environment guard..."
     guard_config="$(mktemp -d)"
     # An empty Azure config keeps a regressed guard from reaching a real subscription.
-    guard_output="$(AZURE_CONFIG_DIR="$guard_config" bash "$REPO_ROOT/scripts/deploy.sh" provision --environment "$guard_environment" --defaults --yes 2>&1 || true)"
+    guard_output="$(AZURE_CONFIG_DIR="$guard_config" bash "$REPO_ROOT/scripts/deploy.sh" provision --environment "$guard_environment" --defaults --yes --no-status-html --no-open-status 2>&1 || true)"
     rm -rf "$guard_config"
     if [[ "$guard_output" != *"can only target environment"* ]]; then
         echo "ERROR: the branch guard did not refuse environment '$guard_environment'." >&2
