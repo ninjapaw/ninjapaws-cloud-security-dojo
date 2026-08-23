@@ -67,6 +67,7 @@ fi
 
 echo "Checking Bash syntax..."
 bash -n "$REPO_ROOT/scripts/deploy.sh"
+bash -n "$REPO_ROOT/scripts/manage.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
 bash -n "$REPO_ROOT/scripts/test.sh"
 bash -n "$REPO_ROOT/entrypoint.sh"
@@ -163,6 +164,14 @@ file_contains "$REPO_ROOT/infra/main.bicep" 'DEFENDER_SERVERLESS_PROTECTION'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Scenario 1 vulnerable map/regex configuration'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Select a region by number or name'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure subscriptions available to this account:'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Ninja Paws management wizard'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Subscription read access'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Uninstall            Unavailable'
+file_contains "$REPO_ROOT/scripts/manage.sh" 'deploy.sh" wizard'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Uninstall wizard'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Resource group to delete'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Wait for Azure to confirm the resource group is deleted'
+file_contains "$REPO_ROOT/scripts/deploy.sh" '--no-wait'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'mask_identifier'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
 file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
@@ -183,15 +192,19 @@ if [[ "$SKIP_REPORT" == false ]]; then
     test ! -e "$test_output/dev/stale.marker"
     archive_count=$(find "$test_output/archive" -mindepth 1 -maxdepth 1 -type d -name '*-dev' 2>/dev/null | wc -l | tr -d ' ')
     test "$archive_count" -ge 1
-    file_contains "$status_html" 'Executive progress report'
+    file_contains "$status_html" 'Executive report'
     file_contains "$status_html" 'window.npReport'
     file_contains "$status_html" "deployment-' + ENV + '.state.js"
     file_contains "$status_html" 'NINJA PAWS'
     file_contains "$status_html" 'Task list'
+    file_contains "$status_html" 'Overall lifecycle'
+    file_contains "$status_html" 'Current task'
+    file_contains "$status_html" 'current-task-fill'
     file_contains "$status_html" 'Live console'
     file_contains "$test_output/dev/deployment-dev.console.html" 'NINJA PAWS DEPLOYMENT CONSOLE'
     file_contains "$test_output/dev/deployment-dev.console.html" 'line'
     file_contains "$status_html" 'Resolved deployment settings'
+    file_contains "$test_output/dev/deployment-dev.state.js" 'currentTask'
     file_contains "$status_html" 'deployment-dev.log'
     test ! -e "$REPO_ROOT/deployment-output.json"
     test ! -e "$REPO_ROOT/.azure/deployment-dev.json"

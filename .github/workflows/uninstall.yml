@@ -12,8 +12,8 @@ on:
         description: Type the exact resource group name to confirm deletion
         required: true
         type: string
-      wait:
-        description: Wait for Azure to confirm deletion
+      no_wait:
+        description: Return after Azure accepts deletion without waiting for verification
         required: false
         default: false
         type: boolean
@@ -59,9 +59,9 @@ jobs:
 
       - name: Delete tagged environment
         run: |
-          args=(uninstall --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --location "$LOCATION" --resource-group "$RESOURCE_GROUP" --registry-name "$CONTAINER_REGISTRY_NAME" --app-service-name "$APP_SERVICE_NAME" --yes)
-          if [[ "${{ inputs.wait }}" == true ]]; then
-            args+=(--wait)
+          args=(uninstall --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --resource-group "$RESOURCE_GROUP" --yes)
+          if [[ "${{ inputs.no_wait }}" == true ]]; then
+            args+=(--no-wait)
           fi
           scripts/deploy.sh "${args[@]}"
 

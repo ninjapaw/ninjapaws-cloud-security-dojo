@@ -14,7 +14,8 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node app.js",
-    "test": "node --check app.js"
+    "test": "node --check app.js",
+    "test:e2e": "playwright test"
   },
   "keywords": [
     "security",
@@ -24,10 +25,13 @@
     "training",
     "education"
   ],
-  "author": "Dr Bill Mcilhargey / Ninja Paw",
+  "author": "Microsoft Corporation",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   },
   "engines": {
     "node": ">=20.0.0"
