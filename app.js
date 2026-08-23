@@ -25,11 +25,17 @@ function getRuntimeVerification() {
   }
 }
 
+function getVulnerabilityStatus(runtimeVerification) {
+  if (runtimeVerification.vulnerability_detected === true) return 'vulnerable';
+  if (runtimeVerification.scenario_config_state === 'remediated') return 'remediated';
+  return 'not_detected';
+}
+
 function getRuntimeStatus() {
   const runtimeVerification = getRuntimeVerification();
   return {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
-    vulnerabilityStatus: runtimeVerification.vulnerability_detected === true ? 'vulnerable' : 'not_detected',
+    vulnerabilityStatus: getVulnerabilityStatus(runtimeVerification),
     vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
     defenderEnabled: isEnabled('DEFENDER_ENABLED'),
     detectionReason: runtimeVerification.detection_reason || 'Runtime detection evidence is unavailable.'
