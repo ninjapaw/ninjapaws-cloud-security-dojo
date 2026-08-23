@@ -129,7 +129,7 @@ Do not present a **Not sure** result as a clean bill of health. It means Defende
 When the demo is complete, remove the isolated environment only after confirming the target resource group:
 
 ```bash
-bash scripts/deploy.sh uninstall --environment dev --yes --wait
+bash scripts/deploy.sh uninstall --environment dev --yes
 ```
 
 The lifecycle does not automatically deactivate subscription-wide Defender plans. Review and manage those plans explicitly in Defender for Cloud if the subscription is no longer used for this demo.

@@ -25,11 +25,17 @@ function getRuntimeVerification() {
   }
 }
 
+function getVulnerabilityStatus(runtimeVerification) {
+  if (runtimeVerification.vulnerability_detected === true) return 'vulnerable';
+  if (runtimeVerification.scenario_config_state === 'remediated') return 'remediated';
+  return 'not_detected';
+}
+
 function getRuntimeStatus() {
   const runtimeVerification = getRuntimeVerification();
   return {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
-    vulnerabilityStatus: runtimeVerification.vulnerability_detected === true ? 'vulnerable' : 'not_detected',
+    vulnerabilityStatus: getVulnerabilityStatus(runtimeVerification),
     vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
     defenderEnabled: isEnabled('DEFENDER_ENABLED'),
     detectionReason: runtimeVerification.detection_reason || 'Runtime detection evidence is unavailable.'
@@ -414,7 +420,7 @@ app.get('/', (req, res) => {
         This environment is part of the Ninja Paws Cloud Security Dojo training program. It intentionally contains a vulnerable software version for educational detection and remediation demonstrations. This repository contains no customer data, production credentials, or business-sensitive information. All values are examples and placeholders only.
       </div>
       <div style="margin-top: 10px;">
-        This is an independent community project, not a Microsoft product, and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft trademarks and product names belong to Microsoft Corporation.
+        This is an independent community project, not a Microsoft product, assessment, endorsement, or official security guidance. Microsoft employees may contribute in an individual or community capacity. Use at your own risk and validate all demo behavior before using it in any environment. See DISCLAIMER.md in the repository.
       </div>
       <div style="margin-top: 10px;">
         <strong>🎯 Learning Objectives:</strong> Vulnerability detection, remediation, secure supply chains, container security, and Microsoft Defender for Cloud capabilities.

@@ -1,8 +1,10 @@
 # Ninja Paws Cloud Security Dojo
 
-> **Independent community project.** This repository is maintained by Dr Bill Mcilhargey for Ninja Paw. It is not a Microsoft product and is not affiliated with, sponsored by, endorsed by, or supported by Microsoft Corporation. Microsoft product names and trademarks remain the property of Microsoft Corporation. Use this public demo at your own risk.
->
-> Microsoft, Azure, GitHub, Defender, and related names and marks are owned by their respective owners. This repository is not an approved or authorized Microsoft project unless separately stated by Microsoft in writing.
+> **Independent community project.** This repository is not a Microsoft product,
+> assessment, endorsement, or official security guidance. Some contributors may be
+> Microsoft employees acting in an individual or community capacity. Use at your
+> own risk and validate all demo behavior before using it in any environment. See
+> [DISCLAIMER.md](DISCLAIMER.md).
 
 A defensive cloud-security training environment demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
 
@@ -229,7 +231,13 @@ Use `--defaults` for Central US and the current Azure subscription, or choose a 
 
 ## Azure Deployment
 
-The local lifecycle wizard detects `dev` or `main` from the current Git branch. It supports `plan`, `doctor`, `provision`, `build`, `deploy`, `verify`, `repair`, and guarded `uninstall` stages.
+Use `scripts/manage.sh` as the management entry point. With no arguments, it runs a read-only wizard that detects `dev` or `main` from the current Git branch, validates the Azure connection, confirms subscription read access, inspects the configured environment, and offers only lifecycle actions supported by the detected state. `scripts/deploy.sh` remains available for direct automation and supports `plan`, `doctor`, `provision`, `build`, `deploy`, `verify`, `repair`, and guarded `uninstall` stages.
+
+```bash
+bash scripts/manage.sh
+```
+
+The wizard presents unavailable actions in the terminal instead of attempting them. For example, uninstall is unavailable until a matching resource group with the required ownership tags exists; verify and rollout require both the App Service and registry. Selecting an action hands off to the established lifecycle command, including its existing confirmations and branch guards.
 
 Mutating stages are branch-locked: a `dev` checkout can only target the `dev` Environment, and a `main` checkout can only target `prod`. `plan`, `doctor`, and `verify` remain read-only diagnostic stages and may be pointed at either environment explicitly.
 
@@ -241,6 +249,10 @@ bash scripts/deploy.sh deploy
 ```
 
 Use `--defaults` to accept built-in values and `--yes` for non-interactive confirmation. The wizard shows Bicep progress, resource operations, and writes fresh per-run artifacts under `output/<environment>/`, relative to the directory where the script was launched.
+
+`uninstall` uses a focused teardown wizard rather than deployment prompts: it shows the branch-locked environment, offers the configured resource group as the default, and defaults to waiting for Azure to confirm deletion. It then verifies the live Ninja Paws ownership tags before asking for the destructive confirmation. Use `--no-wait` only when an automation caller intentionally needs an asynchronous deletion request.
+
+The initial wizard intentionally does not include arbitrary advanced resource operations or subscription-wide Defender plan changes. Those actions have a larger blast radius than the dojo lifecycle and need a separately designed allowlist, role model, preview, and confirmation flow before they should be exposed interactively.
 
 Each lifecycle run also writes an auto-refreshing HTML status dashboard to `output/<environment>/deployment-<environment>.html`. Open that local file in a browser while the command runs to see the latest stage, percentage, environment coordinates, image, and links to detailed logs/state. No web server is required; the terminal remains the authoritative live stream. Use `--no-status-html` when a file report is not wanted.
 
