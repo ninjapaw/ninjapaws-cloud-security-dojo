@@ -22,6 +22,13 @@ permissions:
   contents: read
 
 jobs:
+  bicep-contract:
+    uses: ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6
+    with:
+      bicep-glob: "infra/**/*.bicep"
+      check-committed-arm: true
+      fail-on-lint-warning: true
+
   validate:
     runs-on: ubuntu-latest
     steps:

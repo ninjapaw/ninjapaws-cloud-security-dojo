@@ -23,6 +23,17 @@ Scenarios are registered in `config/deploy.config.json`. Select the default expl
 - Bicep infrastructure with managed identity and ACR pull access
 - Microsoft Defender for Cloud integration points
 
+## Pawprint Integration Contract
+
+This repository is intentionally wired to the shared [Pawprint](https://github.com/ninjapaw/pawprint) governance surface so deployment policy and validation behavior stay consistent across Ninja Paws projects.
+
+- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6`.
+- Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6`.
+- Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks), while cross-repo guardrails are centralized in Pawprint.
+
+This repository pins an immutable commit SHA so behavior is deterministic and reviewable.
+When Pawprint publishes stable release tags for these kits, migrate this pin to the corresponding tagged release.
+When adopting new shared controls, prefer Pawprint reusable workflows first, then add only dojo-specific checks locally.
 The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
 
 For a customer-facing, self-guided run-through, start with [DEMO.md](DEMO.md). It walks through baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
