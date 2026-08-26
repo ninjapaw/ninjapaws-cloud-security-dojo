@@ -42,7 +42,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ vars.NODE_MAJOR_VERSION || '20' }}
+          node-version-file: .node-version
           cache: npm
 
       - name: Calculate and validate release version
