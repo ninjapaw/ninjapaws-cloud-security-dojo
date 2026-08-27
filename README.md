@@ -226,7 +226,7 @@ Offline mode still runs `npm ci --offline --ignore-scripts`; it does not skip de
 
 ### Subscription, tenant, and region setup
 
-On the first interactive deployment, the lifecycle obtains the current Azure context with `az account show`. If more than one enabled subscription is available and no `--subscription` was supplied, it presents a numbered list so you can choose the subscription by number or ID. If no region was supplied, it presents a numbered region list with **Central US (`centralus`)** as the default; pressing Enter accepts that default. `--defaults` uses the current Azure subscription and Central US without prompting. GitHub Actions is non-interactive and uses the GitHub Environment values.
+The lifecycle uses the Azure CLI's persisted current subscription from `az account show`, so a subscription selected with `az account set` or a previous `--subscription` selection is reused on later runs. Pass `--subscription <id>` when you want to switch it explicitly. If no region was supplied, it presents a numbered region list with **Central US (`centralus`)** as the default; pressing Enter accepts that default. `--defaults` uses the current Azure subscription and Central US without prompting. GitHub Actions is non-interactive and uses the GitHub Environment values.
 
 The OIDC bootstrap command stores `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, and `AZURE_LOCATION` as GitHub **Environment variables**. Subscription and tenant IDs are identifiers, not credentials, so GitHub variables are the correct storage class; putting them in Key Vault would add complexity without protecting a secret. The bootstrap creates no client secret and deploys through short-lived GitHub OIDC tokens. Any actual client secret, API key, connection string, or runtime password belongs in an Azure Key Vault reference or GitHub Environment secret, never in this repository.
 
@@ -259,6 +259,8 @@ bash scripts/deploy.sh doctor
 bash scripts/deploy.sh deploy
 ```
 
+Run `scripts/test.sh` before deployment from a host shell. It checks the local Bash, Node.js, Azure CLI, Bicep, and repository prerequisites and reports host package requirements such as ICU before compiling infrastructure. `scripts/deploy.sh doctor` performs the authenticated Azure preflight and Bicep/what-if checks; neither command changes Azure resources.
+
 Use `--defaults` to accept built-in values and `--yes` for non-interactive confirmation. The wizard shows Bicep progress, resource operations, and writes fresh per-run artifacts under `output/<environment>/`, relative to the directory where the script was launched.
 
 `uninstall` uses a focused teardown wizard rather than deployment prompts: it shows the branch-locked environment, offers the configured resource group as the default, and defaults to waiting for Azure to confirm deletion. It then verifies the live Ninja Paws ownership tags before asking for the destructive confirmation. Use `--no-wait` only when an automation caller intentionally needs an asynchronous deletion request.
@@ -266,6 +268,8 @@ Use `--defaults` to accept built-in values and `--yes` for non-interactive confi
 The initial wizard intentionally does not include arbitrary advanced resource operations or subscription-wide Defender plan changes. Those actions have a larger blast radius than the dojo lifecycle and need a separately designed allowlist, role model, preview, and confirmation flow before they should be exposed interactively.
 
 Each lifecycle run also writes an auto-refreshing HTML status dashboard to `output/<environment>/deployment-<environment>.html`. Open that local file in a browser while the command runs to see the latest stage, percentage, environment coordinates, image, and links to detailed logs/state. No web server is required; the terminal remains the authoritative live stream. Use `--no-status-html` when a file report is not wanted.
+
+The dashboard and live console are refreshed throughout the run, so the browser view and terminal show the same progress information. The existing report is reused: its link is printed and copied to the clipboard once per run, and the browser is opened once while the file continues to refresh. In VS Code or Codespaces, the opener first hands the report URL to the active VS Code window with `code --open-url`; this uses the integrated browser when available. It then detects Microsoft Edge (`msedge.exe`, `microsoft-edge`, `microsoft-edge-dev`, or `edge`) before falling back to the platform default. Set `DEPLOY_BROWSER` or `BROWSER` to an available browser command when a remote shell needs an explicit opener.
 
 While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as *Not started*, *In progress* (animated spinner), *Success*, *Failure*, *Skipped*, or *Not applicable*, each with its own duration and a one-line detail. A failed stage shows the reason inline.
 
