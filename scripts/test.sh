@@ -140,7 +140,7 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure login was not completed. The
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'REPORT_LINK_PRINTED=false'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'STATUS_BROWSER_OPENED=false'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'code --open-url'
-file_contains "$REPO_ROOT/scripts/deploy.sh" 'current_subscription_id="$(az account show --query id -o tsv'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'account_info="$(az account show --query "[id,tenantId,name,user.name]" -o tsv)"'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'tee "$deployment_output"'
 file_contains "$REPO_ROOT/app.js" 'runtime_verification.map_regex_enabled'
 file_contains "$REPO_ROOT/entrypoint.sh" 'VULNERABILITY_DETECTED=false'

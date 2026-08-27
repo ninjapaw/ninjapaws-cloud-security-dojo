@@ -238,7 +238,7 @@ Bootstrap or refresh the GitHub Environment configuration with:
 bash scripts/setup-azure-github-oidc.sh --environment dev
 ```
 
-Use `--defaults` for Central US and the current Azure subscription, or choose a numbered region and subscription during the interactive prompts. Review the generated GitHub Environment variables before enabling `--provision`; Defender plan tiers can incur subscription charges.
+Use `--defaults` for Central US and the current Azure subscription, or choose a numbered region during the interactive prompt. Pass `--subscription <id>` when you need to change subscriptions. Review the generated GitHub Environment variables before enabling `--provision`; Defender plan tiers can incur subscription charges.
 
 ## Azure Deployment
 
