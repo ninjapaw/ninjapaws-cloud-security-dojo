@@ -122,6 +122,8 @@ CONSOLE_AUTORELOAD=true
 IMAGE_TAG_EXPLICIT=false
 USE_DEFAULTS=false
 OPEN_STATUS_HTML=true
+REPORT_LINK_PRINTED=false
+STATUS_BROWSER_OPENED=false
 RUN_STARTED_AT="$(date +%s)"
 RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_ENDED_ISO=""
@@ -130,6 +132,7 @@ RUN_INVOCATION="${*:-$COMMAND}"
 AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
 AZURE_ACCOUNT_NAME=""
 SUBSCRIPTION_NAME=""
+AUTHENTICATION_SKIPPED=false
 
 # Read a dotted path of string values out of the config file without requiring jq.
 config_lookup() {
@@ -646,19 +649,48 @@ EOF
 
 open_status_html() {
     [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
-    local native
+    local native browser browser_name
     native="$(native_path "$STATUS_HTML")"
-    print_report_link
+    print_report_link_once
+    [[ "$STATUS_BROWSER_OPENED" == false ]] || return 0
+    if [[ "${CODESPACES:-false}" == true || -n "${CODESPACE_NAME:-}" || -n "${VSCODE_IPC_HOOK_CLI:-}" ]] && command -v code >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
+        code --open-url "$(report_url "$STATUS_HTML")" >/dev/null 2>&1 &
+        return 0
+    fi
+    browser="${DEPLOY_BROWSER:-${BROWSER:-}}"
+    browser_name="${browser##*/}"
+    case "$browser_name" in
+        edge|msedge|msedge.exe|microsoft-edge|microsoft-edge-dev)
+            browser="${browser:-$browser_name}"
+            if command -v "$browser" >/dev/null 2>&1; then
+                STATUS_BROWSER_OPENED=true
+                "$browser" "$native" >/dev/null 2>&1 &
+                return 0
+            fi
+            ;;
+    esac
+    for browser in msedge.exe microsoft-edge microsoft-edge-dev edge; do
+        if command -v "$browser" >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
+            "$browser" "$native" >/dev/null 2>&1 &
+            return 0
+        fi
+    done
     if [[ "$native" == *:\\* ]]; then
         # MSYS rewrites a bare "/c" into "C:\", which turns cmd.exe /c into an interactive shell.
         if command -v powershell.exe >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
             powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
         elif command -v cmd.exe >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
             MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
         fi
     elif command -v xdg-open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
         xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
     elif command -v open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
         open "$STATUS_HTML" >/dev/null 2>&1 &
     fi
     return 0
@@ -701,6 +733,12 @@ print_report_link() {
     return 0
 }
 
+print_report_link_once() {
+    [[ "$REPORT_LINK_PRINTED" == false ]] || return 0
+    print_report_link
+    REPORT_LINK_PRINTED=true
+}
+
 print_terminal_status() {
     local phase="$1"
     local status="$2"
@@ -718,7 +756,7 @@ print_terminal_status() {
     esac
     printf "\n${color}%s %s %-12s [%s%s] %3s%%  +%ss${NC}\n" "$icon" "$phase" "$status" "$(printf '%*s' "$filled" '' | tr ' ' '#')" "$(printf '%*s' "$empty" '')" "$percent" "$elapsed"
     printf "  ${BLUE}↳${NC} %s\n" "$detail"
-    print_report_link
+    print_report_link_once
 }
 
 start_console_capture() {
@@ -1589,12 +1627,8 @@ resolve_settings() {
     resolve_scenario
     if [[ "$ENVIRONMENT" == auto ]]; then
         local branch_name
-        branch_name="$(git branch --show-current 2>/dev/null || true)"
-        case "$branch_name" in
-            dev) ENVIRONMENT=dev ;;
-            main) ENVIRONMENT=prod ;;
-            *) fail "Cannot detect deployment environment from Git branch '$branch_name'. Use --environment dev or --environment prod." ;;
-        esac
+        branch_name="${GITHUB_REF_NAME:-$(git branch --show-current 2>/dev/null || true)}"
+        ENVIRONMENT="$(environment_for_branch "$branch_name")" || fail "Cannot detect deployment environment from Git branch '$branch_name'. Use --environment dev or --environment prod."
     fi
 
     case "$ENVIRONMENT" in
@@ -1708,6 +1742,14 @@ resolve_settings() {
     open_status_html
 }
 
+environment_for_branch() {
+    case "$1" in
+        main) printf 'prod' ;;
+        dev|dev/*|feature/*|feat/*|chore/*|fix/*|bugfix/*) printf 'dev' ;;
+        *) return 1 ;;
+    esac
+}
+
 enforce_branch_environment() {
     case "$COMMAND" in
         setup|provision|build|deploy|update|repair|rollout|uninstall) ;;
@@ -1716,11 +1758,7 @@ enforce_branch_environment() {
 
     local branch_name expected_environment
     branch_name="${GITHUB_REF_NAME:-$(git branch --show-current 2>/dev/null || true)}"
-    case "$branch_name" in
-        dev) expected_environment=dev ;;
-        main) expected_environment=prod ;;
-        *) fail "Mutating command '$COMMAND' requires branch 'dev' or 'main'; current branch is '$branch_name'." ;;
-    esac
+    expected_environment="$(environment_for_branch "$branch_name")" || fail "Mutating command '$COMMAND' requires a supported development branch or 'main'; current branch is '$branch_name'."
     [[ "$ENVIRONMENT" == "$expected_environment" ]] || fail "Branch '$branch_name' can only target environment '$expected_environment', not '$ENVIRONMENT'."
 }
 
@@ -1732,44 +1770,22 @@ require_commands() {
 }
 
 authenticate() {
-    local account_info subscription_rows selected_subscription subscription_index subscription_id subscription_name
+    local account_info current_subscription_id
     if ! az account show >/dev/null 2>&1; then
         echo -e "${YELLOW}Azure CLI is not authenticated. Starting device-code login.${NC}"
-        az login --use-device-code >/dev/null
-    fi
-    if [[ -z "$SUBSCRIPTION_ID" && -t 0 && "$USE_DEFAULTS" == false ]]; then
-        subscription_rows="$(az account list --query "[?state=='Enabled'].[id,name]" -o tsv 2>/dev/null || true)"
-        if [[ -n "$subscription_rows" ]]; then
-            echo
-            echo "Azure subscriptions available to this account:"
-            subscription_index=0
-            while IFS=$'\t' read -r subscription_id subscription_name; do
-                [[ -n "$subscription_id" ]] || continue
-                subscription_index=$((subscription_index + 1))
-                printf '  %2d) %s (%s)\n' "$subscription_index" "$subscription_name" "$subscription_id"
-            done <<< "$subscription_rows"
-            while true; do
-                read -r -p "Select a subscription by number or ID [current]: " selected_subscription
-                if [[ -z "$selected_subscription" ]]; then
-                    break
-                fi
-                if [[ "$selected_subscription" =~ ^[0-9]+$ ]]; then
-                    subscription_index=0
-                    while IFS=$'\t' read -r subscription_id subscription_name; do
-                        [[ -n "$subscription_id" ]] || continue
-                        subscription_index=$((subscription_index + 1))
-                        if ((subscription_index == selected_subscription)); then
-                            SUBSCRIPTION_ID="$subscription_id"
-                            break 2
-                        fi
-                    done <<< "$subscription_rows"
-                elif [[ "$subscription_rows" == *"$selected_subscription"* ]]; then
-                    SUBSCRIPTION_ID="$selected_subscription"
-                    break
-                fi
-                echo "Please choose one of the listed subscription numbers or enter an exact subscription ID." >&2
-            done
+        if ! az login --use-device-code >/dev/null; then
+            if [[ "$COMMAND" == wizard ]]; then
+                AUTHENTICATION_SKIPPED=true
+                echo -e "${YELLOW}Azure login was not completed. The read-only wizard stopped before inspecting Azure.${NC}"
+                echo "Run 'az login' and start the wizard again when you are ready."
+                return 0
+            fi
+            fail "Azure login was not completed. Run 'az login' and retry '$COMMAND'."
         fi
+    fi
+    if [[ -z "$SUBSCRIPTION_ID" ]]; then
+        current_subscription_id="$(az account show --query id -o tsv 2>/dev/null || true)"
+        SUBSCRIPTION_ID="$current_subscription_id"
     fi
     if [[ -n "$SUBSCRIPTION_ID" ]]; then
         az account set --subscription "$SUBSCRIPTION_ID" || fail "Unable to select subscription '$SUBSCRIPTION_ID'."
@@ -1806,6 +1822,7 @@ run_bicep_deployment() {
     local deployment_log="$OUTPUT_DIR/deployment-$ENVIRONMENT.log"
     local operations_seen="$OUTPUT_DIR/deployment-$ENVIRONMENT.operations"
     local deployment_pid state succeeded failed running percent operation_lines operation_line
+    local -a deployment_args
     local expected_operations=6
 
     : > "$deployment_log"
@@ -1814,31 +1831,38 @@ run_bicep_deployment() {
     echo "Detailed Azure CLI output: $deployment_log"
     write_status_html provisioning running "$(auto_percent 5)" "Submitting Bicep infrastructure deployment."
 
-    az deployment group create \
-        --name "$deployment_name" \
-        --resource-group "$RESOURCE_GROUP" \
-        --mode Incremental \
-        --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
-        --parameters \
-            containerRegistryName="$ACR_NAME" \
-            appServiceName="$APP_SERVICE_NAME" \
-            location="$LOCATION" \
-            imageName="$IMAGE_NAME" \
-            imageTag=latest \
-            nginxVersion="$NGINX_VERSION" \
-            vulnerabilityStatus="$VULNERABILITY_STATUS" \
-            port="$PORT" \
-            defenderEnabled="$DEFENDER_ENABLED" \
-            defenderAppServicesTier="$DEFENDER_APPSERVICES_TIER" \
-            defenderContainersTier="$DEFENDER_CONTAINERS_TIER" \
-            defenderCspmTier="$DEFENDER_CSPM_TIER" \
-            defenderArmTier="$DEFENDER_ARM_TIER" \
-            defenderServerlessProtection="$DEFENDER_CSPM_SERVERLESS_PROTECTION" \
-            defenderServerlessContainers="$DEFENDER_CSPM_SERVERLESS_CONTAINERS" \
-            defenderRegistryAssessment="$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" \
-            defenderDevOpsConnector="$DEFENDER_DEVOPS_CONNECTOR_ENABLED" \
-            githubAdvancedSecurity="$GITHUB_ADVANCED_SECURITY_EXPECTED" \
-        --output json > "$deployment_output" 2> "$deployment_log" &
+    deployment_args=(
+        deployment group create
+        --name "$deployment_name"
+        --resource-group "$RESOURCE_GROUP"
+        --mode Incremental
+        --template-file "$AZURE_REPO_ROOT/infra/main.bicep"
+        --parameters
+        "containerRegistryName=$ACR_NAME"
+        "appServiceName=$APP_SERVICE_NAME"
+        "location=$LOCATION"
+        "imageName=$IMAGE_NAME"
+        imageTag=latest
+        "nginxVersion=$NGINX_VERSION"
+        "vulnerabilityStatus=$VULNERABILITY_STATUS"
+        "port=$PORT"
+        "defenderEnabled=$DEFENDER_ENABLED"
+        "defenderAppServicesTier=$DEFENDER_APPSERVICES_TIER"
+        "defenderContainersTier=$DEFENDER_CONTAINERS_TIER"
+        "defenderCspmTier=$DEFENDER_CSPM_TIER"
+        "defenderArmTier=$DEFENDER_ARM_TIER"
+        "defenderServerlessProtection=$DEFENDER_CSPM_SERVERLESS_PROTECTION"
+        "defenderServerlessContainers=$DEFENDER_CSPM_SERVERLESS_CONTAINERS"
+        "defenderRegistryAssessment=$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT"
+        "defenderDevOpsConnector=$DEFENDER_DEVOPS_CONNECTOR_ENABLED"
+        "githubAdvancedSecurity=$GITHUB_ADVANCED_SECURITY_EXPECTED"
+        --output json
+    )
+    if [[ "$CONSOLE_CAPTURE_STARTED" == true ]]; then
+        az "${deployment_args[@]}" > >(tee "$deployment_output") 2> >(tee "$deployment_log" >&2) &
+    else
+        az "${deployment_args[@]}" > >(tee "$deployment_output" | tee -a "$STATUS_RAW_CONSOLE") 2> >(tee "$deployment_log" | tee -a "$STATUS_RAW_CONSOLE" >&2) &
+    fi
     deployment_pid=$!
 
     while kill -0 "$deployment_pid" 2>/dev/null; do
@@ -2628,10 +2652,23 @@ verify() {
 }
 
 doctor() {
-    local bicep_output="$OUTPUT_DIR/doctor-main.bicep.json"
+    local bicep_output="$OUTPUT_DIR/doctor-main.bicep.json" bicep_version
     local whatif_output="$OUTPUT_DIR/doctor-whatif-$ENVIRONMENT.txt"
     mkdir -p "$OUTPUT_DIR"
 
+    set_task bicep in_progress "Checking the Azure CLI Bicep toolchain and compiling infra/main.bicep."
+    echo -e "${YELLOW}Checking the Azure CLI Bicep toolchain...${NC}"
+    if ! bicep_version="$(az bicep version 2>&1)"; then
+        record_check "Azure CLI Bicep toolchain is available" fail "The host could not start the Bicep compiler."
+        set_task bicep failure "The host Bicep toolchain is unavailable."
+        if [[ "$bicep_version" == *"ICU"* || "$bicep_version" == *"icu"* ]]; then
+            FAILURE_MESSAGE="The Bicep compiler requires ICU on this host. Install libicu (or icu-libs), then retry scripts/deploy.sh doctor."
+        else
+            FAILURE_MESSAGE="The Azure CLI Bicep toolchain is unavailable: $bicep_version"
+        fi
+        fail "$FAILURE_MESSAGE"
+    fi
+    record_check "Azure CLI Bicep toolchain is available" pass "Azure CLI Bicep $bicep_version is available on the host."
     set_task bicep in_progress "Compiling infra/main.bicep with the Azure CLI Bicep toolchain."
     echo -e "${YELLOW}Compiling Bicep...${NC}"
     if az bicep build --file "$AZURE_REPO_ROOT/infra/main.bicep" --outfile "$bicep_output" >/dev/null; then
@@ -2874,6 +2911,15 @@ set_task preflight in_progress "Checking required tooling and the Azure sign-in 
 require_commands
 record_check "Required local tooling is installed" pass "az, curl, git, and tr are all available on PATH."
 authenticate
+if [[ "$AUTHENTICATION_SKIPPED" == true ]]; then
+    record_check "Azure CLI authentication" unknown "Azure login was not completed; no Azure resources were inspected or changed."
+    set_task preflight skipped "Stopped before Azure inspection because authentication was not completed."
+    set_task permissions skipped "Skipped: Azure authentication was not completed."
+    set_task discover skipped "Skipped: Azure authentication was not completed."
+    set_task options skipped "Skipped: Azure authentication was not completed."
+    finalize_report success "Management wizard stopped cleanly before Azure inspection; no resources were changed."
+    exit 0
+fi
 record_check "Azure CLI is authenticated and the subscription is selectable" pass "Operating against subscription $SUBSCRIPTION_ID."
 set_task preflight success "Tooling present and authenticated against subscription $SUBSCRIPTION_ID."
 print_plan

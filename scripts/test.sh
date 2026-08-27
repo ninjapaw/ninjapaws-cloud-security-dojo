@@ -134,6 +134,14 @@ file_contains "$REPO_ROOT/app.js" 'fixed_version: FIXED_VERSION'
 file_contains "$REPO_ROOT/app.js" 'runtimeVerification.vulnerability_detected === true'
 file_contains "$REPO_ROOT/app.js" "app.get('/health'"
 file_contains "$REPO_ROOT/app.js" "app.get('/api/status'"
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'msedge.exe microsoft-edge microsoft-edge-dev edge'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'DEPLOY_BROWSER:-${BROWSER:-}'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure login was not completed. The read-only wizard stopped before inspecting Azure.'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'REPORT_LINK_PRINTED=false'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'STATUS_BROWSER_OPENED=false'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'code --open-url'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'account_info="$(az account show --query "[id,tenantId,name,user.name]" -o tsv)"'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'tee "$deployment_output"'
 file_contains "$REPO_ROOT/app.js" 'runtime_verification.map_regex_enabled'
 file_contains "$REPO_ROOT/entrypoint.sh" 'VULNERABILITY_DETECTED=false'
 file_contains "$REPO_ROOT/entrypoint.sh" 'detection_reason'
@@ -163,7 +171,7 @@ file_contains "$REPO_ROOT/infra/main.bicep" 'defenderCspmTier'
 file_contains "$REPO_ROOT/infra/main.bicep" 'DEFENDER_SERVERLESS_PROTECTION'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Scenario 1 vulnerable map/regex configuration'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Select a region by number or name'
-file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure subscriptions available to this account:'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'current_subscription_id="$(az account show --query id -o tsv'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Ninja Paws management wizard'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Subscription read access'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Uninstall            Unavailable'
@@ -227,6 +235,19 @@ if [[ -n "$guard_environment" ]]; then
         exit 1
     fi
 fi
+case "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" in
+    dev|dev/*|feature/*|feat/*|chore/*|fix/*|bugfix/*)
+        echo "Checking automatic development branch environment detection..."
+        auto_output_dir="$(mktemp -d)"
+        auto_output="$(OUTPUT_ROOT="$auto_output_dir" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment auto --defaults --no-open-status 2>&1)"
+        rm -rf "$auto_output_dir"
+        [[ "$auto_output" == *"Environment: dev"* ]] || {
+            echo "ERROR: development branch environment detection did not complete." >&2
+            printf '%s\n' "$auto_output" >&2
+            exit 1
+        }
+        ;;
+esac
 for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERSION VULNERABILITY_STATUS PORT NPM_REGISTRY_URL NPM_USE_MIRROR NPM_NETWORK_MODE DEFENDER_ENABLED DEFENDER_SCAN_ENABLED DEFENDER_MANAGE_PLANS DEFENDER_TARGET_CVE DEFENDER_APPSERVICES_TIER DEFENDER_CONTAINERS_TIER DEFENDER_CSPM_TIER DEFENDER_ARM_TIER DEFENDER_MANAGE_EXTENSIONS DEFENDER_CSPM_SERVERLESS_PROTECTION DEFENDER_CSPM_SERVERLESS_CONTAINERS DEFENDER_CSPM_REGISTRY_ASSESSMENT DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT DEFENDER_DEVOPS_CONNECTOR_ENABLED GITHUB_ADVANCED_SECURITY_EXPECTED; do
     file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" "gh variable set $variable_name"
     file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "$variable_name"
@@ -234,6 +255,14 @@ done
 
 if [[ "$SKIP_AZURE" == false ]]; then
     command -v az >/dev/null 2>&1 || { echo "ERROR: 'az' is required unless --skip-azure is used." >&2; exit 1; }
+    echo "Checking Azure CLI Bicep host prerequisites..."
+    bicep_version_output="$(az bicep version 2>&1 || true)"
+    if [[ -z "$bicep_version_output" || "$bicep_version_output" == *"ICU"* || "$bicep_version_output" == *"icu"* ]]; then
+        echo "ERROR: Azure CLI could not start its Bicep compiler on this host." >&2
+        printf '%s\n' "$bicep_version_output" >&2
+        echo "Install libicu (or icu-libs) with the host package manager, then rerun scripts/test.sh." >&2
+        exit 1
+    fi
     echo "Compiling Bicep..."
     temp_dir="$(mktemp -d)"
     trap 'rm -rf "$temp_dir"' EXIT
