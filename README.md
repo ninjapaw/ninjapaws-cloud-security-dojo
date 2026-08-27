@@ -27,7 +27,7 @@ Scenarios are registered in `config/deploy.config.json`. Select the default expl
 
 This repository is intentionally wired to the shared [Pawprint](https://github.com/ninjapaw/pawprint) governance surface so deployment policy and validation behavior stay consistent across Ninja Paws projects.
 
-- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6`.
+- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@18e1d946fa59333e4905a83759748f04887a5e02`.
 - Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6`.
 - Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks), while cross-repo guardrails are centralized in Pawprint.
 
