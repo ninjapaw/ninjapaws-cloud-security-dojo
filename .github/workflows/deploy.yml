@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Docker image tag to deploy'
+        description: "Docker image tag to deploy"
         required: false
-        default: ''
+        default: ""
         type: string
       stage:
         description: Deployment stage
@@ -61,13 +61,13 @@ jobs:
       DEFENDER_CSPM_SERVERLESS_CONTAINERS: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
       DEFENDER_CSPM_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
       DEFENDER_CSPM_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CSPM_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CSPM_VM_SCANNING: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}
+      DEFENDER_CSPM_VM_SCANNING: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}
       DEFENDER_CSPM_SENSITIVE_DATA: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
       DEFENDER_CSPM_PERMISSIONS_MANAGEMENT: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
-      DEFENDER_CSPM_API_POSTURE: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}
+      DEFENDER_CSPM_API_POSTURE: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}
       DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT || 'true' }}
       DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CONTAINERS_VM_SCANNING: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}
+      DEFENDER_CONTAINERS_VM_SCANNING: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}
       DEFENDER_CONTAINERS_SENSOR: ${{ vars.DEFENDER_CONTAINERS_SENSOR || 'false' }}
       DEFENDER_DEVOPS_CONNECTOR_ENABLED: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
       DEFENDER_DEVOPS_CONNECTOR_NAME: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
@@ -179,3 +179,37 @@ jobs:
               repo: context.repo.repo,
               body: `${status} **Deployment Status:** ${{ job.status }}\n\n**App Service:** https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net`
             }).catch(() => console.log('Not a PR context'));
+
+  defender-posture:
+    name: Defender posture audit
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-and-deploy
+    permissions:
+      contents: read
+      id-token: write
+    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@dev
+    with:
+      environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
+      resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
+      location: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      apply: ${{ vars.DEFENDER_MANAGE_PLANS != 'false' && vars.DEFENDER_MANAGE_EXTENSIONS != 'false' }}
+      defender-appservices-tier: ${{ vars.DEFENDER_APPSERVICES_TIER || 'Standard' }}
+      defender-containers-tier: ${{ vars.DEFENDER_CONTAINERS_TIER || 'Standard' }}
+      defender-cspm-tier: ${{ vars.DEFENDER_CSPM_TIER || 'Standard' }}
+      defender-arm-tier: ${{ vars.DEFENDER_ARM_TIER || 'Standard' }}
+      defender-cspm-agentless-serverless-posture: ${{ vars.DEFENDER_CSPM_SERVERLESS_PROTECTION || 'true' }}
+      defender-cspm-serverless-containers: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
+      defender-cspm-registry-assessment: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
+      defender-cspm-kubernetes-discovery: ${{ vars.DEFENDER_CSPM_KUBERNETES_DISCOVERY || 'false' }}
+      defender-cspm-vm-scanning: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}
+      defender-cspm-sensitive-data: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
+      defender-cspm-permissions-management: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
+      defender-cspm-api-posture: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}
+      defender-containers-registry-assessment: ${{ vars.DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT || 'true' }}
+      defender-containers-kubernetes-discovery: ${{ vars.DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY || 'false' }}
+      defender-containers-vm-scanning: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}
+      defender-containers-sensor: ${{ vars.DEFENDER_CONTAINERS_SENSOR || 'false' }}
+      defender-devops-connector-enabled: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
+      defender-devops-connector-name: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
+      defender-devops-github-owner: ${{ vars.DEFENDER_DEVOPS_GITHUB_OWNER || github.repository_owner }}
+      github-advanced-security-expected: ${{ vars.GITHUB_ADVANCED_SECURITY_EXPECTED || 'true' }}

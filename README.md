@@ -29,10 +29,11 @@ This repository is intentionally wired to the shared [Pawprint](https://github.c
 
 - Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@18e1d946fa59333e4905a83759748f04887a5e02`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
 - Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@18e1d946fa59333e4905a83759748f04887a5e02`.
+- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@dev` while the shared kit is developed; release branches should move this to an immutable tag or commit once the kit is stabilized. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits.
 - `bicepconfig.json` mirrors the Pawprint linter ruleset so local builds and the shared validator agree, including `use-recent-api-versions`.
-- Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks), while cross-repo guardrails are centralized in Pawprint.
+- Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks, scenario CVE evidence), while cross-repo guardrails are centralized in Pawprint.
 
-This repository pins an immutable commit SHA so behavior is deterministic and reviewable.
+This repository pins mature shared kits to immutable commit SHAs so behavior is deterministic and reviewable. New shared kits may temporarily track Pawprint `dev` while both repositories are advanced together.
 When Pawprint publishes stable release tags for these kits, migrate this pin to the corresponding tagged release.
 When adopting new shared controls, prefer Pawprint reusable workflows first, then add only dojo-specific checks locally.
 The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
@@ -163,6 +164,10 @@ Evidence to retain for an audit-friendly demo:
 - `output/dev/deployment-dev.console.html`
 - The Defender Recommendations view or export showing assessment state and timestamp
 - The run ID and commit from the report's audit trail
+- The audit-trail item **Registry image security findings: On — audited**, backed by the live `ContainerRegistriesVulnerabilityAssessments` state
+- The audit-trail item **CSPM agentless scanning for machines: On — audited**, backed by the live Defender CSPM `AgentlessVmScanning` state
+- The audit-trail item **CSPM API Security Posture: On — audited**, backed by the live Defender CSPM `ApiPosture` state
+- The audit-trail item **Agentless scanning for machines: On — audited**, backed by the live `AgentlessVmScanning` state
 
 Cleanup:
 
@@ -217,19 +222,19 @@ Defender CSPM extensions are applied as one set, because the API replaces the wh
 | `ServerlessContainers`                        | `true`  | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | Registry access, required for full serverless container and image posture                                                                |
 | `AgentlessDiscoveryForKubernetes`             | `false` | No AKS or Kubernetes workload is deployed                                                                                                |
-| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed; leaving it off avoids scanning unrelated machines in a shared subscription                             |
+| `AgentlessVmScanning`                         | `true`  | On; scans machines for software, vulnerabilities, and secrets without installed agents                                                   |
 | `SensitiveDataDiscovery`                      | `false` | This project stores no data; the extension reads customer data, so it stays opt-in                                                       |
 | `EntraPermissionsManagement`                  | `false` | CIEM has tenant-wide scope beyond this scenario                                                                                          |
-| `ApiPosture`                                  | `false` | No API Management APIs are deployed                                                                                                      |
+| `ApiPosture`                                  | `true`  | On; assesses API exposure, authentication, dormant APIs, sensitive data, and App Service API posture preview                             |
 
 Defender for Containers extensions follow the same pattern:
 
-| Containers extension                          | Default | Why                                                                                  |
-| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
-| `ContainerRegistriesVulnerabilityAssessments` | `true`  | This is the registry protection that scans the ACR image and surfaces the target CVE |
-| `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                        |
-| `AgentlessVmScanning`                         | `false` | Applies to Kubernetes node VMs, which are not deployed                               |
-| `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                        |
+| Containers extension                          | Default | Why                                                                                    |
+| --------------------------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `ContainerRegistriesVulnerabilityAssessments` | `true`  | On; generates and links findings artifacts for every new or updated ACR image          |
+| `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                          |
+| `AgentlessVmScanning`                         | `true`  | On; scans machines for software, vulnerabilities, and secrets without installed agents |
+| `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                          |
 
 DevOps and code security settings:
 

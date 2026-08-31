@@ -67,6 +67,7 @@ LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
 REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-${CONTAINER_REGISTRY_NAME:-${REGISTRY_NAME:-}}}"
 APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-${APP_SERVICE_NAME:-}}"
+APP_SERVICE_PLAN_SKU="${AZURE_APP_SERVICE_PLAN_SKU:-${APP_SERVICE_PLAN_SKU:-}}"
 IMAGE_NAME="${IMAGE_NAME:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 BASE_OS_IMAGE="${BASE_OS_IMAGE:-}"
@@ -105,6 +106,10 @@ DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-}"
 GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-}"
 DEFENDER_DEVOPS_CONNECTOR_STATE=not_evaluated
 GITHUB_ADVANCED_SECURITY_STATE=not_evaluated
+DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE=not_evaluated
+DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE=not_evaluated
+DEFENDER_CSPM_API_POSTURE_AUDIT_STATE=not_evaluated
+DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE=not_evaluated
 SCENARIO_NAME=""
 SCENARIO_SHORT_NAME=""
 SCENARIO_CVE=""
@@ -416,6 +421,7 @@ Options:
   --resource-group <name>  Azure resource group
   --registry-name <name>   Azure Container Registry name
   --app-service-name <name> App Service name
+  --app-service-plan-sku <sku> App Service plan SKU (default: B2)
   --image-name <name>      Container image repository (default: ninjapaws-dojo)
   --image-tag <tag>        Image tag (default: current Git SHA)
     --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
@@ -1033,6 +1039,44 @@ write_state_js() {
 
 render_audit_facts() {
     local ended="${RUN_ENDED_ISO:-in progress}"
+    local registry_findings_label="Not audited yet"
+    local cspm_machine_scan_label="Not audited yet"
+    local cspm_api_posture_label="Not audited yet"
+    local machine_scan_label="Not audited yet"
+    local defender_connector_label="Not audited yet"
+    local github_advanced_security_label="Not audited yet"
+    case "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" in
+        true) registry_findings_label="On — audited" ;;
+        false) registry_findings_label="Off — audited" ;;
+        unknown) registry_findings_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" in
+        true) cspm_machine_scan_label="On — audited" ;;
+        false) cspm_machine_scan_label="Off — audited" ;;
+        unknown) cspm_machine_scan_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" in
+        true) cspm_api_posture_label="On — audited" ;;
+        false) cspm_api_posture_label="Off — audited" ;;
+        unknown) cspm_api_posture_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" in
+        true) machine_scan_label="On — audited" ;;
+        false) machine_scan_label="Off — audited" ;;
+        unknown) machine_scan_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_DEVOPS_CONNECTOR_STATE" in
+        connected) defender_connector_label="On — audited" ;;
+        authorization_required) defender_connector_label="Authorization required — audited" ;;
+        unavailable) defender_connector_label="Not sure — audited" ;;
+        not_expected) defender_connector_label="Not applicable — audited" ;;
+    esac
+    case "$GITHUB_ADVANCED_SECURITY_STATE" in
+        enabled) github_advanced_security_label="On — audited" ;;
+        disabled) github_advanced_security_label="Off — audited" ;;
+        unknown) github_advanced_security_label="Not sure — audited" ;;
+        not_expected) github_advanced_security_label="Not applicable — audited" ;;
+    esac
     printf '<div class="item"><div class="label">Run ID</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$RUN_ID")"
     printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$RUN_INVOCATION")"
     printf '<div class="item"><div class="label">Started (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$RUN_STARTED_ISO")"
@@ -1048,6 +1092,12 @@ render_audit_facts() {
     printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$AZURE_TENANT_ID")")"
     printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
     printf '<div class="item"><div class="label">Azure identity</div><div class="value">%s</div></div>' "$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")"
+    printf '<div class="item"><div class="label">Registry image security findings</div><div class="value">%s<br><span class="hint">Defender for Containers: ContainerRegistriesVulnerabilityAssessments</span></div></div>' "$(html_escape "$registry_findings_label")"
+    printf '<div class="item"><div class="label">CSPM agentless scanning for machines</div><div class="value">%s<br><span class="hint">Defender CSPM: AgentlessVmScanning</span></div></div>' "$(html_escape "$cspm_machine_scan_label")"
+    printf '<div class="item"><div class="label">CSPM API Security Posture</div><div class="value">%s<br><span class="hint">Defender CSPM: ApiPosture</span></div></div>' "$(html_escape "$cspm_api_posture_label")"
+    printf '<div class="item"><div class="label">Agentless scanning for machines</div><div class="value">%s<br><span class="hint">Defender for Containers: AgentlessVmScanning</span></div></div>' "$(html_escape "$machine_scan_label")"
+    printf '<div class="item"><div class="label">Defender GitHub connector</div><div class="value">%s<br><span class="hint">Defender for Cloud DevOps connector</span></div></div>' "$(html_escape "$defender_connector_label")"
+    printf '<div class="item"><div class="label">GitHub Advanced Security</div><div class="value">%s<br><span class="hint">GitHub repository security_and_analysis</span></div></div>' "$(html_escape "$github_advanced_security_label")"
 }
 
 command_noun() {
@@ -1666,6 +1716,7 @@ resolve_settings() {
     RESOURCE_GROUP="${RESOURCE_GROUP:-$(config_setting resourceGroup "")}"
     REGISTRY_NAME="${REGISTRY_NAME:-$(config_setting registryName "")}"
     APP_SERVICE_NAME="${APP_SERVICE_NAME:-$(config_setting appServiceName "")}"
+    APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-$(config_setting appServicePlanSku B2)}"
     IMAGE_NAME="${IMAGE_NAME:-$(config_setting imageName ninjapaws-dojo)}"
     BASE_OS_IMAGE="${BASE_OS_IMAGE:-$(config_setting baseOsImage ubuntu)}"
     BASE_OS_VERSION="${BASE_OS_VERSION:-$(config_setting baseOsVersion 24.04)}"
@@ -1689,10 +1740,10 @@ resolve_settings() {
     DEFENDER_CSPM_SERVERLESS_CONTAINERS="${DEFENDER_CSPM_SERVERLESS_CONTAINERS:-$(config_setting defender.cspmExtensions.ServerlessContainers true)}"
     DEFENDER_CSPM_REGISTRY_ASSESSMENT="${DEFENDER_CSPM_REGISTRY_ASSESSMENT:-$(config_setting defender.cspmExtensions.ContainerRegistriesVulnerabilityAssessments true)}"
     DEFENDER_CSPM_KUBERNETES_DISCOVERY="${DEFENDER_CSPM_KUBERNETES_DISCOVERY:-$(config_setting defender.cspmExtensions.AgentlessDiscoveryForKubernetes false)}"
-    DEFENDER_CSPM_VM_SCANNING="${DEFENDER_CSPM_VM_SCANNING:-$(config_setting defender.cspmExtensions.AgentlessVmScanning false)}"
+    DEFENDER_CSPM_VM_SCANNING="${DEFENDER_CSPM_VM_SCANNING:-$(config_setting defender.cspmExtensions.AgentlessVmScanning true)}"
     DEFENDER_CSPM_SENSITIVE_DATA="${DEFENDER_CSPM_SENSITIVE_DATA:-$(config_setting defender.cspmExtensions.SensitiveDataDiscovery false)}"
     DEFENDER_CSPM_PERMISSIONS_MANAGEMENT="${DEFENDER_CSPM_PERMISSIONS_MANAGEMENT:-$(config_setting defender.cspmExtensions.EntraPermissionsManagement false)}"
-    DEFENDER_CSPM_API_POSTURE="${DEFENDER_CSPM_API_POSTURE:-$(config_setting defender.cspmExtensions.ApiPosture false)}"
+    DEFENDER_CSPM_API_POSTURE="${DEFENDER_CSPM_API_POSTURE:-$(config_setting defender.cspmExtensions.ApiPosture true)}"
     DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT="${DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT:-$(config_setting defender.containersExtensions.ContainerRegistriesVulnerabilityAssessments true)}"
     DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY="${DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY:-$(config_setting defender.containersExtensions.AgentlessDiscoveryForKubernetes false)}"
     DEFENDER_CONTAINERS_VM_SCANNING="${DEFENDER_CONTAINERS_VM_SCANNING:-$(config_setting defender.containersExtensions.AgentlessVmScanning false)}"
@@ -1835,6 +1886,7 @@ print_plan() {
     echo "Location: $LOCATION"
     echo "Registry: $ACR_NAME"
     echo "App Service: $APP_SERVICE_NAME"
+    echo "Plan SKU: $APP_SERVICE_PLAN_SKU"
     echo "Image: $IMAGE_NAME:$IMAGE_TAG"
     echo "Bicep: $REPO_ROOT/infra/main.bicep"
     echo "State: $STATE_FILE"
@@ -1868,6 +1920,7 @@ run_bicep_deployment() {
         --parameters
         "containerRegistryName=$ACR_NAME"
         "appServiceName=$APP_SERVICE_NAME"
+        "appServicePlanSku=$APP_SERVICE_PLAN_SKU"
         "location=$LOCATION"
         "imageName=$IMAGE_NAME"
         imageTag=latest
@@ -2283,6 +2336,18 @@ record_extension_checks() {
     while IFS='|' read -r extension desired label; do
         [[ -n "$extension" ]] || continue
         current="$(defender_extension_state "$plan" "$extension")"
+        if [[ "$plan" == Containers && "$extension" == ContainerRegistriesVulnerabilityAssessments ]]; then
+            DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == CloudPosture && "$extension" == AgentlessVmScanning ]]; then
+            DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == CloudPosture && "$extension" == ApiPosture ]]; then
+            DEFENDER_CSPM_API_POSTURE_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == Containers && "$extension" == AgentlessVmScanning ]]; then
+            DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE="$current"
+        fi
         if [[ "$current" == "$desired" ]]; then
             if [[ "$desired" == true ]]; then
                 record_check "$plan_label: $label" pass "Azure reports the extension enabled."
@@ -2450,18 +2515,18 @@ ContainerSensor=$DEFENDER_CONTAINERS_SENSOR"
 ServerlessContainers|$DEFENDER_CSPM_SERVERLESS_CONTAINERS|Serverless container posture for Container Apps and Container Instances
 ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CSPM_REGISTRY_ASSESSMENT|Registry access for container image posture
 AgentlessDiscoveryForKubernetes|$DEFENDER_CSPM_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
-AgentlessVmScanning|$DEFENDER_CSPM_VM_SCANNING|Agentless machine scanning
+AgentlessVmScanning|$DEFENDER_CSPM_VM_SCANNING|Agentless scanning for machines
 SensitiveDataDiscovery|$DEFENDER_CSPM_SENSITIVE_DATA|Sensitive data discovery
 EntraPermissionsManagement|$DEFENDER_CSPM_PERMISSIONS_MANAGEMENT|Cloud infrastructure entitlement management
-ApiPosture|$DEFENDER_CSPM_API_POSTURE|API security posture"
+ApiPosture|$DEFENDER_CSPM_API_POSTURE|API Security Posture"
     else
         record_check "Defender CSPM extensions" not_applicable "Defender CSPM is not at the Standard tier, so its extensions do not apply."
     fi
     if [[ "$containers_tier" == Standard ]]; then
         record_extension_checks Containers "Defender for Containers" \
-"ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT|Azure Container Registry vulnerability assessment
+"ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT|Security findings for Azure Container Registry images
 AgentlessDiscoveryForKubernetes|$DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
-AgentlessVmScanning|$DEFENDER_CONTAINERS_VM_SCANNING|Agentless scanning for Kubernetes nodes
+AgentlessVmScanning|$DEFENDER_CONTAINERS_VM_SCANNING|Agentless scanning for machines
 ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     else
         record_check "Defender for Containers extensions" not_applicable "Defender for Containers is not at the Standard tier, so its extensions do not apply."
@@ -2490,10 +2555,49 @@ ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     else
         record_check "App Service workload is covered for attack detection" not_applicable "Defender for App Service is not enabled at the configured tier."
     fi
-    if [[ "$containers_tier" == Standard ]]; then
-        record_check "ACR image workload is covered for vulnerability assessment" pass "Defender for Containers is configured to scan Azure Container Registry images for known vulnerabilities, including CVEs."
+    DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE="$(defender_extension_state CloudPosture AgentlessVmScanning)"
+    DEFENDER_CSPM_API_POSTURE_AUDIT_STATE="$(defender_extension_state CloudPosture ApiPosture)"
+    DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE="$(defender_extension_state Containers ContainerRegistriesVulnerabilityAssessments)"
+    DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE="$(defender_extension_state Containers AgentlessVmScanning)"
+    if [[ "$cspm_tier" != Standard || "$DEFENDER_CSPM_VM_SCANNING" != true ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" not_applicable "Defender CSPM AgentlessVmScanning is not requested at the Standard tier."
+    elif [[ "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" == true ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" pass "Azure reports AgentlessVmScanning enabled for Defender CSPM. Defender scans machines for installed software, vulnerabilities, and secrets without relying on agents or impacting machine performance. Learn more: https://aka.ms/agentlessscanazure"
+    elif [[ "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" == unknown ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" unknown "Azure did not return the Defender CSPM AgentlessVmScanning state, so the requested setting could not be audited."
     else
-        record_check "ACR image workload is covered for vulnerability assessment" not_applicable "Defender for Containers is not enabled at the configured tier."
+        record_check "CSPM agentless scanning for machines is enabled and audited" fail "Azure reports Defender CSPM AgentlessVmScanning disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$cspm_tier" != Standard || "$DEFENDER_CSPM_API_POSTURE" != true ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" not_applicable "Defender CSPM ApiPosture is not requested at the Standard tier."
+    elif [[ "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" == true ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" pass "Azure reports ApiPosture enabled for Defender CSPM. API Security Posture provides unified visibility across APIs published through Azure API Management and helps assess misconfigurations, dormant APIs, exposed APIs, and APIs handling sensitive data; preview discovery also covers APIs in Azure App Services, Azure Functions, and Azure Logic Apps."
+    elif [[ "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" == unknown ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" unknown "Azure did not return the Defender CSPM ApiPosture state, so the requested setting could not be audited."
+    else
+        record_check "CSPM API Security Posture is enabled and audited" fail "Azure reports Defender CSPM ApiPosture disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$containers_tier" != Standard || "$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" != true ]]; then
+        record_check "Registry image security findings are enabled and audited" not_applicable "Defender for Containers registry vulnerability assessment is not requested at the Standard tier."
+    elif [[ "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" == true ]]; then
+        record_check "Registry image security findings are enabled and audited" pass "Azure reports ContainerRegistriesVulnerabilityAssessments enabled. Defender generates security findings artifacts and links them to new or updated ACR images for evaluation."
+    elif [[ "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" == unknown ]]; then
+        record_check "Registry image security findings are enabled and audited" unknown "Azure did not return the ContainerRegistriesVulnerabilityAssessments state, so the requested setting could not be audited."
+    else
+        record_check "Registry image security findings are enabled and audited" fail "Azure reports ContainerRegistriesVulnerabilityAssessments disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$containers_tier" != Standard || "$DEFENDER_CONTAINERS_VM_SCANNING" != true ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" not_applicable "Defender for Containers AgentlessVmScanning is not requested at the Standard tier."
+    elif [[ "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" == true ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" pass "Azure reports AgentlessVmScanning enabled. Defender scans machines for installed software, vulnerabilities, and secrets without relying on agents or impacting machine performance. Learn more: https://aka.ms/agentlessscanazure"
+    elif [[ "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" == unknown ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" unknown "Azure did not return the AgentlessVmScanning state, so the requested setting could not be audited."
+    else
+        record_check "Agentless scanning for machines is enabled and audited" fail "Azure reports AgentlessVmScanning disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
     fi
     if [[ "$arm_tier" == Standard ]]; then
         record_check "Control plane operations are monitored for threats" pass "Defender for Resource Manager watches the deployment, role assignment, and registry operations this lifecycle performs through ARM."
@@ -2716,7 +2820,7 @@ doctor() {
         if az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
-            --parameters containerRegistryName="$ACR_NAME" appServiceName="$APP_SERVICE_NAME" location="$LOCATION" \
+            --parameters containerRegistryName="$ACR_NAME" appServiceName="$APP_SERVICE_NAME" appServicePlanSku="$APP_SERVICE_PLAN_SKU" location="$LOCATION" \
             --result-format ResourceIdOnly | tee "$whatif_output"; then
             record_check "What-if analysis completed against the live resource group" pass "Predicted changes were written to doctor-whatif-$ENVIRONMENT.txt."
             set_task whatif success "What-if completed; the predicted change set is in doctor-whatif-$ENVIRONMENT.txt."
@@ -2893,7 +2997,7 @@ while (($# > 0)); do
             COMMAND="$1"
             shift
             ;;
-        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario)
+        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--app-service-plan-sku|--image-name|--image-tag|--scenario)
             (($# >= 2)) || fail "$1 requires a value."
             case "$1" in
                 --environment) ENVIRONMENT="$2" ;;
@@ -2902,6 +3006,7 @@ while (($# > 0)); do
                 --resource-group) RESOURCE_GROUP="$2" ;;
                 --registry-name) REGISTRY_NAME="$2" ;;
                 --app-service-name) APP_SERVICE_NAME="$2" ;;
+                --app-service-plan-sku) APP_SERVICE_PLAN_SKU="$2" ;;
                 --image-name) IMAGE_NAME="$2" ;;
                 --image-tag) IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=true ;;
                 --scenario) SCENARIO_ID="$2" ;;
