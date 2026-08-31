@@ -187,7 +187,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@5b51e06db472b7627d417ef3a99824155b4c3411
+    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5
     with:
       environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
       resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
