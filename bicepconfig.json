@@ -40,7 +40,7 @@
         "use-secure-value-for-secure-inputs": { "level": "error" },
         "use-stable-resource-identifiers": { "level": "error" },
         "use-stable-vm-image": { "level": "error" },
-        "what-if-short-circuiting": { "level": "warning" }
+        "what-if-short-circuiting": { "level": "info" }
       }
     }
   },

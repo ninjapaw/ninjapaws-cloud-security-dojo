@@ -27,9 +27,9 @@ Scenarios are registered in `config/deploy.config.json`. Select the default expl
 
 This repository is intentionally wired to the shared [Pawprint](https://github.com/ninjapaw/pawprint) governance surface so deployment policy and validation behavior stay consistent across Ninja Paws projects.
 
-- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@18e1d946fa59333e4905a83759748f04887a5e02`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
-- Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@18e1d946fa59333e4905a83759748f04887a5e02`.
-- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@dev` while the shared kit is developed; release branches should move this to an immutable tag or commit once the kit is stabilized. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits.
+- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@de65a5017f51b2ca9213ec07b5fbfc889262fee2`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
+- Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@de65a5017f51b2ca9213ec07b5fbfc889262fee2`.
+- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@de65a5017f51b2ca9213ec07b5fbfc889262fee2`. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits.
 - `bicepconfig.json` mirrors the Pawprint linter ruleset so local builds and the shared validator agree, including `use-recent-api-versions`.
 - Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks, scenario CVE evidence), while cross-repo guardrails are centralized in Pawprint.
 
