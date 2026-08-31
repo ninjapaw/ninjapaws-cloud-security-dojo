@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   open-promotion-pr:
-    uses: ninjapaw/pawprint/.github/workflows/kit-promote.yml@8ae2b35bfb4fd92fbd2649306a038c794de2b0e6
+    uses: ninjapaw/pawprint/.github/workflows/kit-promote.yml@18e1d946fa59333e4905a83759748f04887a5e02
     with:
       source-branch: dev
       target-branch: main

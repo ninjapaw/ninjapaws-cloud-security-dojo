@@ -27,9 +27,8 @@ Thumbs.db
 dist/
 build/
 
-# Local deployment metadata and dev-container configuration
+# Local deployment metadata
 .azure/
-.devcontainer/
 output/
 
 # Docker

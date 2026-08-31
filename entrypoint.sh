@@ -80,7 +80,7 @@ sleep 2
 
 # Start Node.js application in the background so we can supervise both processes
 echo "Starting Node.js application..."
-node app.js &
+node src/app.js &
 NODE_PID=$!
 
 # If either process dies, stop the other and exit with its status

@@ -19,7 +19,7 @@ param defenderDevOpsConnector bool = true
 param githubAdvancedSecurity bool = true
 
 // Azure Container Registry
-resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: replace(containerRegistryName, '-', '')
   location: location
   sku: {
@@ -33,7 +33,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
 }
 
 // User-assigned Managed Identity for App Service
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: '${appServiceName}-identity'
   location: location
 }
@@ -50,7 +50,7 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // App Service Plan
-resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
+resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   name: appServicePlanName
   location: location
   kind: 'linux'
@@ -64,7 +64,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 }
 
 // App Service for Linux Container
-resource appService 'Microsoft.Web/sites@2023-01-01' = {
+resource appService 'Microsoft.Web/sites@2025-03-01' = {
   name: appServiceName
   location: location
   identity: {
@@ -154,7 +154,7 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
 }
 
 // App Service Health Check
-resource healthCheck 'Microsoft.Web/sites/config@2023-01-01' = {
+resource healthCheck 'Microsoft.Web/sites/config@2025-03-01' = {
   parent: appService
   name: 'web'
   properties: {

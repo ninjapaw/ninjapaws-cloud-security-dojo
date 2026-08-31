@@ -10,12 +10,18 @@
     "url": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues"
   },
   "homepage": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo#readme",
-  "main": "app.js",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js",
-    "test": "node --check app.js",
-    "test:e2e": "playwright test"
+    "start": "node src/app.js",
+    "dev": "node src/app.js",
+    "test": "node --check src/app.js",
+    "test:repo": "bash scripts/test.sh --skip-azure",
+    "test:e2e": "playwright test",
+    "report": "python3 -m http.server 8000 --directory output",
+    "dojo": "bash scripts/manage.sh",
+    "deploy:plan": "bash scripts/deploy.sh plan --environment dev --defaults",
+    "deploy:doctor": "bash scripts/deploy.sh doctor --environment dev --defaults",
+    "deploy:dev": "bash scripts/deploy.sh deploy --environment dev --defaults --yes"
   },
   "keywords": [
     "security",

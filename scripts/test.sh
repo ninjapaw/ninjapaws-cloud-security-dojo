@@ -7,6 +7,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 AZURE_REPO_ROOT="$REPO_ROOT"
+AZURE_CLI_BIN="${AZURE_CLI_BIN:-az}"
 if command -v wslpath >/dev/null 2>&1; then
     AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
 fi
@@ -16,10 +17,17 @@ for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/P
         break
     fi
 done
-if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+if command -v cmd.exe >/dev/null 2>&1; then
     windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
-        azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
+        if command -v wslpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
+        elif command -v cygpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(cygpath -u "$windows_az_path")"
+        else
+            AZURE_CLI_BIN="$windows_az_path"
+        fi
+        azure_cli_dir="$(dirname "$AZURE_CLI_BIN")"
         export PATH="$azure_cli_dir:$PATH"
     fi
 fi
@@ -74,7 +82,7 @@ bash -n "$REPO_ROOT/entrypoint.sh"
 echo "Checking Node.js runtime syntax..."
 (
     cd "$REPO_ROOT"
-    "$NODE_COMMAND" --check app.js
+    "$NODE_COMMAND" --check src/app.js
 )
 
 contains_text() {
@@ -119,6 +127,7 @@ file_contains "$REPO_ROOT/Dockerfile" 'NPM_USE_MIRROR'
 file_contains "$REPO_ROOT/Dockerfile" 'ARG NPM_NETWORK_MODE=online'
 file_contains "$REPO_ROOT/Dockerfile" 'npm ci --offline --omit=dev --ignore-scripts'
 file_contains "$REPO_ROOT/Dockerfile" 'npm ci --omit=dev --ignore-scripts'
+file_contains "$REPO_ROOT/Dockerfile" 'COPY src ./src'
 file_contains "$REPO_ROOT/Dockerfile" 'COPY nginx.conf /etc/nginx/nginx.conf.template'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_IMAGE:'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_VERSION:'
@@ -128,12 +137,12 @@ file_contains "$REPO_ROOT/entrypoint.sh" 'Node.js Major:'
 file_contains "$REPO_ROOT/entrypoint.sh" 'Generating NGINX upstream configuration'
 file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_binary_version'
 file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_package_version'
-file_contains "$REPO_ROOT/app.js" 'runtime_verification'
-file_contains "$REPO_ROOT/app.js" 'advisory_url: ADVISORY_URL'
-file_contains "$REPO_ROOT/app.js" 'fixed_version: FIXED_VERSION'
-file_contains "$REPO_ROOT/app.js" 'runtimeVerification.vulnerability_detected === true'
-file_contains "$REPO_ROOT/app.js" "app.get('/health'"
-file_contains "$REPO_ROOT/app.js" "app.get('/api/status'"
+file_contains "$REPO_ROOT/src/app.js" 'runtime_verification'
+file_contains "$REPO_ROOT/src/app.js" 'advisory_url: ADVISORY_URL'
+file_contains "$REPO_ROOT/src/app.js" 'fixed_version: FIXED_VERSION'
+file_contains "$REPO_ROOT/src/app.js" 'runtimeVerification.vulnerability_detected === true'
+file_contains "$REPO_ROOT/src/app.js" "app.get('/health'"
+file_contains "$REPO_ROOT/src/app.js" "app.get('/api/status'"
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'msedge.exe microsoft-edge microsoft-edge-dev edge'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'DEPLOY_BROWSER:-${BROWSER:-}'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure login was not completed. The read-only wizard stopped before inspecting Azure.'
@@ -142,7 +151,7 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'STATUS_BROWSER_OPENED=false'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'code --open-url'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'account_info="$(az account show --query "[id,tenantId,name,user.name]" -o tsv)"'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'tee "$deployment_output"'
-file_contains "$REPO_ROOT/app.js" 'runtime_verification.map_regex_enabled'
+file_contains "$REPO_ROOT/src/app.js" 'runtime_verification.map_regex_enabled'
 file_contains "$REPO_ROOT/entrypoint.sh" 'VULNERABILITY_DETECTED=false'
 file_contains "$REPO_ROOT/entrypoint.sh" 'detection_reason'
 file_contains "$REPO_ROOT/nginx.conf" '127.0.0.1:__APP_PORT__'
@@ -150,7 +159,8 @@ file_contains "$REPO_ROOT/nginx.conf" 'include /etc/nginx/scenario.conf'
 file_contains "$REPO_ROOT/entrypoint.sh" 'scenario_config_state'
 file_contains "$REPO_ROOT/entrypoint.sh" 'map_regex_enabled'
 file_contains "$REPO_ROOT/README.md" 'map` is an internal NGINX configuration directive'
-file_contains "$REPO_ROOT/DEMO.md" 'The CVE-relevant `map` is an internal NGINX directive'
+file_contains "$REPO_ROOT/README.md" 'Demo Walkthrough'
+file_contains "$REPO_ROOT/README.md" 'The vulnerable baseline should show'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"CloudPosture": "Standard"'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"AgentlessServerlessPosture": "true"'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"ServerlessContainers": "true"'
@@ -159,13 +169,13 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'apply_plan_extensions'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'ensure_devops_connector'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'record_advanced_security_state'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'cspm-monitor-github'
-file_contains "$REPO_ROOT/app.js" 'defender_monitoring'
-file_contains "$REPO_ROOT/app.js" 'cspm_serverless_protection'
-file_contains "$REPO_ROOT/app.js" 'container_registry_vulnerability_assessment'
+file_contains "$REPO_ROOT/src/app.js" 'defender_monitoring'
+file_contains "$REPO_ROOT/src/app.js" 'cspm_serverless_protection'
+file_contains "$REPO_ROOT/src/app.js" 'container_registry_vulnerability_assessment'
 # ARM renders string(bool) as "True", so the app must not compare case-sensitively.
-file_contains "$REPO_ROOT/app.js" 'toLowerCase()'
+file_contains "$REPO_ROOT/src/app.js" 'toLowerCase()'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"Arm": "Standard"'
-file_contains "$REPO_ROOT/app.js" 'resource_manager_threat_detection'
+file_contains "$REPO_ROOT/src/app.js" 'resource_manager_threat_detection'
 file_contains "$REPO_ROOT/infra/main.bicep" 'defenderArmTier'
 file_contains "$REPO_ROOT/infra/main.bicep" 'defenderCspmTier'
 file_contains "$REPO_ROOT/infra/main.bicep" 'DEFENDER_SERVERLESS_PROTECTION'
@@ -184,9 +194,9 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'mask_identifier'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
 file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
 file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation'
-file_contains "$REPO_ROOT/DEMO.md" 'Defender for Cloud - Scenario 1'
-file_contains "$REPO_ROOT/DEMO.md" 'real NGINX vulnerability'
-file_contains "$REPO_ROOT/DEMO.md" 'Patched-State Demonstration'
+file_contains "$REPO_ROOT/README.md" 'Defender for Cloud - Scenario 1'
+file_contains "$REPO_ROOT/README.md" 'real F5 advisory'
+file_contains "$REPO_ROOT/README.md" 'Patched-state demonstration'
 if [[ "$SKIP_REPORT" == false ]]; then
     rendered_nginx="$(mktemp)"
     test_output="$(mktemp -d)"
@@ -216,6 +226,18 @@ if [[ "$SKIP_REPORT" == false ]]; then
     file_contains "$status_html" 'deployment-dev.log'
     test ! -e "$REPO_ROOT/deployment-output.json"
     test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
+    fake_browser_dir="$test_output/bin"
+    browser_calls="$test_output/browser-calls"
+    mkdir -p "$fake_browser_dir"
+    cat > "$fake_browser_dir/msedge" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$BROWSER_CALLS"
+SH
+    chmod +x "$fake_browser_dir/msedge"
+    BROWSER_CALLS="$browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-open-one >/dev/null
+    BROWSER_CALLS="$browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-open-two >/dev/null
+    test "$(wc -l < "$browser_calls" | tr -d ' ')" -eq 1
+    file_contains "$test_output/.deployment-dev.browser-opened" 'file://'
 fi
 # The guard must refuse whichever environment does not belong to the current branch.
 case "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" in
@@ -254,9 +276,9 @@ for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERS
 done
 
 if [[ "$SKIP_AZURE" == false ]]; then
-    command -v az >/dev/null 2>&1 || { echo "ERROR: 'az' is required unless --skip-azure is used." >&2; exit 1; }
+    command -v "$AZURE_CLI_BIN" >/dev/null 2>&1 || { echo "ERROR: 'az' is required unless --skip-azure is used." >&2; exit 1; }
     echo "Checking Azure CLI Bicep host prerequisites..."
-    bicep_version_output="$(az bicep version 2>&1 || true)"
+    bicep_version_output="$("$AZURE_CLI_BIN" bicep version 2>&1 || true)"
     if [[ -z "$bicep_version_output" || "$bicep_version_output" == *"ICU"* || "$bicep_version_output" == *"icu"* ]]; then
         echo "ERROR: Azure CLI could not start its Bicep compiler on this host." >&2
         printf '%s\n' "$bicep_version_output" >&2
@@ -270,8 +292,8 @@ if [[ "$SKIP_AZURE" == false ]]; then
     if command -v wslpath >/dev/null 2>&1; then
         azure_temp_dir="$(wslpath -w "$temp_dir")"
     fi
-    az bicep build --file "$AZURE_REPO_ROOT/infra/main.bicep" --outfile "$azure_temp_dir/main.json" >/dev/null
-    az bicep build --file "$AZURE_REPO_ROOT/infra/parameters.bicep" --outfile "$azure_temp_dir/parameters.json" >/dev/null
+    "$AZURE_CLI_BIN" bicep build --file "$AZURE_REPO_ROOT/infra/main.bicep" --outfile "$azure_temp_dir/main.json" >/dev/null
+    "$AZURE_CLI_BIN" bicep build --file "$AZURE_REPO_ROOT/infra/parameters.bicep" --outfile "$azure_temp_dir/parameters.json" >/dev/null
 fi
 
 echo "All cross-platform checks passed."

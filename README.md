@@ -27,8 +27,9 @@ Scenarios are registered in `config/deploy.config.json`. Select the default expl
 
 This repository is intentionally wired to the shared [Pawprint](https://github.com/ninjapaw/pawprint) governance surface so deployment policy and validation behavior stay consistent across Ninja Paws projects.
 
-- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@18e1d946fa59333e4905a83759748f04887a5e02`.
+- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@18e1d946fa59333e4905a83759748f04887a5e02`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
 - Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@18e1d946fa59333e4905a83759748f04887a5e02`.
+- `bicepconfig.json` mirrors the Pawprint linter ruleset so local builds and the shared validator agree, including `use-recent-api-versions`.
 - Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks), while cross-repo guardrails are centralized in Pawprint.
 
 This repository pins an immutable commit SHA so behavior is deterministic and reviewable.
@@ -36,7 +37,7 @@ When Pawprint publishes stable release tags for these kits, migrate this pin to 
 When adopting new shared controls, prefer Pawprint reusable workflows first, then add only dojo-specific checks locally.
 The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
 
-For a customer-facing, self-guided run-through, start with [DEMO.md](DEMO.md). It walks through baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
+For a customer-facing, self-guided run-through, use the demo walkthrough in this README. It covers baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
 
 ## Quick Start
 
@@ -52,13 +53,27 @@ npm start
 
 The direct application listens on `http://localhost:3000`.
 
+Common commands are exposed through `package.json` so the same entry points work from PowerShell, Git Bash, WSL, Linux, and CI hosts that have Bash available:
+
+```bash
+npm run dojo
+npm run test:repo
+npm run deploy:plan
+npm run deploy:doctor
+npm run deploy:dev
+```
+
+### Repository layout
+
+Application source lives under `src/`; the root is reserved for repository contracts and tool entry points. `Dockerfile` stays at the repository root because Docker, Docker Compose, GitHub Actions, and Azure container build flows all default to that location. `entrypoint.sh` also stays at the root because it is the container runtime entrypoint copied by the Dockerfile, not a host-side lifecycle command. Host-side commands live under `scripts/`, with `scripts/manage.sh` as the human-friendly lifecycle entry point.
+
 ### Endpoint surface
 
-| Route | Purpose | Exposure |
-| --- | --- | --- |
-| `/` | Human-readable training dashboard | Public application route |
-| `/health` | Lightweight JSON health probe | Public application route; used by App Service and rollout checks |
-| `/api/status` | JSON CVE metadata, package/config evidence, image host, and runtime state | Public evidence route for the demo |
+| Route         | Purpose                                                                   | Exposure                                                         |
+| ------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `/`           | Human-readable training dashboard                                         | Public application route                                         |
+| `/health`     | Lightweight JSON health probe                                             | Public application route; used by App Service and rollout checks |
+| `/api/status` | JSON CVE metadata, package/config evidence, image host, and runtime state | Public evidence route for the demo                               |
 
 `/api/status` reports two different classes of truth, and the payload keeps them separate on purpose. `runtime_verification` is proven inside the container by reading the actual NGINX binary, Debian package, and rendered configuration. `defender_monitoring` reports the Defender coverage the deployment **requested**, because the container holds no Azure credentials and cannot query subscription plan state. Each monitoring flag is a plain `true`/`false`, and the block names Defender for Cloud as the authoritative source:
 
@@ -93,38 +108,102 @@ docker compose logs -f dojo
 docker compose down
 ```
 
+## Demo Walkthrough
+
+This walkthrough demonstrates a controlled cloud-security story: deploy an intentionally vulnerable image, prove what is running, review Defender coverage, redeploy a patched state, then compare evidence before cleanup.
+
+Use an isolated Azure subscription and the `dev` environment. The default NGINX `1.30.3` image is intentionally in the affected range for the real F5 advisory; do not expose it to production users or sensitive data. Defender findings are asynchronous, so a missing finding is not proof that an image is clean until assessment processing has completed.
+
+Prerequisites for the Azure walkthrough:
+
+- Azure CLI installed and authenticated with permission to read the subscription and manage the target resource group
+- A Git checkout on the `dev` branch
+- Defender plan activation permission (`Microsoft.Security/pricings/*`) when `defender.managePlans` is enabled
+- Agreement to possible Defender for Cloud charges, because plan tiers are subscription-scoped
+
+Baseline deployment:
+
+```bash
+bash scripts/deploy.sh deploy --environment dev --defaults --yes
+```
+
+Open `output/dev/deployment-dev.html` and review the task list, verification matrix, environment access links, and audit trail. The deployed dev application should expose:
+
+```text
+https://ninjapaws-dojo-app-dev.azurewebsites.net/
+https://ninjapaws-dojo-app-dev.azurewebsites.net/api/status
+https://ninjapaws-dojo-app-dev.azurewebsites.net/health
+```
+
+In `/api/status`, treat `runtime_verification` and `defender_monitoring` differently. Runtime evidence is proven inside the container; Defender monitoring reports what the deployment requested, while the deployment report compares those requests against Azure. The vulnerable baseline should show `vulnerability.detected: true`, `vulnerability.status: vulnerable`, `runtime_verification.scenario_config_state: affected`, and `runtime_verification.map_regex_enabled: true`.
+
+For Defender coverage, use the final report and Defender for Cloud Recommendations together. The report should record expected `Standard` coverage for App Service, Containers, CSPM, and Resource Manager, while Kubernetes runtime and unrelated resource plans are marked not applicable. A target CVE result of **Not sure** means Defender assessment evidence was not conclusive yet; do not present it as clean.
+
+Patched-state demonstration:
+
+```bash
+NGINX_VERSION=1.30.4 VULNERABILITY_STATUS=patched \
+  bash scripts/deploy.sh deploy --environment dev --defaults --yes
+```
+
+Then verify that `/api/status` reports `vulnerability.detected: false`, `vulnerability.status: not_detected`, `runtime_verification.scenario_config_state: remediated`, and `runtime_verification.map_regex_enabled: false`. The new report should show a changed build fingerprint or a clearly recorded image reuse decision. Defender Recommendations still need independent review after the asynchronous rescan.
+
+Return to the vulnerable lab state when the demo is over:
+
+```bash
+NGINX_VERSION=1.30.3 VULNERABILITY_STATUS=vulnerable \
+  bash scripts/deploy.sh deploy --environment dev --defaults --yes
+```
+
+Evidence to retain for an audit-friendly demo:
+
+- `output/dev/deployment-dev.html`
+- `output/dev/deployment-dev.json`
+- `output/dev/deployment-dev.log`
+- `output/dev/deployment-dev.console.html`
+- The Defender Recommendations view or export showing assessment state and timestamp
+- The run ID and commit from the report's audit trail
+
+Cleanup:
+
+```bash
+bash scripts/deploy.sh uninstall --environment dev --yes
+```
+
+The lifecycle does not automatically deactivate subscription-wide Defender plans. Review and manage those plans explicitly in Defender for Cloud if the subscription is no longer used for this demo.
+
 ## Configuration
 
 All Docker build arguments are non-secret configuration. Defaults are safe fallbacks; GitHub Environment variables are the source of truth for `dev` and `prod` deployments.
 
 Branch isolation is explicit: `dev` deploys to `NP-ninjapaws-dojo-Dev-CentralUS`, ACR `ninjapawsdojodev`, and App Service `ninjapaws-dojo-app-dev`; `main` deploys to `NP-ninjapaws-dojo-Prod-CentralUS`, ACR `ninjapawsdojoprod`, and App Service `ninjapaws-dojo-app-prod`.
 
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `BASE_OS_IMAGE` | `ubuntu` | Base OS image repository |
-| `BASE_OS_VERSION` | `24.04` | Ubuntu image version |
-| `NGINX_VERSION` | `1.30.3` | Pinned NGINX package |
-| `NODE_MAJOR_VERSION` | `20` | NodeSource major version |
-| `VULNERABILITY_STATUS` | `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
-| `PORT` | `3000` | Internal Node.js port behind NGINX |
-| `WEBSITES_PORT` | `80` | Port exposed by the container to Azure App Service |
-| `NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry or approved enterprise mirror used during the image build |
-| `NPM_USE_MIRROR` | `true` | Use `NPM_REGISTRY_URL` when true; use npm's direct default when false |
-| `NPM_NETWORK_MODE` | `online` | `online` downloads dependencies; `offline` disables npm network access and requires a populated npm cache |
-| `DEFENDER_ENABLED` | `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans |
+| Variable               |                      Default | Purpose                                                                                                     |
+| ---------------------- | ---------------------------: | ----------------------------------------------------------------------------------------------------------- |
+| `BASE_OS_IMAGE`        |                     `ubuntu` | Base OS image repository                                                                                    |
+| `BASE_OS_VERSION`      |                      `24.04` | Ubuntu image version                                                                                        |
+| `NGINX_VERSION`        |                     `1.30.3` | Pinned NGINX package                                                                                        |
+| `NODE_MAJOR_VERSION`   |                         `20` | NodeSource major version                                                                                    |
+| `VULNERABILITY_STATUS` |                 `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
+| `PORT`                 |                       `3000` | Internal Node.js port behind NGINX                                                                          |
+| `WEBSITES_PORT`        |                         `80` | Port exposed by the container to Azure App Service                                                          |
+| `NPM_REGISTRY_URL`     | `https://registry.npmjs.org` | npm registry or approved enterprise mirror used during the image build                                      |
+| `NPM_USE_MIRROR`       |                       `true` | Use `NPM_REGISTRY_URL` when true; use npm's direct default when false                                       |
+| `NPM_NETWORK_MODE`     |                     `online` | `online` downloads dependencies; `offline` disables npm network access and requires a populated npm cache   |
+| `DEFENDER_ENABLED`     |                       `true` | Training dashboard flag; this is separate from Defender for Cloud subscription plans                        |
 
 Defender for Cloud settings live under the `defender` object in `config/deploy.config.json`. The checked-in defaults are intentionally suited to this vulnerable App Service container scenario:
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `defender.scanAfterVerify` | `true` | Adds a post-verification Defender scan task to `deploy`, `rollout`, `repair`, and `verify` |
-| `defender.managePlans` | `true` | Allows the lifecycle to activate the configured Microsoft Security pricing tiers |
-| `defender.targetCve` | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload |
-| `defender.plans.AppServices` | `Standard` | Defender for App Service attack detection for the App Service workload |
-| `defender.plans.Containers` | `Standard` | Defender for Containers vulnerability assessment for Azure Container Registry images |
-| `defender.plans.CloudPosture` | `Standard` | Defender CSPM: attack paths, cloud security explorer, and the serverless/registry extensions below |
-| `defender.plans.Arm` | `Standard` | Defender for Resource Manager: threat detection on the control-plane operations this lifecycle performs |
-| `defender.manageExtensions` | `true` | Allows the lifecycle to apply the plan extension sets below |
+| Setting                       | Default          | Purpose                                                                                                 |
+| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `defender.scanAfterVerify`    | `true`           | Adds a post-verification Defender scan task to `deploy`, `rollout`, `repair`, and `verify`              |
+| `defender.managePlans`        | `true`           | Allows the lifecycle to activate the configured Microsoft Security pricing tiers                        |
+| `defender.targetCve`          | `CVE-2026-42533` | Real CVE from the F5 NGINX advisory searched for in the latest Defender assessment payload              |
+| `defender.plans.AppServices`  | `Standard`       | Defender for App Service attack detection for the App Service workload                                  |
+| `defender.plans.Containers`   | `Standard`       | Defender for Containers vulnerability assessment for Azure Container Registry images                    |
+| `defender.plans.CloudPosture` | `Standard`       | Defender CSPM: attack paths, cloud security explorer, and the serverless/registry extensions below      |
+| `defender.plans.Arm`          | `Standard`       | Defender for Resource Manager: threat detection on the control-plane operations this lifecycle performs |
+| `defender.manageExtensions`   | `true`           | Allows the lifecycle to apply the plan extension sets below                                             |
 
 Defender for Resource Manager is enabled because this project is unusually control-plane heavy: it creates and deletes resource groups, assigns RBAC roles, changes subscription-scoped Defender pricing, creates security connectors, and drives ACR builds — all through ARM. The GitHub OIDC identity it uses holds `Contributor` and `Role Based Access Control Administrator`, which is exactly the kind of identity an attacker would target for privilege escalation. This plan detects suspicious ARM operations, exploitation toolkits such as MicroBurst and PowerZure, and anomalous use of that automation. It bills at a flat subscription rate rather than per resource.
 
@@ -132,34 +211,34 @@ Defender for Resource Manager is enabled because this project is unusually contr
 
 Defender CSPM extensions are applied as one set, because the API replaces the whole collection on every write:
 
-| CSPM extension | Default | Why |
-| --- | --- | --- |
-| `AgentlessServerlessPosture` | `true` | Serverless protection covers App Service and Functions, which is exactly the workload this project deploys |
-| `ServerlessContainers` | `true` | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
-| `ContainerRegistriesVulnerabilityAssessments` | `true` | Registry access, required for full serverless container and image posture |
-| `AgentlessDiscoveryForKubernetes` | `false` | No AKS or Kubernetes workload is deployed |
-| `AgentlessVmScanning` | `false` | No virtual machines are deployed; leaving it off avoids scanning unrelated machines in a shared subscription |
-| `SensitiveDataDiscovery` | `false` | This project stores no data; the extension reads customer data, so it stays opt-in |
-| `EntraPermissionsManagement` | `false` | CIEM has tenant-wide scope beyond this scenario |
-| `ApiPosture` | `false` | No API Management APIs are deployed |
+| CSPM extension                                | Default | Why                                                                                                                                      |
+| --------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AgentlessServerlessPosture`                  | `true`  | Serverless protection covers App Service and Functions, which is exactly the workload this project deploys                               |
+| `ServerlessContainers`                        | `true`  | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
+| `ContainerRegistriesVulnerabilityAssessments` | `true`  | Registry access, required for full serverless container and image posture                                                                |
+| `AgentlessDiscoveryForKubernetes`             | `false` | No AKS or Kubernetes workload is deployed                                                                                                |
+| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed; leaving it off avoids scanning unrelated machines in a shared subscription                             |
+| `SensitiveDataDiscovery`                      | `false` | This project stores no data; the extension reads customer data, so it stays opt-in                                                       |
+| `EntraPermissionsManagement`                  | `false` | CIEM has tenant-wide scope beyond this scenario                                                                                          |
+| `ApiPosture`                                  | `false` | No API Management APIs are deployed                                                                                                      |
 
 Defender for Containers extensions follow the same pattern:
 
-| Containers extension | Default | Why |
-| --- | --- | --- |
-| `ContainerRegistriesVulnerabilityAssessments` | `true` | This is the registry protection that scans the ACR image and surfaces the target CVE |
-| `AgentlessDiscoveryForKubernetes` | `false` | Not applicable to App Service |
-| `AgentlessVmScanning` | `false` | Applies to Kubernetes node VMs, which are not deployed |
-| `ContainerSensor` | `false` | The runtime threat sensor is an AKS component |
+| Containers extension                          | Default | Why                                                                                  |
+| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `ContainerRegistriesVulnerabilityAssessments` | `true`  | This is the registry protection that scans the ACR image and surfaces the target CVE |
+| `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                        |
+| `AgentlessVmScanning`                         | `false` | Applies to Kubernetes node VMs, which are not deployed                               |
+| `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                        |
 
 DevOps and code security settings:
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `defender.devops.connectorEnabled` | `true` | Creates the Defender for Cloud GitHub connector if the subscription has none |
-| `defender.devops.connectorName` | `ninjapaws-github` | Name of the `Microsoft.Security/securityConnectors` resource |
-| `defender.devops.githubOwner` | `ninjapaw` | GitHub organization reported in the connector guidance |
-| `defender.devops.advancedSecurityExpected` | `true` | Reports GitHub Advanced Security state in the verification matrix |
+| Setting                                    | Default            | Purpose                                                                      |
+| ------------------------------------------ | ------------------ | ---------------------------------------------------------------------------- |
+| `defender.devops.connectorEnabled`         | `true`             | Creates the Defender for Cloud GitHub connector if the subscription has none |
+| `defender.devops.connectorName`            | `ninjapaws-github` | Name of the `Microsoft.Security/securityConnectors` resource                 |
+| `defender.devops.githubOwner`              | `ninjapaw`         | GitHub organization reported in the connector guidance                       |
+| `defender.devops.advancedSecurityExpected` | `true`             | Reports GitHub Advanced Security state in the verification matrix            |
 
 The lifecycle creates the GitHub connector resource, but **it cannot finish onboarding non-interactively**. Authorizing the connector and installing the DevOps security GitHub application is an interactive consent flow, so the report records the connector as **Not sure** with the remaining manual step rather than claiming coverage it has not proven. Complete it under **Defender for Cloud > Environment settings > Add environment > GitHub**, following [Connect your GitHub environment](https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github). Once authorized, DevOps resources can take up to 8 hours to appear.
 
@@ -177,12 +256,12 @@ Never put credentials in these variables. Runtime secrets belong in Azure Key Va
 
 This project deliberately provisions no Key Vault, because it has no secret to store. Every credential that a container deployment normally needs was designed out rather than protected:
 
-| Normally a secret | How this project avoids it |
-| --- | --- |
-| Registry password | ACR is created with `adminUserEnabled: false`; App Service pulls with a user-assigned managed identity holding `AcrPull` |
-| Azure deployment credential | GitHub Actions uses OIDC federated credentials, so no client secret is ever created |
-| App configuration | NGINX version, port, scenario state, and Defender flags are all non-secret and ship as App Service settings |
-| Database or API credential | No database, queue, or third-party API is deployed |
+| Normally a secret           | How this project avoids it                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Registry password           | ACR is created with `adminUserEnabled: false`; App Service pulls with a user-assigned managed identity holding `AcrPull` |
+| Azure deployment credential | GitHub Actions uses OIDC federated credentials, so no client secret is ever created                                      |
+| App configuration           | NGINX version, port, scenario state, and Defender flags are all non-secret and ship as App Service settings              |
+| Database or API credential  | No database, queue, or third-party API is deployed                                                                       |
 
 Adding a Key Vault here would introduce a resource to secure, an access policy or RBAC surface to maintain, and a monthly cost — while protecting nothing. It would also imply this environment holds secrets that it does not, which is misleading in a training demo.
 
@@ -271,24 +350,24 @@ Each lifecycle run also writes an auto-refreshing HTML status dashboard to `outp
 
 The dashboard and live console are refreshed throughout the run, so the browser view and terminal show the same progress information. The existing report is reused: its link is printed and copied to the clipboard once per run, and the browser is opened once while the file continues to refresh. In VS Code or Codespaces, the opener first hands the report URL to the active VS Code window with `code --open-url`; this uses the integrated browser when available. It then detects Microsoft Edge (`msedge.exe`, `microsoft-edge`, `microsoft-edge-dev`, or `edge`) before falling back to the platform default. Set `DEPLOY_BROWSER` or `BROWSER` to an available browser command when a remote shell needs an explicit opener.
 
-While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as *Not started*, *In progress* (animated spinner), *Success*, *Failure*, *Skipped*, or *Not applicable*, each with its own duration and a one-line detail. A failed stage shows the reason inline.
+While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as _Not started_, _In progress_ (animated spinner), _Success_, _Failure_, _Skipped_, or _Not applicable_, each with its own duration and a one-line detail. A failed stage shows the reason inline.
 
 The page never reloads itself. It polls a small state feed (`deployment-<environment>.state.js`) every 2 seconds and patches the DOM in place, so the progress bar, task list, verification matrix, run facts, next steps, and live console all update without flicker and without losing your scroll position. `fetch()` is blocked on `file://` origins, so the feed is loaded by injecting a `<script>` tag, which `file://` does permit.
 
-A **Generate PDF** button at the bottom renders the report through a dedicated print stylesheet (A4, page-break-safe sections and table rows, repeated table headers, preserved status colours) and opens the browser's print dialog — choose *Save as PDF*. It always reflects whatever is on screen at that moment, so you can take a snapshot mid-run or after completion. The raw console is excluded from the PDF to keep it to the executive content.
+A **Generate PDF** button at the bottom renders the report through a dedicated print stylesheet (A4, page-break-safe sections and table rows, repeated table headers, preserved status colours) and opens the browser's print dialog — choose _Save as PDF_. It always reflects whatever is on screen at that moment, so you can take a snapshot mid-run or after completion. The raw console is excluded from the PDF to keep it to the executive content.
 
 The task list is built dynamically from the command you ran, so it always reflects the real work:
 
-| Command | Tasks after preflight and planning |
-| --- | --- |
-| `plan` | dry run only; preflight is marked *Not applicable* |
-| `doctor` | compile Bicep, what-if against the resource group |
-| `provision` | create and tag the resource group, deploy the Bicep infrastructure |
-| `build` | fingerprint the build context, build or reuse the image |
-| `rollout` | configure App Service, restart and wait for health, verify |
-| `verify` | verify Azure resources, then run the Defender scan and workload-coverage task |
-| `deploy` / `setup` / `update` / `repair` | all stages end to end, followed by the Defender scan and workload-coverage task |
-| `uninstall` | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
+| Command                                  | Tasks after preflight and planning                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------- |
+| `plan`                                   | dry run only; preflight is marked _Not applicable_                                    |
+| `doctor`                                 | compile Bicep, what-if against the resource group                                     |
+| `provision`                              | create and tag the resource group, deploy the Bicep infrastructure                    |
+| `build`                                  | fingerprint the build context, build or reuse the image                               |
+| `rollout`                                | configure App Service, restart and wait for health, verify                            |
+| `verify`                                 | verify Azure resources, then run the Defender scan and workload-coverage task         |
+| `deploy` / `setup` / `update` / `repair` | all stages end to end, followed by the Defender scan and workload-coverage task       |
+| `uninstall`                              | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
 
 Overall progress is derived from that list rather than hardcoded, so the percentage is meaningful for every command. Each stage also contributes its own rows to the verification matrix and its own tailored **Next steps**, so `uninstall`, `doctor`, and `plan` produce a genuine executive report instead of a deployment-shaped one.
 
@@ -318,7 +397,7 @@ When the run reaches 100% the page rewrites itself as a **final executive report
 
 ### Content-addressed builds
 
-Every build first computes a **fingerprint**: a SHA-256 over each file the Dockerfile copies (`Dockerfile`, `package.json`, `package-lock.json`, `app.js`, `nginx.conf`, `entrypoint.sh`) plus every build argument. That fingerprint is pushed as an extra tag (`fp-<hash>`) alongside the immutable Git-SHA tag.
+Every build first computes a **fingerprint**: a SHA-256 over each file the Dockerfile copies (`Dockerfile`, `package.json`, `package-lock.json`, `src/app.js`, `nginx.conf`, `entrypoint.sh`) plus every build argument. That fingerprint is pushed as an extra tag (`fp-<hash>`) alongside the immutable Git-SHA tag.
 
 Use the Git-SHA tag or image digest for deployments. `latest`, `vulnerable`, and `remediated` are convenience aliases for demos and must not be used as production rollout selectors. Separate ACRs provide the dev/prod image boundary; separate image names are unnecessary.
 
@@ -328,7 +407,7 @@ On the next run the script looks up `fp-<hash>` in ACR:
 - **App Service already configured for that exact image and passing `/health`** — the rollout and restart are skipped too, so a no-op deploy causes no downtime.
 - **Hash absent** — the content genuinely changed, so a full `az acr build` runs.
 
-The report shows the resolved manifest digest, the fingerprint, and whether the image was *Unchanged (rebuild and upload skipped)* or *Changed (rebuilt and pushed)*. Verification asserts that the deployed tag and the current source fingerprint resolve to the same digest, so drift between the working tree and the running container is caught. Use `--force-rebuild` to bypass both skips.
+The report shows the resolved manifest digest, the fingerprint, and whether the image was _Unchanged (rebuild and upload skipped)_ or _Changed (rebuilt and pushed)_. Verification asserts that the deployed tag and the current source fingerprint resolve to the same digest, so drift between the working tree and the running container is caught. Use `--force-rebuild` to bypass both skips.
 
 Every run starts with a clean environment output directory. The previous run is archived under `output/archive/<timestamp>-<environment>/` by default, preserving troubleshooting history without allowing stale files to affect the current run. Use `--no-archive` only when automatic deletion of the previous output is explicitly preferred.
 

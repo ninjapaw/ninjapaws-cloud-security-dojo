@@ -15,6 +15,7 @@ INVOCATION_DIR="$PWD"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 AZURE_REPO_ROOT="$REPO_ROOT"
+AZURE_CLI_BIN="${AZURE_CLI_BIN:-az}"
 if command -v wslpath >/dev/null 2>&1; then
     AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
 elif command -v cygpath >/dev/null 2>&1; then
@@ -33,10 +34,17 @@ if ! command -v az >/dev/null 2>&1; then
         fi
     done
 fi
-if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+if command -v cmd.exe >/dev/null 2>&1; then
     windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
-        azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
+        if command -v wslpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
+        elif command -v cygpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(cygpath -u "$windows_az_path")"
+        else
+            AZURE_CLI_BIN="$windows_az_path"
+        fi
+        azure_cli_dir="$(dirname "$AZURE_CLI_BIN")"
         export PATH="$azure_cli_dir:$PATH"
     fi
 fi
@@ -44,7 +52,7 @@ fi
 # Windows az.cmd emits CRLF output when called from WSL/Git Bash. MSYS also rewrites arguments that
 # look like Unix paths, which would corrupt resource IDs and role-assignment scopes, so exclude those.
 az() {
-    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
+    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command "$AZURE_CLI_BIN" "$@" | tr -d '\r'
 }
 
 COMMAND="deploy"
@@ -115,6 +123,7 @@ STATUS_HTML=""
 STATUS_CONSOLE=""
 STATUS_RAW_CONSOLE=""
 OUTPUT_DIR=""
+STATUS_OPEN_MARKER=""
 ARCHIVE_OUTPUTS=true
 OUTPUT_ROOT="${OUTPUT_ROOT:-}"
 CONSOLE_CAPTURE_STARTED=false
@@ -649,13 +658,14 @@ EOF
 
 open_status_html() {
     [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
-    local native browser browser_name
+    local native browser browser_name url
     native="$(native_path "$STATUS_HTML")"
+    url="$(report_url "$STATUS_HTML")"
     print_report_link_once
     [[ "$STATUS_BROWSER_OPENED" == false ]] || return 0
-    if [[ "${CODESPACES:-false}" == true || -n "${CODESPACE_NAME:-}" || -n "${VSCODE_IPC_HOOK_CLI:-}" ]] && command -v code >/dev/null 2>&1; then
+    if [[ -n "$STATUS_OPEN_MARKER" && -f "$STATUS_OPEN_MARKER" ]] && grep -Fxq "$url" "$STATUS_OPEN_MARKER" 2>/dev/null; then
         STATUS_BROWSER_OPENED=true
-        code --open-url "$(report_url "$STATUS_HTML")" >/dev/null 2>&1 &
+        echo "Report is already marked as open for this workspace; not opening another browser tab."
         return 0
     fi
     browser="${DEPLOY_BROWSER:-${BROWSER:-}}"
@@ -666,14 +676,22 @@ open_status_html() {
             if command -v "$browser" >/dev/null 2>&1; then
                 STATUS_BROWSER_OPENED=true
                 "$browser" "$native" >/dev/null 2>&1 &
+                mark_status_html_opened "$url"
                 return 0
             fi
             ;;
     esac
+    if [[ "${CODESPACES:-false}" == true || -n "${CODESPACE_NAME:-}" || -n "${VSCODE_IPC_HOOK_CLI:-}" ]] && command -v code >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
+        code --open-url "$url" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
+        return 0
+    fi
     for browser in msedge.exe microsoft-edge microsoft-edge-dev edge; do
         if command -v "$browser" >/dev/null 2>&1; then
             STATUS_BROWSER_OPENED=true
             "$browser" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
             return 0
         fi
     done
@@ -682,18 +700,27 @@ open_status_html() {
         if command -v powershell.exe >/dev/null 2>&1; then
             STATUS_BROWSER_OPENED=true
             powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
         elif command -v cmd.exe >/dev/null 2>&1; then
             STATUS_BROWSER_OPENED=true
             MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
         fi
     elif command -v xdg-open >/dev/null 2>&1; then
         STATUS_BROWSER_OPENED=true
         xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
     elif command -v open >/dev/null 2>&1; then
         STATUS_BROWSER_OPENED=true
         open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
     fi
     return 0
+}
+
+mark_status_html_opened() {
+    [[ -n "$STATUS_OPEN_MARKER" ]] || return 0
+    printf '%s\n' "$1" > "$STATUS_OPEN_MARKER" 2>/dev/null || true
 }
 
 # The browser needs a host-native path: MSYS and WSL paths are not valid file:// URLs on Windows.
@@ -1703,6 +1730,7 @@ resolve_settings() {
     fi
     output_base="${OUTPUT_ROOT:-$INVOCATION_DIR/output}"
     OUTPUT_DIR="$output_base/$ENVIRONMENT"
+    STATUS_OPEN_MARKER="$output_base/.deployment-$ENVIRONMENT.browser-opened"
     if [[ -d "$OUTPUT_DIR" ]]; then
         if [[ "$ARCHIVE_OUTPUTS" == true ]]; then
             archive_dir="$output_base/archive/$(date -u +%Y%m%dT%H%M%SZ)-$ENVIRONMENT"
@@ -1947,7 +1975,7 @@ sha256_of_stdin() {
 # Content address for the image: every file the Dockerfile copies, plus every build argument.
 compute_build_fingerprint() {
     local file manifest=""
-    for file in Dockerfile package.json package-lock.json app.js nginx.conf entrypoint.sh; do
+    for file in Dockerfile package.json package-lock.json src/app.js nginx.conf entrypoint.sh; do
         if [[ -f "$REPO_ROOT/$file" ]]; then
             manifest+="$file $(sha256_of_file "$REPO_ROOT/$file")"$'\n'
         else

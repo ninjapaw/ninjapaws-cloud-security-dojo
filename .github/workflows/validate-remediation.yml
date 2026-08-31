@@ -8,7 +8,7 @@ on:
     paths:
       - 'Dockerfile'
       - 'package.json'
-      - 'app.js'
+      - 'src/**'
       - 'nginx.conf'
 
 env:

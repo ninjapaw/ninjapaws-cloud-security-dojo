@@ -49,7 +49,7 @@ RUN if [ "${NPM_NETWORK_MODE}" = "offline" ]; then \
     fi && \
     npm cache clean --force
 
-COPY app.js ./
+COPY src ./src
 COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
 

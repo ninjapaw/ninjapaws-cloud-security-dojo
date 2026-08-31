@@ -80,7 +80,7 @@
   "resources": [
     {
       "type": "Microsoft.ContainerRegistry/registries",
-      "apiVersion": "2023-07-01",
+      "apiVersion": "2025-04-01",
       "name": "[variables('acrName')]",
       "location": "[parameters('location')]",
       "sku": {
@@ -94,7 +94,7 @@
     },
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
+      "apiVersion": "2024-11-30",
       "name": "[variables('managedIdentityName')]",
       "location": "[parameters('location')]"
     },
@@ -105,7 +105,7 @@
       "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2024-11-30').principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
@@ -115,7 +115,7 @@
     },
     {
       "type": "Microsoft.Web/serverfarms",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServicePlanName')]",
       "location": "[parameters('location')]",
       "kind": "linux",
@@ -129,7 +129,7 @@
     },
     {
       "type": "Microsoft.Web/sites",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServiceName')]",
       "location": "[parameters('location')]",
       "identity": {
@@ -142,17 +142,17 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
         "httpsOnly": true,
         "siteConfig": {
-          "linuxFxVersion": "[concat('DOCKER|', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer, '/', parameters('imageName'), ':', parameters('imageTag'))]",
+          "linuxFxVersion": "[concat('DOCKER|', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer, '/', parameters('imageName'), ':', parameters('imageTag'))]",
           "alwaysOn": true,
           "http20Enabled": true,
           "minTlsVersion": "1.2",
           "healthCheckPath": "/health",
           "acrUseManagedIdentityCreds": true,
-          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId]",
+          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2024-11-30').clientId]",
           "appSettings": [
             {
               "name": "DOCKER_REGISTRY_SERVER_URL",
-              "value": "[concat('https://', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer)]"
+              "value": "[concat('https://', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer)]"
             },
             {
               "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
@@ -191,7 +191,7 @@
   "outputs": {
     "containerRegistryLoginServer": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer]"
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer]"
     },
     "containerRegistryName": {
       "type": "string",
@@ -199,7 +199,7 @@
     },
     "appServiceUrl": {
       "type": "string",
-      "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2023-01-01').defaultHostName)]"
+      "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2025-03-01').defaultHostName)]"
     },
     "appServiceName": {
       "type": "string",

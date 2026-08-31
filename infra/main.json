@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "8775484709021674300"
+      "templateHash": "13837662444587530707"
     }
   },
   "parameters": {
@@ -87,7 +87,7 @@
   "resources": [
     {
       "type": "Microsoft.ContainerRegistry/registries",
-      "apiVersion": "2023-07-01",
+      "apiVersion": "2025-04-01",
       "name": "[replace(parameters('containerRegistryName'), '-', '')]",
       "location": "[parameters('location')]",
       "sku": {
@@ -101,7 +101,7 @@
     },
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
+      "apiVersion": "2024-11-30",
       "name": "[format('{0}-identity', parameters('appServiceName'))]",
       "location": "[parameters('location')]"
     },
@@ -112,7 +112,7 @@
       "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), 'acrPull')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').principalId]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
@@ -122,7 +122,7 @@
     },
     {
       "type": "Microsoft.Web/serverfarms",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServicePlanName')]",
       "location": "[parameters('location')]",
       "kind": "linux",
@@ -136,7 +136,7 @@
     },
     {
       "type": "Microsoft.Web/sites",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServiceName')]",
       "location": "[parameters('location')]",
       "identity": {
@@ -149,16 +149,16 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
         "httpsOnly": true,
         "siteConfig": {
-          "linuxFxVersion": "[format('DOCKER|{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer, parameters('imageName'), parameters('imageTag'))]",
+          "linuxFxVersion": "[format('DOCKER|{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer, parameters('imageName'), parameters('imageTag'))]",
           "alwaysOn": true,
           "http20Enabled": true,
           "minTlsVersion": "1.2",
           "acrUseManagedIdentityCreds": true,
-          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').clientId]",
+          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').clientId]",
           "appSettings": [
             {
               "name": "DOCKER_REGISTRY_SERVER_URL",
-              "value": "[format('https://{0}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer)]"
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer)]"
             },
             {
               "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
@@ -231,7 +231,7 @@
     },
     {
       "type": "Microsoft.Web/sites/config",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[format('{0}/{1}', parameters('appServiceName'), 'web')]",
       "properties": {
         "healthCheckPath": "/health"
@@ -244,7 +244,7 @@
   "outputs": {
     "containerRegistryLoginServer": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer]"
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer]"
     },
     "containerRegistryId": {
       "type": "string",
@@ -252,7 +252,7 @@
     },
     "appServiceUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2023-01-01').defaultHostName)]"
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2025-03-01').defaultHostName)]"
     },
     "appServiceName": {
       "type": "string",
@@ -264,11 +264,11 @@
     },
     "managedIdentityClientId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').clientId]"
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').clientId]"
     },
     "image": {
       "type": "string",
-      "value": "[format('{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer, parameters('imageName'), parameters('imageTag'))]"
+      "value": "[format('{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer, parameters('imageName'), parameters('imageTag'))]"
     }
   }
 }

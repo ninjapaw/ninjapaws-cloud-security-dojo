@@ -3,19 +3,19 @@ name: Validate deployment assets
 on:
   pull_request:
     paths:
-      - 'infra/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'azuredeploy.json'
-      - 'Dockerfile'
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "azuredeploy.json"
+      - "Dockerfile"
   push:
     branches: [main, dev]
     paths:
-      - 'infra/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'azuredeploy.json'
-      - 'Dockerfile'
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "azuredeploy.json"
+      - "Dockerfile"
   workflow_dispatch:
 
 permissions:
@@ -40,10 +40,6 @@ jobs:
           bash scripts/test.sh --skip-report
           bash -n scripts/setup-azure-github-oidc.sh
 
-      - name: Compile Bicep
-        run: |
-          az bicep build --file infra/main.bicep --outfile /tmp/main.bicep.json
-          az bicep build --file infra/parameters.bicep --outfile /tmp/parameters.bicep.json
-
+      # Bicep compilation, linting and committed-ARM drift are owned by the Pawprint contract above.
       - name: Validate JSON templates
         run: node -e "for (const file of ['infra/main.json','azuredeploy.json']) JSON.parse(require('fs').readFileSync(file, 'utf8'));"
