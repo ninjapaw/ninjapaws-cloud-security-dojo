@@ -2364,7 +2364,7 @@ record_extension_checks() {
 
 # Creates the ARM connector only; the GitHub App authorization remains a manual portal step.
 ensure_devops_connector() {
-    local existing connector_name connector_state
+    local existing connector_name connector_state existing_rg
 
     if [[ "$DEFENDER_DEVOPS_CONNECTOR_ENABLED" != true ]]; then
         record_check "Defender for Cloud GitHub DevOps connector" not_applicable "Disabled by configuration (defender.devops.connectorEnabled=$DEFENDER_DEVOPS_CONNECTOR_ENABLED)."
@@ -2373,16 +2373,31 @@ ensure_devops_connector() {
 
     existing="$(az security security-connector list --query "[?environmentName=='Github' || environmentName=='GitHub'].name | [0]" -o tsv 2>/dev/null || true)"
     if [[ -n "$existing" ]]; then
-        record_check "Defender for Cloud GitHub DevOps connector" pass "Connector '$existing' exists in subscription $SUBSCRIPTION_ID."
-        DEFENDER_DEVOPS_CONNECTOR_STATE=connected
+        existing_rg="$(az security security-connector list --query "[?name=='$existing'].resourceGroup | [0]" -o tsv 2>/dev/null || true)"
+
+        # The ARM resource existing proves nothing. Repository discovery only
+        # works once the GitHub app is authorized, and that creates the devops
+        # configuration below. Reporting on existence alone hides a connector
+        # that will sit in progress forever.
+        if az rest --method GET \
+            --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${existing_rg}/providers/Microsoft.Security/securityConnectors/${existing}/devops/default?api-version=2024-04-01" \
+            --output none 2>/dev/null; then
+            record_check "Defender for Cloud GitHub DevOps connector" pass "Connector '$existing' is authorized and discovering repositories."
+            DEFENDER_DEVOPS_CONNECTOR_STATE=connected
+        else
+            record_check "Defender for Cloud GitHub DevOps connector" unknown "Connector '$existing' exists in $existing_rg but has no DevOps configuration, so it is not authorized and will never discover repositories. Complete Defender for Cloud > Environment settings > the connector > Authorize, then install the DevOps security GitHub app for '$DEFENDER_DEVOPS_GITHUB_OWNER'. See https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github."
+            DEFENDER_DEVOPS_CONNECTOR_STATE=authorization_required
+        fi
         return 0
     fi
 
+    # The hierarchy identifier binds the connector to a GitHub organization.
+    # A random value cannot bind to anything, so the connector never completes.
     if az security security-connector create \
         --name "$DEFENDER_DEVOPS_CONNECTOR_NAME" \
         --resource-group "$RESOURCE_GROUP" \
         --location "$LOCATION" \
-        --hierarchy-identifier "$(generate_uuid)" \
+        --hierarchy-identifier "$DEFENDER_DEVOPS_GITHUB_OWNER" \
         --environment-name GitHub \
         --environment-data github-scope='{}' \
         --offerings '[0].cspm-monitor-github={}' \
