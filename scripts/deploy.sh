@@ -2391,13 +2391,13 @@ ensure_devops_connector() {
         return 0
     fi
 
-    # The hierarchy identifier binds the connector to a GitHub organization.
-    # A random value cannot bind to anything, so the connector never completes.
+    # The identifier only has to be a GUID; the binding to a GitHub organisation
+    # is established by the interactive authorization, not by this value.
     if az security security-connector create \
         --name "$DEFENDER_DEVOPS_CONNECTOR_NAME" \
         --resource-group "$RESOURCE_GROUP" \
         --location "$LOCATION" \
-        --hierarchy-identifier "$DEFENDER_DEVOPS_GITHUB_OWNER" \
+        --hierarchy-identifier "$(generate_uuid)" \
         --environment-name GitHub \
         --environment-data github-scope='{}' \
         --offerings '[0].cspm-monitor-github={}' \
