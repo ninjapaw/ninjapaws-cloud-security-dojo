@@ -2,6 +2,7 @@ param location string = 'centralus'
 param containerRegistryName string = 'ninjapawsdojoprod'
 param appServiceName string = 'ninjapaws-dojo-app-prod'
 param appServicePlanName string = 'ninjapaws-dojo-plan'
+param appServicePlanSku string = 'B2'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
 param nginxVersion string = '1.30.3'
@@ -16,6 +17,7 @@ module infrastructure './main.bicep' = {
     containerRegistryName: containerRegistryName
     appServiceName: appServiceName
     appServicePlanName: appServicePlanName
+    appServicePlanSku: appServicePlanSku
     imageName: imageName
     imageTag: imageTag
     nginxVersion: nginxVersion

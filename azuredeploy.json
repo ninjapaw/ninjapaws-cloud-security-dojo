@@ -30,6 +30,13 @@
         "description": "Name of the Azure App Service Plan"
       }
     },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "B2",
+      "metadata": {
+        "description": "App Service Plan SKU. B1 is frequently capacity-constrained in centralus."
+      }
+    },
     "imageName": {
       "type": "string",
       "defaultValue": "ninjapaws-dojo",
@@ -120,7 +127,7 @@
       "location": "[parameters('location')]",
       "kind": "linux",
       "sku": {
-        "name": "B1",
+        "name": "[parameters('appServicePlanSku')]",
         "capacity": 1
       },
       "properties": {

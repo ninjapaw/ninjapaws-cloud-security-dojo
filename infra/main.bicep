@@ -2,6 +2,7 @@ param location string = resourceGroup().location
 param containerRegistryName string
 param appServiceName string
 param appServicePlanName string = '${appServiceName}-plan'
+param appServicePlanSku string = 'B2'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
 param nginxVersion string = '1.30.3'
@@ -55,7 +56,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   location: location
   kind: 'linux'
   sku: {
-    name: 'B1'
+    name: appServicePlanSku
     capacity: 1
   }
   properties: {
