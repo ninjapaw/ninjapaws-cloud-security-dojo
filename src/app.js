@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const os = require("os");
 const fs = require("fs");
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT) || 3000;
 const DEFAULT_NGINX_VERSION = "1.30.3";
 const DEFAULT_VULNERABILITY_STATUS = "vulnerable";
@@ -14,6 +16,15 @@ const VULNERABILITY_DESCRIPTION =
 const ADVISORY_URL = "https://my.f5.com/manage/s/article/K000162097";
 const AFFECTED_VERSIONS = "NGINX Open Source 1.30.0-1.30.3";
 const FIXED_VERSION = "1.30.4";
+const evidenceRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 100,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: "Too many requests." });
+  },
+});
 
 function getRuntimeVerification() {
   try {
@@ -107,7 +118,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.get("/evidence", (req, res) => {
+app.get("/evidence", evidenceRateLimit, (req, res) => {
   try {
     res.json({
       expected_cve: CVE_ID,
@@ -131,7 +142,7 @@ app.get("/evidence", (req, res) => {
 });
 
 // API status endpoint
-app.get("/api/status", (req, res) => {
+app.get("/api/status", evidenceRateLimit, (req, res) => {
   const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
   const runtimeVerification = getRuntimeVerification();
   const vulnerabilityDetected =
