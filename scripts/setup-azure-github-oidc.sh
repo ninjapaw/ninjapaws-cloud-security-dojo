@@ -151,6 +151,10 @@ tenant_id="$(az account show --query tenantId -o tsv)"
 
 gh auth status >/dev/null 2>&1 || { printf "%s\n" "GitHub CLI is not authenticated. Run 'gh auth login' and retry." >&2; exit 1; }
 repository="${repository:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+repository_owner="${repository%%/*}"
+repository_name="${repository#*/}"
+repository_owner_id="$(gh api "users/$repository_owner" --jq .id)"
+repository_id="$(gh api "repos/$repository" --jq .id)"
 
 app_display_name="ninjapaws-cloud-security-dojo-${environment_name}-github"
 
@@ -167,7 +171,7 @@ fi
 
 # Jobs that declare an environment present the environment subject, not the ref subject.
 credential_name="github-${environment_name}"
-credential_subject="repo:${repository}:environment:${environment_name}"
+credential_subject="repo:${repository_owner}@${repository_owner_id}/${repository_name}@${repository_id}:environment:${environment_name}"
 existing_credential="$(az ad app federated-credential list --id "$app_object_id" \
   --query "[?name=='$credential_name'] | [0].id" -o tsv)"
 if [[ -n "$existing_credential" ]]; then

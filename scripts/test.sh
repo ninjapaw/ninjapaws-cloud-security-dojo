@@ -311,6 +311,7 @@ for variable_name in BASE_OS_IMAGE BASE_OS_VERSION NGINX_VERSION NODE_MAJOR_VERS
     file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" "gh variable set $variable_name"
     file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "$variable_name"
 done
+file_contains "$REPO_ROOT/scripts/setup-azure-github-oidc.sh" 'credential_subject="repo:${repository_owner}@${repository_owner_id}/${repository_name}@${repository_id}:environment:${environment_name}"'
 
 if [[ "$SKIP_AZURE" == false ]]; then
     command -v "$AZURE_CLI_BIN" >/dev/null 2>&1 || { echo "ERROR: 'az' is required unless --skip-azure is used." >&2; exit 1; }
