@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [ "$#" -gt 0 ]; then
+	exec "$@"
+fi
+
 echo "🥷 Ninja Paws Cloud Security Dojo - Starting"
 echo "🧱 Base OS: ${BASE_OS_IMAGE:-ubuntu}:${BASE_OS_VERSION:-24.04}"
 echo "🛡 NGINX Version: ${NGINX_VERSION:-1.30.3}"
@@ -10,6 +14,14 @@ echo "🎓 Scenario intent: ${VULNERABILITY_STATUS:-vulnerable}"
 echo "📊 Defender Monitoring: ${DEFENDER_ENABLED:-false}"
 echo "⚔ CVE-2026-42533: NGINX map directive and regex matching heap buffer overflow"
 echo "📚 F5 advisory: https://my.f5.com/manage/s/article/K000162097"
+
+echo "===== CVE REPRO ====="
+echo "Target CVE: CVE-2026-42533"
+echo "NGINX Version:"
+cat /opt/nginx-version.txt
+echo "Installed Package:"
+cat /opt/nginx-package-version.txt
+echo "===================="
 
 NGINX_BINARY_VERSION="$(nginx -v 2>&1 | sed -n 's|nginx version: nginx/||p')"
 NGINX_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' nginx 2>/dev/null || true)"
@@ -80,7 +92,7 @@ sleep 2
 
 # Start Node.js application in the background so we can supervise both processes
 echo "Starting Node.js application..."
-node app.js &
+node src/app.js &
 NODE_PID=$!
 
 # If either process dies, stop the other and exit with its status

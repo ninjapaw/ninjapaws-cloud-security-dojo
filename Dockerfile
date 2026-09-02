@@ -31,6 +31,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx=${NGINX_VERSION}-1~noble \
     && rm -rf /var/lib/apt/lists/*
 
+RUN nginx -v 2>&1 | tee /opt/nginx-version.txt
+RUN dpkg-query -W nginx | tee /opt/nginx-package-version.txt
+RUN dpkg -l | grep nginx | tee /opt/nginx-installed-packages.txt
+
+LABEL security.repro.cve="CVE-2026-42533"
+LABEL security.repro.component="nginx"
+LABEL security.repro.version="1.30.3"
+LABEL security.repro.expected_result="Defender should associate CVE-2026-42533"
+
 # Install Node.js
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR_VERSION}.x | bash - && \
     apt-get install -y nodejs && \
@@ -49,9 +58,10 @@ RUN if [ "${NPM_NETWORK_MODE}" = "offline" ]; then \
     fi && \
     npm cache clean --force
 
-COPY app.js ./
+COPY src ./src
 COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
+COPY scripts/verify.sh /usr/local/bin/verify.sh
 
 # Create nginx directories
 RUN mkdir -p /var/run/nginx /var/log/nginx
@@ -68,8 +78,8 @@ ENV DEFENDER_ENABLED=${DEFENDER_ENABLED}
 # Expose ports
 EXPOSE 80 ${PORT}
 
-# Make entrypoint executable
-RUN chmod +x /entrypoint.sh
+# Make container scripts executable
+RUN chmod +x /entrypoint.sh /usr/local/bin/verify.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

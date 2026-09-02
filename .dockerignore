@@ -6,9 +6,13 @@ npm-debug.log*
 docs
 infra
 scripts
+!scripts/
+scripts/*
+!scripts/verify.sh
 *.md
 .env
 .env.*
 deployment-output.json
 output
 docker-compose.yml
+azuredeploy.json

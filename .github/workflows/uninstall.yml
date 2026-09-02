@@ -12,8 +12,8 @@ on:
         description: Type the exact resource group name to confirm deletion
         required: true
         type: string
-      wait:
-        description: Wait for Azure to confirm deletion
+      no_wait:
+        description: Return after Azure accepts deletion without waiting for verification
         required: false
         default: false
         type: boolean
@@ -30,6 +30,7 @@ jobs:
     env:
       ENVIRONMENT: ${{ inputs.environment }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'centralus' }}
       CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
       APP_SERVICE_NAME: ${{ vars.AZURE_APP_SERVICE_NAME }}
       SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -39,11 +40,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Resolve runtime defaults
-        uses: ./.github/actions/resolve-defaults
-        with:
-          vars-json: ${{ toJSON(vars) }}
 
       - name: Validate deletion confirmation
         run: |
@@ -63,9 +59,9 @@ jobs:
 
       - name: Delete tagged environment
         run: |
-          args=(uninstall --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --location "$LOCATION" --resource-group "$RESOURCE_GROUP" --registry-name "$CONTAINER_REGISTRY_NAME" --app-service-name "$APP_SERVICE_NAME" --yes)
-          if [[ "${{ inputs.wait }}" == true ]]; then
-            args+=(--wait)
+          args=(uninstall --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --resource-group "$RESOURCE_GROUP" --yes)
+          if [[ "${{ inputs.no_wait }}" == true ]]; then
+            args+=(--no-wait)
           fi
           scripts/deploy.sh "${args[@]}"
 
@@ -83,9 +79,6 @@ jobs:
             AZURE_CONTAINER_REGISTRY_NAME \
             AZURE_APP_SERVICE_NAME \
             AZURE_IMAGE_NAME \
-            CONTAINER_REGISTRY_SKU \
-            APP_SERVICE_PLAN_SKU \
-            APP_SERVICE_PLAN_CAPACITY \
             BASE_OS_IMAGE \
             BASE_OS_VERSION \
             NGINX_VERSION \
@@ -116,8 +109,7 @@ jobs:
             DEFENDER_DEVOPS_CONNECTOR_ENABLED \
             DEFENDER_DEVOPS_CONNECTOR_NAME \
             DEFENDER_DEVOPS_GITHUB_OWNER \
-            GITHUB_ADVANCED_SECURITY_EXPECTED \
-            DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED; do
+            ADVANCED_SECURITY_EXPECTED; do
             gh variable delete "$variable_name" --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true
           done
           # Remove the legacy secret form as well as the managed variable form.

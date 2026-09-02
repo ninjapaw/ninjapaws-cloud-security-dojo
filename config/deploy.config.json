@@ -1,9 +1,20 @@
 {
-  "_notice": "Operator-editable deployment settings. Project identity and scenario facts live in config/shared.config.json and must not be edited.",
+  "configVersion": "1.0.0",
+  "project": {
+    "name": "Ninja Paws Cloud Security Dojo",
+    "author": "Dr Bill Mcilhargey",
+    "organization": "Ninja Paw",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Dr Bill Mcilhargey / Ninja Paw",
+    "repository": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo",
+    "support": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues",
+    "disclaimer": "This project provisions an INTENTIONALLY VULNERABLE training environment. Deploy only to an isolated subscription you control. Provided as-is, without warranty of any kind. USE AT YOUR OWN RISK."
+  },
   "defaults": {
     "scenario": "defender-cloud-scenario-1",
     "scenarioIds": "defender-cloud-scenario-1",
     "location": "centralus",
+    "appServicePlanSku": "B2",
     "imageName": "ninjapaws-dojo",
     "baseOsImage": "ubuntu",
     "baseOsVersion": "24.04",
@@ -11,9 +22,6 @@
     "nodeMajorVersion": "20",
     "vulnerabilityStatus": "vulnerable",
     "port": "3000",
-    "containerRegistrySku": "Basic",
-    "appServicePlanSku": "B1",
-    "appServicePlanCapacity": "1",
     "npmRegistryUrl": "https://registry.npmjs.org",
     "npmUseMirror": "true",
     "npmNetworkMode": "online",
@@ -22,6 +30,7 @@
       "scanAfterVerify": "true",
       "managePlans": "true",
       "manageExtensions": "true",
+      "targetCve": "CVE-2026-42533",
       "plans": {
         "AppServices": "Standard",
         "Containers": "Standard",
@@ -48,15 +57,24 @@
         "connectorEnabled": "true",
         "connectorName": "ninjapaws-github",
         "githubOwner": "ninjapaw",
-        "advancedSecurityExpected": "true",
-        "agentlessCodeScanningExpected": "true"
+        "advancedSecurityExpected": "true"
       }
+    }
+  },
+  "scenarios": {
+    "defender-cloud-scenario-1": {
+      "name": "Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation",
+      "shortName": "NGINX CVE Detection and Remediation",
+      "cve": "CVE-2026-42533",
+      "advisoryUrl": "https://my.f5.com/manage/s/article/K000162097",
+      "affectedVersion": "1.30.3",
+      "fixedVersion": "1.30.4",
+      "workloads": "App Service, Azure Container Registry, Defender for App Service, Defender for Containers, Defender CSPM"
     }
   },
   "environments": {
     "dev": {
       "branch": "dev",
-      "nameTag": "(Preview)",
       "location": "centralus",
       "resourceGroup": "NP-ninjapaws-dojo-Dev-CentralUS",
       "registryName": "ninjapawsdojodev",

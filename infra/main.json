@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "10779236064637072042"
+      "templateHash": "13372804510011460585"
     }
   },
   "parameters": {
@@ -23,45 +23,9 @@
       "type": "string",
       "defaultValue": "[format('{0}-plan', parameters('appServiceName'))]"
     },
-    "containerRegistrySku": {
-      "type": "string",
-      "defaultValue": "Basic",
-      "allowedValues": [
-        "Basic",
-        "Standard",
-        "Premium"
-      ],
-      "metadata": {
-        "description": "Azure Container Registry SKU. Basic is the cheapest tier and sufficient for this single-image training scenario."
-      }
-    },
     "appServicePlanSku": {
       "type": "string",
-      "defaultValue": "B1",
-      "allowedValues": [
-        "B1",
-        "B2",
-        "B3",
-        "S1",
-        "S2",
-        "S3",
-        "P0v3",
-        "P1v3",
-        "P2v3",
-        "P3v3"
-      ],
-      "metadata": {
-        "description": "App Service Plan SKU. Linux Web App for Containers requires Basic or higher; Free and Shared tiers do not support custom containers, so B1 is the cheapest viable tier."
-      }
-    },
-    "appServicePlanCapacity": {
-      "type": "int",
-      "defaultValue": 1,
-      "minValue": 1,
-      "maxValue": 10,
-      "metadata": {
-        "description": "App Service Plan instance count."
-      }
+      "defaultValue": "B2"
     },
     "imageName": {
       "type": "string",
@@ -103,10 +67,6 @@
       "type": "string",
       "defaultValue": "Standard"
     },
-    "appNameTag": {
-      "type": "string",
-      "defaultValue": ""
-    },
     "defenderServerlessProtection": {
       "type": "bool",
       "defaultValue": true
@@ -126,20 +86,16 @@
     "githubAdvancedSecurity": {
       "type": "bool",
       "defaultValue": true
-    },
-    "agentlessCodeScanningExpected": {
-      "type": "bool",
-      "defaultValue": true
     }
   },
   "resources": [
     {
       "type": "Microsoft.ContainerRegistry/registries",
-      "apiVersion": "2023-07-01",
+      "apiVersion": "2025-04-01",
       "name": "[replace(parameters('containerRegistryName'), '-', '')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "[parameters('containerRegistrySku')]"
+        "name": "Basic"
       },
       "properties": {
         "adminUserEnabled": false,
@@ -149,7 +105,7 @@
     },
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
+      "apiVersion": "2024-11-30",
       "name": "[format('{0}-identity', parameters('appServiceName'))]",
       "location": "[parameters('location')]"
     },
@@ -160,7 +116,7 @@
       "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), 'acrPull')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').principalId]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
@@ -170,13 +126,13 @@
     },
     {
       "type": "Microsoft.Web/serverfarms",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServicePlanName')]",
       "location": "[parameters('location')]",
       "kind": "linux",
       "sku": {
         "name": "[parameters('appServicePlanSku')]",
-        "capacity": "[parameters('appServicePlanCapacity')]"
+        "capacity": 1
       },
       "properties": {
         "reserved": true
@@ -184,7 +140,7 @@
     },
     {
       "type": "Microsoft.Web/sites",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[parameters('appServiceName')]",
       "location": "[parameters('location')]",
       "identity": {
@@ -197,16 +153,16 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
         "httpsOnly": true,
         "siteConfig": {
-          "linuxFxVersion": "[format('DOCKER|{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer, parameters('imageName'), parameters('imageTag'))]",
+          "linuxFxVersion": "[format('DOCKER|{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer, parameters('imageName'), parameters('imageTag'))]",
           "alwaysOn": true,
           "http20Enabled": true,
           "minTlsVersion": "1.2",
           "acrUseManagedIdentityCreds": true,
-          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').clientId]",
+          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').clientId]",
           "appSettings": [
             {
               "name": "DOCKER_REGISTRY_SERVER_URL",
-              "value": "[format('https://{0}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer)]"
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer)]"
             },
             {
               "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
@@ -249,10 +205,6 @@
               "value": "[parameters('defenderArmTier')]"
             },
             {
-              "name": "APP_NAME_TAG",
-              "value": "[parameters('appNameTag')]"
-            },
-            {
               "name": "DEFENDER_SERVERLESS_PROTECTION",
               "value": "[string(parameters('defenderServerlessProtection'))]"
             },
@@ -271,10 +223,6 @@
             {
               "name": "GITHUB_ADVANCED_SECURITY",
               "value": "[string(parameters('githubAdvancedSecurity'))]"
-            },
-            {
-              "name": "DEFENDER_AGENTLESS_CODE_SCANNING",
-              "value": "[string(parameters('agentlessCodeScanningExpected'))]"
             }
           ]
         }
@@ -287,7 +235,7 @@
     },
     {
       "type": "Microsoft.Web/sites/config",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2025-03-01",
       "name": "[format('{0}/{1}', parameters('appServiceName'), 'web')]",
       "properties": {
         "healthCheckPath": "/health"
@@ -300,7 +248,7 @@
   "outputs": {
     "containerRegistryLoginServer": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer]"
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer]"
     },
     "containerRegistryId": {
       "type": "string",
@@ -308,7 +256,7 @@
     },
     "appServiceUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2023-01-01').defaultHostName)]"
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2025-03-01').defaultHostName)]"
     },
     "appServiceName": {
       "type": "string",
@@ -320,11 +268,11 @@
     },
     "managedIdentityClientId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2023-01-31').clientId]"
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-identity', parameters('appServiceName'))), '2024-11-30').clientId]"
     },
     "image": {
       "type": "string",
-      "value": "[format('{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2023-07-01').loginServer, parameters('imageName'), parameters('imageTag'))]"
+      "value": "[format('{0}/{1}:{2}', reference(resourceId('Microsoft.ContainerRegistry/registries', replace(parameters('containerRegistryName'), '-', '')), '2025-04-01').loginServer, parameters('imageName'), parameters('imageTag'))]"
     }
   }
 }

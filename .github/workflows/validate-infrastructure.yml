@@ -3,23 +3,37 @@ name: Validate deployment assets
 on:
   pull_request:
     paths:
-      - 'infra/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'Dockerfile'
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "azuredeploy.json"
+      - "Dockerfile"
   push:
     branches: [main, dev]
     paths:
-      - 'infra/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'Dockerfile'
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "azuredeploy.json"
+      - "Dockerfile"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  bicep-contract:
+    # The reusable workflow declares id-token: write, so the caller must grant it
+    # or the run fails before any job starts.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5
+    with:
+      bicep-glob: "infra/**/*.bicep"
+      check-committed-arm: true
+      fail-on-lint-warning: true
+
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -31,9 +45,6 @@ jobs:
           bash scripts/test.sh --skip-report
           bash -n scripts/setup-azure-github-oidc.sh
 
-      - name: Compile Bicep
-        run: |
-          az bicep build --file infra/main.bicep --outfile /tmp/main.bicep.json
-
+      # Bicep compilation, linting and committed-ARM drift are owned by the Pawprint contract above.
       - name: Validate JSON templates
-        run: node -e "for (const file of ['infra/main.json']) JSON.parse(require('fs').readFileSync(file, 'utf8'));"
+        run: node -e "for (const file of ['infra/main.json','azuredeploy.json']) JSON.parse(require('fs').readFileSync(file, 'utf8'));"

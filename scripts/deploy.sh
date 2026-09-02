@@ -15,6 +15,7 @@ INVOCATION_DIR="$PWD"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 AZURE_REPO_ROOT="$REPO_ROOT"
+AZURE_CLI_BIN="${AZURE_CLI_BIN:-az}"
 if command -v wslpath >/dev/null 2>&1; then
     AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
 elif command -v cygpath >/dev/null 2>&1; then
@@ -33,10 +34,17 @@ if ! command -v az >/dev/null 2>&1; then
         fi
     done
 fi
-if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
-    windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+if command -v cmd.exe >/dev/null 2>&1; then
+    windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
-        azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
+        if command -v wslpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
+        elif command -v cygpath >/dev/null 2>&1; then
+            AZURE_CLI_BIN="$(cygpath -u "$windows_az_path")"
+        else
+            AZURE_CLI_BIN="$windows_az_path"
+        fi
+        azure_cli_dir="$(dirname "$AZURE_CLI_BIN")"
         export PATH="$azure_cli_dir:$PATH"
     fi
 fi
@@ -44,14 +52,13 @@ fi
 # Windows az.cmd emits CRLF output when called from WSL/Git Bash. MSYS also rewrites arguments that
 # look like Unix paths, which would corrupt resource IDs and role-assignment scopes, so exclude those.
 az() {
-    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
+    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command "$AZURE_CLI_BIN" "$@" | tr -d '\r'
 }
 
 COMMAND="deploy"
 # Precedence for every setting: CLI flag > environment variable > config file > built-in fallback.
 # The workflow exports the unprefixed names, so both spellings are accepted.
 CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
-SHARED_CONFIG_FILE="${DEPLOY_SHARED_CONFIG_FILE:-$REPO_ROOT/config/shared.config.json}"
 ENVIRONMENT="${DEPLOY_ENVIRONMENT:-auto}"
 SCENARIO_ID="${DEPLOY_SCENARIO:-}"
 ALL_SCENARIOS=false
@@ -60,9 +67,7 @@ LOCATION="${AZURE_LOCATION:-${LOCATION:-}}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-${RESOURCE_GROUP:-}}"
 REGISTRY_NAME="${AZURE_CONTAINER_REGISTRY_NAME:-${CONTAINER_REGISTRY_NAME:-${REGISTRY_NAME:-}}}"
 APP_SERVICE_NAME="${AZURE_APP_SERVICE_NAME:-${APP_SERVICE_NAME:-}}"
-CONTAINER_REGISTRY_SKU="${CONTAINER_REGISTRY_SKU:-}"
-APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-}"
-APP_SERVICE_PLAN_CAPACITY="${APP_SERVICE_PLAN_CAPACITY:-}"
+APP_SERVICE_PLAN_SKU="${AZURE_APP_SERVICE_PLAN_SKU:-${APP_SERVICE_PLAN_SKU:-}}"
 IMAGE_NAME="${IMAGE_NAME:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 BASE_OS_IMAGE="${BASE_OS_IMAGE:-}"
@@ -99,10 +104,12 @@ DEFENDER_DEVOPS_CONNECTOR_ENABLED="${DEFENDER_DEVOPS_CONNECTOR_ENABLED:-}"
 DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-}"
 DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-}"
 GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-}"
-DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED="${DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED:-}"
-ENVIRONMENT_NAME_TAG="${ENVIRONMENT_NAME_TAG:-}"
 DEFENDER_DEVOPS_CONNECTOR_STATE=not_evaluated
 GITHUB_ADVANCED_SECURITY_STATE=not_evaluated
+DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE=not_evaluated
+DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE=not_evaluated
+DEFENDER_CSPM_API_POSTURE_AUDIT_STATE=not_evaluated
+DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE=not_evaluated
 SCENARIO_NAME=""
 SCENARIO_SHORT_NAME=""
 SCENARIO_CVE=""
@@ -113,13 +120,15 @@ SCENARIO_WORKLOADS=""
 ASSUME_YES=false
 FORCE=false
 FORCE_REBUILD=false
-WAIT_FOR_DELETE=false
+WAIT_FOR_DELETE=true
+WAIT_FOR_DELETE_EXPLICIT=false
 STATE_FILE=""
 STATE_JS=""
 STATUS_HTML=""
 STATUS_CONSOLE=""
 STATUS_RAW_CONSOLE=""
 OUTPUT_DIR=""
+STATUS_OPEN_MARKER=""
 ARCHIVE_OUTPUTS=true
 OUTPUT_ROOT="${OUTPUT_ROOT:-}"
 CONSOLE_CAPTURE_STARTED=false
@@ -127,6 +136,8 @@ CONSOLE_AUTORELOAD=true
 IMAGE_TAG_EXPLICIT=false
 USE_DEFAULTS=false
 OPEN_STATUS_HTML=true
+REPORT_LINK_PRINTED=false
+STATUS_BROWSER_OPENED=false
 RUN_STARTED_AT="$(date +%s)"
 RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_ENDED_ISO=""
@@ -135,11 +146,12 @@ RUN_INVOCATION="${*:-$COMMAND}"
 AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
 AZURE_ACCOUNT_NAME=""
 SUBSCRIPTION_NAME=""
+AUTHENTICATION_SKIPPED=false
 
-# Read a dotted path of string values out of a config file without requiring jq.
-config_lookup_file() {
-    [[ -f "$1" ]] || return 0
-    awk -v want="$2" '
+# Read a dotted path of string values out of the config file without requiring jq.
+config_lookup() {
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    awk -v want="$1" '
         BEGIN { depth = 0 }
         {
             line = $0
@@ -159,15 +171,7 @@ config_lookup_file() {
                 if (path key == want) { print val; exit }
             }
         }
-    ' "$1"
-}
-
-# Operator settings win; the shared reference file supplies project identity and scenario facts.
-config_lookup() {
-    local value
-    value="$(config_lookup_file "$CONFIG_FILE" "$1")"
-    [[ -n "$value" ]] || value="$(config_lookup_file "$SHARED_CONFIG_FILE" "$1")"
-    printf '%s' "$value"
+    ' "$CONFIG_FILE"
 }
 
 # Environment override first, then the shared default, then the built-in fallback.
@@ -343,6 +347,11 @@ register_lifecycle_tasks() {
             register_task bicep "Compile the Bicep template"
             register_task whatif "Run a what-if against the target resource group"
             ;;
+        wizard)
+            register_task permissions "Verify Azure subscription read access and inspect assigned roles"
+            register_task discover "Discover the configured resource group and supported resources"
+            register_task options "Present lifecycle actions available for the discovered state"
+            ;;
         uninstall)
             register_task discover "Locate the target resource group"
             register_task ownership "Confirm Ninja Paws ownership tags before deleting"
@@ -390,6 +399,8 @@ Manage the Ninja Paws Cloud Security Dojo Azure lifecycle.
 
 Usage: scripts/deploy.sh <command> [options]
 
+Run scripts/manage.sh with no arguments to start the interactive wizard.
+
 Commands:
   setup                    Provision, build, deploy, and verify
   provision                Create or update the resource group and Bicep resources
@@ -400,6 +411,7 @@ Commands:
   repair                   Re-provision, rebuild, redeploy, and verify
   doctor                   Run local and Azure preflight checks and Bicep what-if
   plan                     Print the resolved deployment plan without changing Azure
+    wizard                   Inspect Azure access and environment state, then offer valid lifecycle actions
   uninstall                Delete the owned resource group (requires --yes or confirmation)
 
 Options:
@@ -409,18 +421,17 @@ Options:
   --resource-group <name>  Azure resource group
   --registry-name <name>   Azure Container Registry name
   --app-service-name <name> App Service name
+  --app-service-plan-sku <sku> App Service plan SKU (default: B2)
   --image-name <name>      Container image repository (default: ninjapaws-dojo)
   --image-tag <tag>        Image tag (default: current Git SHA)
-  --registry-sku <sku>     Azure Container Registry SKU: Basic, Standard, or Premium (default: Basic, cheapest)
-  --plan-sku <sku>         App Service Plan SKU, e.g. B1, S1, P1v3 (default: B1, cheapest tier that supports Linux containers)
-  --plan-capacity <n>      App Service Plan instance count (default: 1)
     --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
     --all-scenarios          Deploy all configured scenarios (currently one scenario)
     --yes                    Skip confirmation; required for non-interactive uninstall
     --defaults               Accept built-in defaults without interactive prompts
   --force                  Allow uninstall of an untagged resource group
   --force-rebuild          Rebuild and redeploy even when the image content is unchanged
-  --wait                   Wait for resource-group deletion to finish
+    --wait                   Wait for resource-group deletion to finish (default)
+    --no-wait                Return after Azure accepts the deletion request
     --no-status-html         Disable the auto-refreshing HTML status report
     --no-open-status         Keep the report on disk without opening a browser
     --no-archive             Delete the previous environment output instead of archiving it
@@ -479,6 +490,28 @@ prompt_default() {
     else
         printf '%s' "$default_value"
     fi
+}
+
+prompt_boolean() {
+    local prompt="$1" default_value="$2" answer
+    if [[ ! -t 0 ]]; then
+        printf '%s' "$default_value"
+        return 0
+    fi
+    while true; do
+        if [[ "$default_value" == true ]]; then
+            read -r -p "$prompt [Y/n] " answer
+            answer="${answer:-yes}"
+        else
+            read -r -p "$prompt [y/N] " answer
+            answer="${answer:-no}"
+        fi
+        case "$answer" in
+            [Yy]|[Yy][Ee][Ss]) printf 'true'; return 0 ;;
+            [Nn]|[Nn][Oo]) printf 'false'; return 0 ;;
+            *) printf 'Please answer yes or no.\n' >&2 ;;
+        esac
+    done
 }
 
 confirm() {
@@ -631,23 +664,69 @@ EOF
 
 open_status_html() {
     [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
-    local native
+    local native browser browser_name url
     native="$(native_path "$STATUS_HTML")"
-    [[ -f "$native" ]] || return 0
-    print_report_link
+    url="$(report_url "$STATUS_HTML")"
+    print_report_link_once
+    [[ "$STATUS_BROWSER_OPENED" == false ]] || return 0
+    if [[ -n "$STATUS_OPEN_MARKER" && -f "$STATUS_OPEN_MARKER" ]] && grep -Fxq "$url" "$STATUS_OPEN_MARKER" 2>/dev/null; then
+        STATUS_BROWSER_OPENED=true
+        echo "Report is already marked as open for this workspace; not opening another browser tab."
+        return 0
+    fi
+    browser="${DEPLOY_BROWSER:-${BROWSER:-}}"
+    browser_name="${browser##*/}"
+    case "$browser_name" in
+        edge|msedge|msedge.exe|microsoft-edge|microsoft-edge-dev)
+            browser="${browser:-$browser_name}"
+            if command -v "$browser" >/dev/null 2>&1; then
+                STATUS_BROWSER_OPENED=true
+                "$browser" "$native" >/dev/null 2>&1 &
+                mark_status_html_opened "$url"
+                return 0
+            fi
+            ;;
+    esac
+    if [[ "${CODESPACES:-false}" == true || -n "${CODESPACE_NAME:-}" || -n "${VSCODE_IPC_HOOK_CLI:-}" ]] && command -v code >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
+        code --open-url "$url" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
+        return 0
+    fi
+    for browser in msedge.exe microsoft-edge microsoft-edge-dev edge; do
+        if command -v "$browser" >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
+            "$browser" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
+            return 0
+        fi
+    done
     if [[ "$native" == *:\\* ]]; then
         # MSYS rewrites a bare "/c" into "C:\", which turns cmd.exe /c into an interactive shell.
         if command -v powershell.exe >/dev/null 2>&1; then
-            NINJA_PAWS_REPORT="$native" powershell.exe -NoProfile -NonInteractive -Command '$path = [Environment]::GetEnvironmentVariable("NINJA_PAWS_REPORT"); if (Test-Path -LiteralPath $path) { Start-Process -FilePath $path }' >/dev/null 2>&1 &
+            STATUS_BROWSER_OPENED=true
+            powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
         elif command -v cmd.exe >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
             MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
         fi
     elif command -v xdg-open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
         xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
     elif command -v open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
         open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
     fi
     return 0
+}
+
+mark_status_html_opened() {
+    [[ -n "$STATUS_OPEN_MARKER" ]] || return 0
+    printf '%s\n' "$1" > "$STATUS_OPEN_MARKER" 2>/dev/null || true
 }
 
 # The browser needs a host-native path: MSYS and WSL paths are not valid file:// URLs on Windows.
@@ -687,6 +766,12 @@ print_report_link() {
     return 0
 }
 
+print_report_link_once() {
+    [[ "$REPORT_LINK_PRINTED" == false ]] || return 0
+    print_report_link
+    REPORT_LINK_PRINTED=true
+}
+
 print_terminal_status() {
     local phase="$1"
     local status="$2"
@@ -704,7 +789,7 @@ print_terminal_status() {
     esac
     printf "\n${color}%s %s %-12s [%s%s] %3s%%  +%ss${NC}\n" "$icon" "$phase" "$status" "$(printf '%*s' "$filled" '' | tr ' ' '#')" "$(printf '%*s' "$empty" '')" "$percent" "$elapsed"
     printf "  ${BLUE}↳${NC} %s\n" "$detail"
-    print_report_link
+    print_report_link_once
 }
 
 start_console_capture() {
@@ -921,6 +1006,7 @@ json_escape() {
 write_state_js() {
     local phase="$1" percent="$2" detail="$3" final="$4"
     local verdict="$5" verdict_class="$6" headline="$7" verdict_note="$8" build_badge="$9" steps_outcome="${10}"
+    local current_task="${11}" current_task_state="${12}"
     local state_tmp
     [[ -n "$STATE_JS" ]] || return 0
     state_tmp="$STATE_JS.tmp"
@@ -931,6 +1017,8 @@ write_state_js() {
         printf '"runStartedAt":%s,' "$RUN_STARTED_AT"
         printf '"phase":"%s",' "$(json_escape "$phase")"
         printf '"detail":"%s",' "$(json_escape "$detail")"
+        printf '"currentTask":"%s",' "$(json_escape "$current_task")"
+        printf '"currentTaskState":"%s",' "$(json_escape "$current_task_state")"
         printf '"headline":"%s",' "$(json_escape "$headline")"
         printf '"verdict":"%s",' "$(json_escape "$verdict")"
         printf '"verdictClass":"%s",' "$(json_escape "$verdict_class")"
@@ -951,6 +1039,44 @@ write_state_js() {
 
 render_audit_facts() {
     local ended="${RUN_ENDED_ISO:-in progress}"
+    local registry_findings_label="Not audited yet"
+    local cspm_machine_scan_label="Not audited yet"
+    local cspm_api_posture_label="Not audited yet"
+    local machine_scan_label="Not audited yet"
+    local defender_connector_label="Not audited yet"
+    local github_advanced_security_label="Not audited yet"
+    case "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" in
+        true) registry_findings_label="On — audited" ;;
+        false) registry_findings_label="Off — audited" ;;
+        unknown) registry_findings_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" in
+        true) cspm_machine_scan_label="On — audited" ;;
+        false) cspm_machine_scan_label="Off — audited" ;;
+        unknown) cspm_machine_scan_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" in
+        true) cspm_api_posture_label="On — audited" ;;
+        false) cspm_api_posture_label="Off — audited" ;;
+        unknown) cspm_api_posture_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" in
+        true) machine_scan_label="On — audited" ;;
+        false) machine_scan_label="Off — audited" ;;
+        unknown) machine_scan_label="Not sure — audited" ;;
+    esac
+    case "$DEFENDER_DEVOPS_CONNECTOR_STATE" in
+        connected) defender_connector_label="On — audited" ;;
+        authorization_required) defender_connector_label="Authorization required — audited" ;;
+        unavailable) defender_connector_label="Not sure — audited" ;;
+        not_expected) defender_connector_label="Not applicable — audited" ;;
+    esac
+    case "$GITHUB_ADVANCED_SECURITY_STATE" in
+        enabled) github_advanced_security_label="On — audited" ;;
+        disabled) github_advanced_security_label="Off — audited" ;;
+        unknown) github_advanced_security_label="Not sure — audited" ;;
+        not_expected) github_advanced_security_label="Not applicable — audited" ;;
+    esac
     printf '<div class="item"><div class="label">Run ID</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$RUN_ID")"
     printf '<div class="item"><div class="label">Command</div><div class="value"><code>deploy.sh %s</code></div></div>' "$(html_escape "$RUN_INVOCATION")"
     printf '<div class="item"><div class="label">Started (UTC)</div><div class="value">%s</div></div>' "$(html_escape "$RUN_STARTED_ISO")"
@@ -966,11 +1092,18 @@ render_audit_facts() {
     printf '<div class="item"><div class="label">Tenant</div><div class="value"><code>%s</code></div></div>' "$(html_escape "$(mask_identifier "$AZURE_TENANT_ID")")"
     printf '<div class="item"><div class="label">Subscription</div><div class="value">%s<br><code>%s</code></div></div>' "$(html_escape "${SUBSCRIPTION_NAME:-unknown}")" "$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")"
     printf '<div class="item"><div class="label">Azure identity</div><div class="value">%s</div></div>' "$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")"
+    printf '<div class="item"><div class="label">Registry image security findings</div><div class="value">%s<br><span class="hint">Defender for Containers: ContainerRegistriesVulnerabilityAssessments</span></div></div>' "$(html_escape "$registry_findings_label")"
+    printf '<div class="item"><div class="label">CSPM agentless scanning for machines</div><div class="value">%s<br><span class="hint">Defender CSPM: AgentlessVmScanning</span></div></div>' "$(html_escape "$cspm_machine_scan_label")"
+    printf '<div class="item"><div class="label">CSPM API Security Posture</div><div class="value">%s<br><span class="hint">Defender CSPM: ApiPosture</span></div></div>' "$(html_escape "$cspm_api_posture_label")"
+    printf '<div class="item"><div class="label">Agentless scanning for machines</div><div class="value">%s<br><span class="hint">Defender for Containers: AgentlessVmScanning</span></div></div>' "$(html_escape "$machine_scan_label")"
+    printf '<div class="item"><div class="label">Defender GitHub connector</div><div class="value">%s<br><span class="hint">Defender for Cloud DevOps connector</span></div></div>' "$(html_escape "$defender_connector_label")"
+    printf '<div class="item"><div class="label">GitHub Advanced Security</div><div class="value">%s<br><span class="hint">GitHub repository security_and_analysis</span></div></div>' "$(html_escape "$github_advanced_security_label")"
 }
 
 command_noun() {
     case "$COMMAND" in
         uninstall)              printf 'teardown' ;;
+        wizard)                 printf 'management wizard' ;;
         doctor)                 printf 'preflight' ;;
         plan)                   printf 'dry run' ;;
         verify)                 printf 'verification' ;;
@@ -992,7 +1125,7 @@ render_next_steps() {
         <li>Re-run the failed command once the cause is fixed: <code>scripts/deploy.sh $COMMAND --environment $ENVIRONMENT --defaults</code></li>
         <li>If Azure resources are in a half-built state, repair them: <code>scripts/deploy.sh repair --environment $ENVIRONMENT --defaults</code></li>
         <li>If the container will not start, tail its logs: <code>az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_SERVICE_NAME</code></li>
-        <li>As a last resort, tear down and start clean: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes --wait</code></li>
+        <li>As a last resort, tear down and start clean: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes</code></li>
 EOF
         return 0
     fi
@@ -1027,7 +1160,7 @@ EOF
             cat <<EOF
         <li><strong>Confirm the teardown</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group blade</a>; deletion is asynchronous and can take several minutes.</li>
         <li><strong>Verify from the CLI</strong>: <code>az group exists --name $RESOURCE_GROUP</code> should return <code>false</code>.</li>
-        <li>Re-run with <code>--wait</code> if you need the command to block until every resource is gone.</li>
+        <li>Use <code>--no-wait</code> only when a caller intentionally needs asynchronous cleanup without deletion verification.</li>
         <li><strong>Rebuild the dojo later</strong>: <code>scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
         <li>The GitHub OIDC federated credentials are not deleted by uninstall; remove them separately if this environment is retiring for good.</li>
 EOF
@@ -1065,7 +1198,7 @@ EOF
         <li><strong>Re-verify at any time without redeploying</strong>: <code>scripts/deploy.sh verify --environment $ENVIRONMENT --defaults</code></li>
         <li><strong>Re-running deploy is cheap</strong>: the build context is fingerprinted, so an unchanged image is neither rebuilt nor re-uploaded and a healthy App Service is not restarted. Force a full rebuild with <code>--force-rebuild</code>.</li>
         <li><strong>Rotate the scenario</strong>: <code>VULNERABILITY_STATUS=patched scripts/deploy.sh deploy --environment $ENVIRONMENT --defaults</code></li>
-        <li><strong>Review cost and exposure</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group</a>. This environment is intentionally vulnerable &mdash; keep it isolated and delete it when the exercise ends: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes --wait</code></li>
+        <li><strong>Review cost and exposure</strong> in the <a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">resource group</a>. This environment is intentionally vulnerable &mdash; keep it isolated and delete it when the exercise ends: <code>scripts/deploy.sh uninstall --environment $ENVIRONMENT --yes</code></li>
 EOF
             ;;
     esac
@@ -1106,8 +1239,7 @@ print_final_banner() {
 }
 
 finalize_report() {
-    local result="$1"
-    local detail="${2:-}"
+    local result="$1" detail="${2:-}" percent=100
     if [[ "$RUN_FINAL" == true ]]; then
         return 0
     fi
@@ -1115,7 +1247,8 @@ finalize_report() {
     RUN_RESULT="$result"
     RUN_ENDED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [[ "$result" == failure ]]; then
-        write_status_html complete failed 100 "$detail"
+        percent="$(auto_percent)"
+        write_status_html complete failed "$percent" "$detail"
     else
         write_status_html complete success 100 "$detail"
     fi
@@ -1143,7 +1276,7 @@ write_status_html() {
         local percent="$3"
         local detail="${4:-}"
         local final=false verdict verdict_class verdict_note headline build_badge live_badge total_since_attr
-        local total_elapsed report_tmp steps_outcome
+        local total_elapsed report_tmp steps_outcome current_task current_task_state task_index_value
         [[ -n "$STATUS_HTML" ]] || return 0
         printf '[%s] %s: %s\n' "$(date -u +%H:%M:%SZ)" "$phase" "$detail" >> "$STATUS_RAW_CONSOLE"
         if [[ "$status" == running || "$status" == starting || "$status" == waiting ]]; then
@@ -1162,6 +1295,15 @@ write_status_html() {
             steps_outcome=success
         else
             steps_outcome=progress
+        fi
+        current_task="No task is currently running."
+        current_task_state=idle
+        if [[ -n "$CURRENT_TASK" ]]; then
+            task_index_value="$(task_index "$CURRENT_TASK")"
+            if [[ "$task_index_value" != -1 ]]; then
+                current_task="${TASK_LABELS[task_index_value]}"
+                current_task_state="${TASK_STATUSES[task_index_value]}"
+            fi
         fi
         write_console_html
         print_terminal_status "$phase" "$status" "$percent" "$detail"
@@ -1229,8 +1371,16 @@ write_status_html() {
         .item { background: #f7f9fc; border-radius: 10px; padding: 14px; }
         .label { color: #68758a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
         .value { margin-top: 5px; font-weight: 650; overflow-wrap: anywhere; }
-        .bar { height: 14px; background: #e7edf5; border-radius: 99px; overflow: hidden; margin: 14px 0 8px; }
+        .progress-stack { display: grid; gap: 16px; margin-top: 14px; }
+        .progress-label { display: flex; justify-content: space-between; gap: 12px; color: #5b6678; font-size: 13px; }
+        .progress-label strong { color: #152238; }
+        .bar { height: 14px; background: #e7edf5; border-radius: 99px; overflow: hidden; margin: 7px 0 0; }
         .fill { height: 100%; width: ${percent}%; background: linear-gradient(90deg, #1769aa, #27a36a); transition: width .4s ease; }
+        .current-fill { width: 0; background: #b9c6d5; }
+        .current-fill.in_progress { width: 72%; background: linear-gradient(90deg, #1769aa, #50a6d8, #1769aa); background-size: 200% 100%; animation: task-progress 1.5s linear infinite; }
+        .current-fill.success { width: 100%; background: #27a36a; }
+        .current-fill.failure { width: 100%; background: #d64545; }
+        @keyframes task-progress { to { background-position: -200% 0; } }
         .console { background: #101b2d; color: #d9e7f5; border-radius: 10px; padding: 16px; max-height: 280px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.55; }
         iframe { display: block; width: 100%; height: 420px; border: 0; border-radius: 10px; background: #101b2d; overflow: hidden; }
         code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; background: #eef2f8; padding: 1px 5px; border-radius: 5px; }
@@ -1314,8 +1464,17 @@ write_status_html() {
 
     <section>
         <h2>Executive summary</h2>
-        <div class="bar"><div class="fill" id="progress-fill"></div></div>
-        <p><strong id="progress-percent">${percent}%</strong> &middot; current phase <strong id="phase-name">$(html_escape "$phase")</strong> &middot; elapsed <span id="total-elapsed"$total_since_attr>$(format_duration "$total_elapsed")</span>$live_badge</p>
+        <div class="progress-stack">
+            <div>
+                <div class="progress-label"><span><strong>Overall lifecycle</strong> &middot; <span id="progress-percent">${percent}%</span></span><span>elapsed <span id="total-elapsed"$total_since_attr>$(format_duration "$total_elapsed")</span>$live_badge</span></div>
+                <div class="bar"><div class="fill" id="progress-fill"></div></div>
+            </div>
+            <div>
+                <div class="progress-label"><span><strong>Current task</strong></span><span id="current-task-name">$(html_escape "$current_task")</span></div>
+                <div class="bar"><div class="fill current-fill $current_task_state" id="current-task-fill"></div></div>
+            </div>
+        </div>
+        <p>Current phase <strong id="phase-name">$(html_escape "$phase")</strong>.</p>
         <p id="phase-detail">$(html_escape "$detail")</p>
         <div class="grid" style="margin-top:14px" id="summary-counts">$(render_summary_counts)</div>
         <div id="failure-banner">$( [[ "$status" == failed ]] && printf '<div class="banner"><strong>Failure cause:</strong> %s</div>' "$(html_escape "${FAILURE_MESSAGE:-$detail}")" )</div>
@@ -1445,6 +1604,9 @@ $(render_next_steps "$steps_outcome")
         var fill = byId('progress-fill');
         if (fill) { fill.style.width = state.percent + '%'; }
         setText('progress-percent', state.percent + '%');
+        setText('current-task-name', state.currentTask);
+        var currentTaskFill = byId('current-task-fill');
+        if (currentTaskFill) { currentTaskFill.className = 'fill current-fill ' + state.currentTaskState; }
         setText('phase-name', state.phase);
         setText('phase-detail', state.detail);
         setHtml('summary-counts', state.summaryHtml);
@@ -1505,7 +1667,7 @@ $(render_next_steps "$steps_outcome")
 </html>
 EOF
         publish_atomically "$report_tmp" "$STATUS_HTML"
-        write_state_js "$phase" "$percent" "$detail" "$final" "$verdict" "$verdict_class" "$headline" "$verdict_note" "$build_badge" "$steps_outcome"
+        write_state_js "$phase" "$percent" "$detail" "$final" "$verdict" "$verdict_class" "$headline" "$verdict_note" "$build_badge" "$steps_outcome" "$current_task" "$current_task_state"
 }
 
 write_state() {
@@ -1542,12 +1704,8 @@ resolve_settings() {
     resolve_scenario
     if [[ "$ENVIRONMENT" == auto ]]; then
         local branch_name
-        branch_name="$(git branch --show-current 2>/dev/null || true)"
-        case "$branch_name" in
-            dev) ENVIRONMENT=dev ;;
-            main) ENVIRONMENT=prod ;;
-            *) fail "Cannot detect deployment environment from Git branch '$branch_name'. Use --environment dev or --environment prod." ;;
-        esac
+        branch_name="${GITHUB_REF_NAME:-$(git branch --show-current 2>/dev/null || true)}"
+        ENVIRONMENT="$(environment_for_branch "$branch_name")" || fail "Cannot detect deployment environment from Git branch '$branch_name'. Use --environment dev or --environment prod."
     fi
 
     case "$ENVIRONMENT" in
@@ -1555,14 +1713,11 @@ resolve_settings() {
         *) fail "--environment must be dev, prod, or auto." ;;
     esac
     LOCATION="${LOCATION:-$(config_setting location centralus)}"
-    ENVIRONMENT_NAME_TAG="${ENVIRONMENT_NAME_TAG:-$(config_setting nameTag "")}"
     RESOURCE_GROUP="${RESOURCE_GROUP:-$(config_setting resourceGroup "")}"
     REGISTRY_NAME="${REGISTRY_NAME:-$(config_setting registryName "")}"
     APP_SERVICE_NAME="${APP_SERVICE_NAME:-$(config_setting appServiceName "")}"
+    APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-$(config_setting appServicePlanSku B2)}"
     IMAGE_NAME="${IMAGE_NAME:-$(config_setting imageName ninjapaws-dojo)}"
-    CONTAINER_REGISTRY_SKU="${CONTAINER_REGISTRY_SKU:-$(config_setting containerRegistrySku Basic)}"
-    APP_SERVICE_PLAN_SKU="${APP_SERVICE_PLAN_SKU:-$(config_setting appServicePlanSku B1)}"
-    APP_SERVICE_PLAN_CAPACITY="${APP_SERVICE_PLAN_CAPACITY:-$(config_setting appServicePlanCapacity 1)}"
     BASE_OS_IMAGE="${BASE_OS_IMAGE:-$(config_setting baseOsImage ubuntu)}"
     BASE_OS_VERSION="${BASE_OS_VERSION:-$(config_setting baseOsVersion 24.04)}"
     NGINX_VERSION="${NGINX_VERSION:-$(config_setting nginxVersion 1.30.3)}"
@@ -1597,22 +1752,36 @@ resolve_settings() {
     DEFENDER_DEVOPS_CONNECTOR_NAME="${DEFENDER_DEVOPS_CONNECTOR_NAME:-$(config_setting defender.devops.connectorName ninjapaws-github)}"
     DEFENDER_DEVOPS_GITHUB_OWNER="${DEFENDER_DEVOPS_GITHUB_OWNER:-$(config_setting defender.devops.githubOwner ninjapaw)}"
     GITHUB_ADVANCED_SECURITY_EXPECTED="${GITHUB_ADVANCED_SECURITY_EXPECTED:-$(config_setting defender.devops.advancedSecurityExpected true)}"
-    DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED="${DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED:-$(config_setting defender.devops.agentlessCodeScanningExpected true)}"
     [[ -n "$RESOURCE_GROUP" ]] || fail "No resource group for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_RESOURCE_GROUP, or --resource-group."
-    [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
-    [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
+    if [[ "$COMMAND" != uninstall && "$COMMAND" != wizard ]]; then
+        [[ -n "$REGISTRY_NAME" ]] || fail "No container registry for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_CONTAINER_REGISTRY_NAME, or --registry-name."
+        [[ -n "$APP_SERVICE_NAME" ]] || fail "No App Service for '$ENVIRONMENT'. Set it in $CONFIG_FILE, AZURE_APP_SERVICE_NAME, or --app-service-name."
+    fi
 
-    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
-        LOCATION="$(prompt_region "$LOCATION")"
-        RESOURCE_GROUP="$(prompt_default 'Resource group' "$RESOURCE_GROUP")"
-        REGISTRY_NAME="$(prompt_default 'Container Registry' "$REGISTRY_NAME")"
-        APP_SERVICE_NAME="$(prompt_default 'App Service' "$APP_SERVICE_NAME")"
+    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan && "$COMMAND" != wizard ]]; then
+        if [[ "$COMMAND" == uninstall ]]; then
+            printf '\nUninstall wizard\n'
+            printf 'Environment: %s (locked to the current Git branch)\n' "$ENVIRONMENT"
+            printf 'Azure ownership tags will be verified before deletion.\n'
+            RESOURCE_GROUP="$(prompt_default 'Resource group to delete' "$RESOURCE_GROUP")"
+            if [[ "$WAIT_FOR_DELETE_EXPLICIT" == false ]]; then
+                WAIT_FOR_DELETE="$(prompt_boolean 'Wait for Azure to confirm the resource group is deleted' true)"
+            fi
+        else
+            LOCATION="$(prompt_region "$LOCATION")"
+            RESOURCE_GROUP="$(prompt_default 'Resource group' "$RESOURCE_GROUP")"
+            REGISTRY_NAME="$(prompt_default 'Container Registry' "$REGISTRY_NAME")"
+            APP_SERVICE_NAME="$(prompt_default 'App Service' "$APP_SERVICE_NAME")"
+        fi
     fi
 
     ACR_NAME="${REGISTRY_NAME//-/}"
-    [[ "$ACR_NAME" =~ ^[a-z0-9]{5,50}$ ]] || fail "ACR name must be 5-50 lowercase letters or numbers after hyphen removal."
+    if [[ "$COMMAND" != uninstall && "$COMMAND" != wizard ]]; then
+        [[ "$ACR_NAME" =~ ^[a-z0-9]{5,50}$ ]] || fail "ACR name must be 5-50 lowercase letters or numbers after hyphen removal."
+    fi
     output_base="${OUTPUT_ROOT:-$INVOCATION_DIR/output}"
     OUTPUT_DIR="$output_base/$ENVIRONMENT"
+    STATUS_OPEN_MARKER="$output_base/.deployment-$ENVIRONMENT.browser-opened"
     if [[ -d "$OUTPUT_DIR" ]]; then
         if [[ "$ARCHIVE_OUTPUTS" == true ]]; then
             archive_dir="$output_base/archive/$(date -u +%Y%m%dT%H%M%SZ)-$ENVIRONMENT"
@@ -1637,7 +1806,7 @@ resolve_settings() {
     STATUS_RAW_CONSOLE="$OUTPUT_DIR/.deployment-$ENVIRONMENT.console.raw"
     ACR_NAME="${REGISTRY_NAME//-/}"
     set_task plan in_progress "Resolving names, output workspace, and image tag."
-    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan ]]; then
+    if [[ -t 0 && "$USE_DEFAULTS" == false && "$COMMAND" != doctor && "$COMMAND" != verify && "$COMMAND" != plan && "$COMMAND" != wizard ]]; then
         : > "$STATUS_RAW_CONSOLE"
         write_status_html awaiting_user waiting 0 "Waiting for your input. The terminal is asking for deployment values; press Enter to accept each default."
         open_status_html
@@ -1652,6 +1821,14 @@ resolve_settings() {
     open_status_html
 }
 
+environment_for_branch() {
+    case "$1" in
+        main) printf 'prod' ;;
+        dev|dev/*|feature/*|feat/*|chore/*|fix/*|bugfix/*) printf 'dev' ;;
+        *) return 1 ;;
+    esac
+}
+
 enforce_branch_environment() {
     case "$COMMAND" in
         setup|provision|build|deploy|update|repair|rollout|uninstall) ;;
@@ -1660,11 +1837,7 @@ enforce_branch_environment() {
 
     local branch_name expected_environment
     branch_name="${GITHUB_REF_NAME:-$(git branch --show-current 2>/dev/null || true)}"
-    case "$branch_name" in
-        dev) expected_environment=dev ;;
-        main) expected_environment=prod ;;
-        *) fail "Mutating command '$COMMAND' requires branch 'dev' or 'main'; current branch is '$branch_name'." ;;
-    esac
+    expected_environment="$(environment_for_branch "$branch_name")" || fail "Mutating command '$COMMAND' requires a supported development branch or 'main'; current branch is '$branch_name'."
     [[ "$ENVIRONMENT" == "$expected_environment" ]] || fail "Branch '$branch_name' can only target environment '$expected_environment', not '$ENVIRONMENT'."
 }
 
@@ -1676,44 +1849,22 @@ require_commands() {
 }
 
 authenticate() {
-    local account_info subscription_rows selected_subscription subscription_index subscription_id subscription_name
+    local account_info current_subscription_id
     if ! az account show >/dev/null 2>&1; then
         echo -e "${YELLOW}Azure CLI is not authenticated. Starting device-code login.${NC}"
-        az login --use-device-code >/dev/null
-    fi
-    if [[ -z "$SUBSCRIPTION_ID" && -t 0 && "$USE_DEFAULTS" == false ]]; then
-        subscription_rows="$(az account list --query "[?state=='Enabled'].[id,name]" -o tsv 2>/dev/null || true)"
-        if [[ -n "$subscription_rows" ]]; then
-            echo
-            echo "Azure subscriptions available to this account:"
-            subscription_index=0
-            while IFS=$'\t' read -r subscription_id subscription_name; do
-                [[ -n "$subscription_id" ]] || continue
-                subscription_index=$((subscription_index + 1))
-                printf '  %2d) %s (%s)\n' "$subscription_index" "$subscription_name" "$subscription_id"
-            done <<< "$subscription_rows"
-            while true; do
-                read -r -p "Select a subscription by number or ID [current]: " selected_subscription
-                if [[ -z "$selected_subscription" ]]; then
-                    break
-                fi
-                if [[ "$selected_subscription" =~ ^[0-9]+$ ]]; then
-                    subscription_index=0
-                    while IFS=$'\t' read -r subscription_id subscription_name; do
-                        [[ -n "$subscription_id" ]] || continue
-                        subscription_index=$((subscription_index + 1))
-                        if ((subscription_index == selected_subscription)); then
-                            SUBSCRIPTION_ID="$subscription_id"
-                            break 2
-                        fi
-                    done <<< "$subscription_rows"
-                elif [[ "$subscription_rows" == *"$selected_subscription"* ]]; then
-                    SUBSCRIPTION_ID="$selected_subscription"
-                    break
-                fi
-                echo "Please choose one of the listed subscription numbers or enter an exact subscription ID." >&2
-            done
+        if ! az login --use-device-code >/dev/null; then
+            if [[ "$COMMAND" == wizard ]]; then
+                AUTHENTICATION_SKIPPED=true
+                echo -e "${YELLOW}Azure login was not completed. The read-only wizard stopped before inspecting Azure.${NC}"
+                echo "Run 'az login' and start the wizard again when you are ready."
+                return 0
+            fi
+            fail "Azure login was not completed. Run 'az login' and retry '$COMMAND'."
         fi
+    fi
+    if [[ -z "$SUBSCRIPTION_ID" ]]; then
+        current_subscription_id="$(az account show --query id -o tsv 2>/dev/null || true)"
+        SUBSCRIPTION_ID="$current_subscription_id"
     fi
     if [[ -n "$SUBSCRIPTION_ID" ]]; then
         az account set --subscription "$SUBSCRIPTION_ID" || fail "Unable to select subscription '$SUBSCRIPTION_ID'."
@@ -1733,8 +1884,9 @@ print_plan() {
     echo "Subscription: $(mask_identifier "${SUBSCRIPTION_ID:-current Azure subscription}")"
     echo "Resource group: $RESOURCE_GROUP"
     echo "Location: $LOCATION"
-    echo "Registry: $ACR_NAME ($CONTAINER_REGISTRY_SKU)"
-    echo "App Service: $APP_SERVICE_NAME (plan $APP_SERVICE_PLAN_SKU x$APP_SERVICE_PLAN_CAPACITY)"
+    echo "Registry: $ACR_NAME"
+    echo "App Service: $APP_SERVICE_NAME"
+    echo "Plan SKU: $APP_SERVICE_PLAN_SKU"
     echo "Image: $IMAGE_NAME:$IMAGE_TAG"
     echo "Bicep: $REPO_ROOT/infra/main.bicep"
     echo "State: $STATE_FILE"
@@ -1750,6 +1902,7 @@ run_bicep_deployment() {
     local deployment_log="$OUTPUT_DIR/deployment-$ENVIRONMENT.log"
     local operations_seen="$OUTPUT_DIR/deployment-$ENVIRONMENT.operations"
     local deployment_pid state succeeded failed running percent operation_lines operation_line
+    local -a deployment_args
     local expected_operations=6
 
     : > "$deployment_log"
@@ -1758,36 +1911,39 @@ run_bicep_deployment() {
     echo "Detailed Azure CLI output: $deployment_log"
     write_status_html provisioning running "$(auto_percent 5)" "Submitting Bicep infrastructure deployment."
 
-    az deployment group create \
-        --name "$deployment_name" \
-        --resource-group "$RESOURCE_GROUP" \
-        --mode Incremental \
-        --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
-        --parameters \
-            containerRegistryName="$ACR_NAME" \
-            appServiceName="$APP_SERVICE_NAME" \
-            location="$LOCATION" \
-            imageName="$IMAGE_NAME" \
-            imageTag=latest \
-            containerRegistrySku="$CONTAINER_REGISTRY_SKU" \
-            appServicePlanSku="$APP_SERVICE_PLAN_SKU" \
-            appServicePlanCapacity="$APP_SERVICE_PLAN_CAPACITY" \
-            nginxVersion="$NGINX_VERSION" \
-            vulnerabilityStatus="$VULNERABILITY_STATUS" \
-            port="$PORT" \
-            defenderEnabled="$DEFENDER_ENABLED" \
-            defenderAppServicesTier="$DEFENDER_APPSERVICES_TIER" \
-            defenderContainersTier="$DEFENDER_CONTAINERS_TIER" \
-            defenderCspmTier="$DEFENDER_CSPM_TIER" \
-            defenderArmTier="$DEFENDER_ARM_TIER" \
-            appNameTag="$ENVIRONMENT_NAME_TAG" \
-            defenderServerlessProtection="$DEFENDER_CSPM_SERVERLESS_PROTECTION" \
-            defenderServerlessContainers="$DEFENDER_CSPM_SERVERLESS_CONTAINERS" \
-            defenderRegistryAssessment="$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" \
-            defenderDevOpsConnector="$DEFENDER_DEVOPS_CONNECTOR_ENABLED" \
-            githubAdvancedSecurity="$GITHUB_ADVANCED_SECURITY_EXPECTED" \
-            agentlessCodeScanningExpected="$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED" \
-        --output json > "$deployment_output" 2> "$deployment_log" &
+    deployment_args=(
+        deployment group create
+        --name "$deployment_name"
+        --resource-group "$RESOURCE_GROUP"
+        --mode Incremental
+        --template-file "$AZURE_REPO_ROOT/infra/main.bicep"
+        --parameters
+        "containerRegistryName=$ACR_NAME"
+        "appServiceName=$APP_SERVICE_NAME"
+        "appServicePlanSku=$APP_SERVICE_PLAN_SKU"
+        "location=$LOCATION"
+        "imageName=$IMAGE_NAME"
+        imageTag=latest
+        "nginxVersion=$NGINX_VERSION"
+        "vulnerabilityStatus=$VULNERABILITY_STATUS"
+        "port=$PORT"
+        "defenderEnabled=$DEFENDER_ENABLED"
+        "defenderAppServicesTier=$DEFENDER_APPSERVICES_TIER"
+        "defenderContainersTier=$DEFENDER_CONTAINERS_TIER"
+        "defenderCspmTier=$DEFENDER_CSPM_TIER"
+        "defenderArmTier=$DEFENDER_ARM_TIER"
+        "defenderServerlessProtection=$DEFENDER_CSPM_SERVERLESS_PROTECTION"
+        "defenderServerlessContainers=$DEFENDER_CSPM_SERVERLESS_CONTAINERS"
+        "defenderRegistryAssessment=$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT"
+        "defenderDevOpsConnector=$DEFENDER_DEVOPS_CONNECTOR_ENABLED"
+        "githubAdvancedSecurity=$GITHUB_ADVANCED_SECURITY_EXPECTED"
+        --output json
+    )
+    if [[ "$CONSOLE_CAPTURE_STARTED" == true ]]; then
+        az "${deployment_args[@]}" > >(tee "$deployment_output") 2> >(tee "$deployment_log" >&2) &
+    else
+        az "${deployment_args[@]}" > >(tee "$deployment_output" | tee -a "$STATUS_RAW_CONSOLE") 2> >(tee "$deployment_log" | tee -a "$STATUS_RAW_CONSOLE" >&2) &
+    fi
     deployment_pid=$!
 
     while kill -0 "$deployment_pid" 2>/dev/null; do
@@ -1872,7 +2028,7 @@ sha256_of_stdin() {
 # Content address for the image: every file the Dockerfile copies, plus every build argument.
 compute_build_fingerprint() {
     local file manifest=""
-    for file in Dockerfile package.json package-lock.json app.js nginx.conf entrypoint.sh; do
+    for file in Dockerfile package.json package-lock.json src/app.js nginx.conf entrypoint.sh scripts/verify.sh; do
         if [[ -f "$REPO_ROOT/$file" ]]; then
             manifest+="$file $(sha256_of_file "$REPO_ROOT/$file")"$'\n'
         else
@@ -2180,6 +2336,18 @@ record_extension_checks() {
     while IFS='|' read -r extension desired label; do
         [[ -n "$extension" ]] || continue
         current="$(defender_extension_state "$plan" "$extension")"
+        if [[ "$plan" == Containers && "$extension" == ContainerRegistriesVulnerabilityAssessments ]]; then
+            DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == CloudPosture && "$extension" == AgentlessVmScanning ]]; then
+            DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == CloudPosture && "$extension" == ApiPosture ]]; then
+            DEFENDER_CSPM_API_POSTURE_AUDIT_STATE="$current"
+        fi
+        if [[ "$plan" == Containers && "$extension" == AgentlessVmScanning ]]; then
+            DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE="$current"
+        fi
         if [[ "$current" == "$desired" ]]; then
             if [[ "$desired" == true ]]; then
                 record_check "$plan_label: $label" pass "Azure reports the extension enabled."
@@ -2196,7 +2364,7 @@ record_extension_checks() {
 
 # Creates the ARM connector only; the GitHub App authorization remains a manual portal step.
 ensure_devops_connector() {
-    local existing connector_name connector_state
+    local existing connector_name connector_state existing_rg
 
     if [[ "$DEFENDER_DEVOPS_CONNECTOR_ENABLED" != true ]]; then
         record_check "Defender for Cloud GitHub DevOps connector" not_applicable "Disabled by configuration (defender.devops.connectorEnabled=$DEFENDER_DEVOPS_CONNECTOR_ENABLED)."
@@ -2205,11 +2373,26 @@ ensure_devops_connector() {
 
     existing="$(az security security-connector list --query "[?environmentName=='Github' || environmentName=='GitHub'].name | [0]" -o tsv 2>/dev/null || true)"
     if [[ -n "$existing" ]]; then
-        record_check "Defender for Cloud GitHub DevOps connector" pass "Connector '$existing' exists in subscription $SUBSCRIPTION_ID."
-        DEFENDER_DEVOPS_CONNECTOR_STATE=connected
+        existing_rg="$(az security security-connector list --query "[?name=='$existing'].resourceGroup | [0]" -o tsv 2>/dev/null || true)"
+
+        # The ARM resource existing proves nothing. Repository discovery only
+        # works once the GitHub app is authorized, and that creates the devops
+        # configuration below. Reporting on existence alone hides a connector
+        # that will sit in progress forever.
+        if az rest --method GET \
+            --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${existing_rg}/providers/Microsoft.Security/securityConnectors/${existing}/devops/default?api-version=2024-04-01" \
+            --output none 2>/dev/null; then
+            record_check "Defender for Cloud GitHub DevOps connector" pass "Connector '$existing' is authorized and discovering repositories."
+            DEFENDER_DEVOPS_CONNECTOR_STATE=connected
+        else
+            record_check "Defender for Cloud GitHub DevOps connector" unknown "Connector '$existing' exists in $existing_rg but has no DevOps configuration, so it is not authorized and will never discover repositories. Complete Defender for Cloud > Environment settings > the connector > Authorize, then install the DevOps security GitHub app for '$DEFENDER_DEVOPS_GITHUB_OWNER'. See https://learn.microsoft.com/azure/defender-for-cloud/quickstart-onboard-github."
+            DEFENDER_DEVOPS_CONNECTOR_STATE=authorization_required
+        fi
         return 0
     fi
 
+    # The identifier only has to be a GUID; the binding to a GitHub organisation
+    # is established by the interactive authorization, not by this value.
     if az security security-connector create \
         --name "$DEFENDER_DEVOPS_CONNECTOR_NAME" \
         --resource-group "$RESOURCE_GROUP" \
@@ -2262,22 +2445,6 @@ record_advanced_security_state() {
             record_check "GitHub Advanced Security code scanning" unknown "GitHub did not report an Advanced Security state for $repository; the token may lack repository administration scope."
             ;;
     esac
-}
-
-# Agentless code scanning (and the SBOM it generates) is a preview, portal-only connector
-# setting; it cannot be read or toggled through the az CLI, so this reports the expectation
-# rather than claiming to have verified or enabled it.
-record_agentless_code_scanning_state() {
-    if [[ "$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED" != true ]]; then
-        record_check "Defender for Cloud agentless code scanning (SBOM)" not_applicable "Not expected by configuration (defender.devops.agentlessCodeScanningExpected=$DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED)."
-        return 0
-    fi
-
-    if [[ "$DEFENDER_DEVOPS_CONNECTOR_STATE" == connected || "$DEFENDER_DEVOPS_CONNECTOR_STATE" == authorization_required ]]; then
-        record_check "Defender for Cloud agentless code scanning (SBOM)" unknown "Enabled by default once the GitHub connector is authorized; verify or adjust scanner/scope settings under Defender for Cloud > Environment settings > the '$DEFENDER_DEVOPS_CONNECTOR_NAME' connector > Agentless code scanning. SBOM is generated automatically on every scan and is not itself a separate toggle. See https://learn.microsoft.com/azure/defender-for-cloud/agentless-code-scanning."
-    else
-        record_check "Defender for Cloud agentless code scanning (SBOM)" unknown "Depends on the GitHub connector, which was not confirmed as connected. Agentless code scanning turns on automatically once the connector is authorized; no separate action is required. See https://learn.microsoft.com/azure/defender-for-cloud/agentless-code-scanning."
-    fi
 }
 
 run_defender_scan() {
@@ -2363,18 +2530,18 @@ ContainerSensor=$DEFENDER_CONTAINERS_SENSOR"
 ServerlessContainers|$DEFENDER_CSPM_SERVERLESS_CONTAINERS|Serverless container posture for Container Apps and Container Instances
 ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CSPM_REGISTRY_ASSESSMENT|Registry access for container image posture
 AgentlessDiscoveryForKubernetes|$DEFENDER_CSPM_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
-AgentlessVmScanning|$DEFENDER_CSPM_VM_SCANNING|Agentless machine scanning
+AgentlessVmScanning|$DEFENDER_CSPM_VM_SCANNING|Agentless scanning for machines
 SensitiveDataDiscovery|$DEFENDER_CSPM_SENSITIVE_DATA|Sensitive data discovery
 EntraPermissionsManagement|$DEFENDER_CSPM_PERMISSIONS_MANAGEMENT|Cloud infrastructure entitlement management
-ApiPosture|$DEFENDER_CSPM_API_POSTURE|API security posture"
+ApiPosture|$DEFENDER_CSPM_API_POSTURE|API Security Posture"
     else
         record_check "Defender CSPM extensions" not_applicable "Defender CSPM is not at the Standard tier, so its extensions do not apply."
     fi
     if [[ "$containers_tier" == Standard ]]; then
         record_extension_checks Containers "Defender for Containers" \
-"ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT|Azure Container Registry vulnerability assessment
+"ContainerRegistriesVulnerabilityAssessments|$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT|Security findings for Azure Container Registry images
 AgentlessDiscoveryForKubernetes|$DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY|Agentless Kubernetes discovery
-AgentlessVmScanning|$DEFENDER_CONTAINERS_VM_SCANNING|Agentless scanning for Kubernetes nodes
+AgentlessVmScanning|$DEFENDER_CONTAINERS_VM_SCANNING|Agentless scanning for machines
 ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     else
         record_check "Defender for Containers extensions" not_applicable "Defender for Containers is not at the Standard tier, so its extensions do not apply."
@@ -2383,7 +2550,6 @@ ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     write_status_html defender running "$(auto_percent 50)" "Checking the Defender for Cloud DevOps connector and GitHub Advanced Security state."
     ensure_devops_connector
     record_advanced_security_state
-    record_agentless_code_scanning_state
 
     write_status_html defender running "$(auto_percent 65)" "Reading the latest Defender for Cloud assessments for $RESOURCE_GROUP."
     assessment_json="$(az security assessment list --resource-group "$RESOURCE_GROUP" -o json 2>/dev/null || true)"
@@ -2404,10 +2570,49 @@ ContainerSensor|$DEFENDER_CONTAINERS_SENSOR|Kubernetes runtime threat sensor"
     else
         record_check "App Service workload is covered for attack detection" not_applicable "Defender for App Service is not enabled at the configured tier."
     fi
-    if [[ "$containers_tier" == Standard ]]; then
-        record_check "ACR image workload is covered for vulnerability assessment" pass "Defender for Containers is configured to scan Azure Container Registry images for known vulnerabilities, including CVEs."
+    DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE="$(defender_extension_state CloudPosture AgentlessVmScanning)"
+    DEFENDER_CSPM_API_POSTURE_AUDIT_STATE="$(defender_extension_state CloudPosture ApiPosture)"
+    DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE="$(defender_extension_state Containers ContainerRegistriesVulnerabilityAssessments)"
+    DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE="$(defender_extension_state Containers AgentlessVmScanning)"
+    if [[ "$cspm_tier" != Standard || "$DEFENDER_CSPM_VM_SCANNING" != true ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" not_applicable "Defender CSPM AgentlessVmScanning is not requested at the Standard tier."
+    elif [[ "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" == true ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" pass "Azure reports AgentlessVmScanning enabled for Defender CSPM. Defender scans machines for installed software, vulnerabilities, and secrets without relying on agents or impacting machine performance. Learn more: https://aka.ms/agentlessscanazure"
+    elif [[ "$DEFENDER_CSPM_MACHINE_SCAN_AUDIT_STATE" == unknown ]]; then
+        record_check "CSPM agentless scanning for machines is enabled and audited" unknown "Azure did not return the Defender CSPM AgentlessVmScanning state, so the requested setting could not be audited."
     else
-        record_check "ACR image workload is covered for vulnerability assessment" not_applicable "Defender for Containers is not enabled at the configured tier."
+        record_check "CSPM agentless scanning for machines is enabled and audited" fail "Azure reports Defender CSPM AgentlessVmScanning disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$cspm_tier" != Standard || "$DEFENDER_CSPM_API_POSTURE" != true ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" not_applicable "Defender CSPM ApiPosture is not requested at the Standard tier."
+    elif [[ "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" == true ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" pass "Azure reports ApiPosture enabled for Defender CSPM. API Security Posture provides unified visibility across APIs published through Azure API Management and helps assess misconfigurations, dormant APIs, exposed APIs, and APIs handling sensitive data; preview discovery also covers APIs in Azure App Services, Azure Functions, and Azure Logic Apps."
+    elif [[ "$DEFENDER_CSPM_API_POSTURE_AUDIT_STATE" == unknown ]]; then
+        record_check "CSPM API Security Posture is enabled and audited" unknown "Azure did not return the Defender CSPM ApiPosture state, so the requested setting could not be audited."
+    else
+        record_check "CSPM API Security Posture is enabled and audited" fail "Azure reports Defender CSPM ApiPosture disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$containers_tier" != Standard || "$DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT" != true ]]; then
+        record_check "Registry image security findings are enabled and audited" not_applicable "Defender for Containers registry vulnerability assessment is not requested at the Standard tier."
+    elif [[ "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" == true ]]; then
+        record_check "Registry image security findings are enabled and audited" pass "Azure reports ContainerRegistriesVulnerabilityAssessments enabled. Defender generates security findings artifacts and links them to new or updated ACR images for evaluation."
+    elif [[ "$DEFENDER_REGISTRY_FINDINGS_AUDIT_STATE" == unknown ]]; then
+        record_check "Registry image security findings are enabled and audited" unknown "Azure did not return the ContainerRegistriesVulnerabilityAssessments state, so the requested setting could not be audited."
+    else
+        record_check "Registry image security findings are enabled and audited" fail "Azure reports ContainerRegistriesVulnerabilityAssessments disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
+    fi
+    if [[ "$containers_tier" != Standard || "$DEFENDER_CONTAINERS_VM_SCANNING" != true ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" not_applicable "Defender for Containers AgentlessVmScanning is not requested at the Standard tier."
+    elif [[ "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" == true ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" pass "Azure reports AgentlessVmScanning enabled. Defender scans machines for installed software, vulnerabilities, and secrets without relying on agents or impacting machine performance. Learn more: https://aka.ms/agentlessscanazure"
+    elif [[ "$DEFENDER_AGENTLESS_MACHINE_SCAN_AUDIT_STATE" == unknown ]]; then
+        record_check "Agentless scanning for machines is enabled and audited" unknown "Azure did not return the AgentlessVmScanning state, so the requested setting could not be audited."
+    else
+        record_check "Agentless scanning for machines is enabled and audited" fail "Azure reports AgentlessVmScanning disabled even though configuration requests it enabled."
+        failures=$((failures + 1))
     fi
     if [[ "$arm_tier" == Standard ]]; then
         record_check "Control plane operations are monitored for threats" pass "Defender for Resource Manager watches the deployment, role assignment, and registry operations this lifecycle performs through ARM."
@@ -2594,10 +2799,23 @@ verify() {
 }
 
 doctor() {
-    local bicep_output="$OUTPUT_DIR/doctor-main.bicep.json"
+    local bicep_output="$OUTPUT_DIR/doctor-main.bicep.json" bicep_version
     local whatif_output="$OUTPUT_DIR/doctor-whatif-$ENVIRONMENT.txt"
     mkdir -p "$OUTPUT_DIR"
 
+    set_task bicep in_progress "Checking the Azure CLI Bicep toolchain and compiling infra/main.bicep."
+    echo -e "${YELLOW}Checking the Azure CLI Bicep toolchain...${NC}"
+    if ! bicep_version="$(az bicep version 2>&1)"; then
+        record_check "Azure CLI Bicep toolchain is available" fail "The host could not start the Bicep compiler."
+        set_task bicep failure "The host Bicep toolchain is unavailable."
+        if [[ "$bicep_version" == *"ICU"* || "$bicep_version" == *"icu"* ]]; then
+            FAILURE_MESSAGE="The Bicep compiler requires ICU on this host. Install libicu (or icu-libs), then retry scripts/deploy.sh doctor."
+        else
+            FAILURE_MESSAGE="The Azure CLI Bicep toolchain is unavailable: $bicep_version"
+        fi
+        fail "$FAILURE_MESSAGE"
+    fi
+    record_check "Azure CLI Bicep toolchain is available" pass "Azure CLI Bicep $bicep_version is available on the host."
     set_task bicep in_progress "Compiling infra/main.bicep with the Azure CLI Bicep toolchain."
     echo -e "${YELLOW}Compiling Bicep...${NC}"
     if az bicep build --file "$AZURE_REPO_ROOT/infra/main.bicep" --outfile "$bicep_output" >/dev/null; then
@@ -2617,7 +2835,7 @@ doctor() {
         if az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file "$AZURE_REPO_ROOT/infra/main.bicep" \
-            --parameters containerRegistryName="$ACR_NAME" appServiceName="$APP_SERVICE_NAME" location="$LOCATION" \
+            --parameters containerRegistryName="$ACR_NAME" appServiceName="$APP_SERVICE_NAME" appServicePlanSku="$APP_SERVICE_PLAN_SKU" location="$LOCATION" \
             --result-format ResourceIdOnly | tee "$whatif_output"; then
             record_check "What-if analysis completed against the live resource group" pass "Predicted changes were written to doctor-whatif-$ENVIRONMENT.txt."
             set_task whatif success "What-if completed; the predicted change set is in doctor-whatif-$ENVIRONMENT.txt."
@@ -2633,6 +2851,100 @@ doctor() {
         set_task whatif skipped "Nothing to compare: $RESOURCE_GROUP does not exist yet and provision will create it."
     fi
     echo -e "${GREEN}Preflight checks passed.${NC}"
+}
+
+wizard() {
+    local resource_group_exists=false app_service_exists=false registry_exists=false
+    local managed environment_tag resource_count role_names selected_action=""
+
+    set_task permissions in_progress "Checking subscription read access and assigned roles for $AZURE_ACCOUNT_NAME."
+    if az group list --query 'length(@)' -o tsv >/dev/null 2>&1; then
+        role_names="$(az role assignment list --assignee "$AZURE_ACCOUNT_NAME" --include-inherited --all --query '[].roleDefinitionName' -o tsv 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//' || true)"
+        record_check "Subscription read access" pass "Azure CLI can list resource groups in subscription $SUBSCRIPTION_ID."
+        if [[ -n "$role_names" ]]; then
+            record_check "Assigned Azure roles" pass "Detected roles: $role_names."
+        else
+            record_check "Assigned Azure roles" unknown "The current identity can read the subscription, but role assignments were not available for inspection."
+        fi
+        set_task permissions success "Subscription read access confirmed for ${AZURE_ACCOUNT_NAME:-the current Azure identity}."
+    else
+        record_check "Subscription read access" fail "Azure CLI could not list resource groups in subscription $SUBSCRIPTION_ID."
+        set_task permissions failure "Cannot inspect this subscription with the current Azure identity."
+        FAILURE_MESSAGE="The current Azure identity cannot read subscription $SUBSCRIPTION_ID. Select another subscription or sign in with an appropriate role."
+        fail "$FAILURE_MESSAGE"
+    fi
+
+    set_task discover in_progress "Inspecting the configured resource group and supported resources."
+    if az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
+        resource_group_exists=true
+        resource_count="$(az resource list --resource-group "$RESOURCE_GROUP" --query 'length(@)' -o tsv 2>/dev/null || printf 'unknown')"
+        managed="$(az group show --name "$RESOURCE_GROUP" --query 'tags."ninjapaws-managed"' -o tsv 2>/dev/null || true)"
+        environment_tag="$(az group show --name "$RESOURCE_GROUP" --query 'tags."ninjapaws-environment"' -o tsv 2>/dev/null || true)"
+        if [[ -n "$APP_SERVICE_NAME" ]] && az webapp show --name "$APP_SERVICE_NAME" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+            app_service_exists=true
+        fi
+        if [[ -n "$ACR_NAME" ]] && az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+            registry_exists=true
+        fi
+        record_check "Configured resource group" pass "$RESOURCE_GROUP exists with $resource_count resource(s); tags managed=${managed:-missing}, environment=${environment_tag:-missing}."
+        set_task discover success "$RESOURCE_GROUP exists; App Service=$app_service_exists, registry=$registry_exists."
+    else
+        record_check "Configured resource group" not_applicable "$RESOURCE_GROUP does not exist in subscription $SUBSCRIPTION_ID."
+        set_task discover success "$RESOURCE_GROUP is absent; install/provision is available."
+    fi
+
+    set_task options in_progress "Evaluating lifecycle actions against the discovered environment state."
+    echo
+    echo "Ninja Paws management wizard"
+    echo "Environment: $ENVIRONMENT"
+    echo "Subscription: $SUBSCRIPTION_NAME ($(mask_identifier "$SUBSCRIPTION_ID"))"
+    echo "Resource group: $RESOURCE_GROUP ($([[ "$resource_group_exists" == true ]] && printf 'present' || printf 'absent'))"
+    echo
+    echo "Available actions"
+    echo "  1) Plan                 Always available; no Azure changes."
+    echo "  2) Deploy               Available; provisions or updates the full dojo lifecycle."
+    if [[ "$resource_group_exists" == false ]]; then
+        echo "  3) Install/provision    Available; the configured resource group is absent."
+    else
+        echo "  -) Install/provision    Unavailable; the configured resource group already exists."
+    fi
+    if [[ "$app_service_exists" == true && "$registry_exists" == true ]]; then
+        echo "  4) Verify               Available; App Service and registry were detected."
+        echo "  5) Rollout              Available; App Service and registry were detected."
+    else
+        echo "  -) Verify/rollout       Unavailable; App Service and registry must both exist."
+    fi
+    if [[ "$resource_group_exists" == true ]]; then
+        echo "  6) Repair               Available; the configured environment exists."
+    else
+        echo "  -) Repair               Unavailable; install the environment first."
+    fi
+    if [[ "$resource_group_exists" == true && "$managed" == true && "$environment_tag" == "$ENVIRONMENT" ]]; then
+        echo "  7) Uninstall            Available; live ownership tags match this environment."
+    else
+        echo "  -) Uninstall            Unavailable; a matching tagged environment was not detected."
+    fi
+
+    if [[ -t 0 && "$USE_DEFAULTS" == false ]]; then
+        read -r -p "Choose an available action, or press Enter to exit: " selected_action
+        case "$selected_action" in
+            1) selected_action=plan ;;
+            2) selected_action=deploy ;;
+            3) [[ "$resource_group_exists" == false ]] && selected_action=provision || selected_action="" ;;
+            4) [[ "$app_service_exists" == true && "$registry_exists" == true ]] && selected_action=verify || selected_action="" ;;
+            5) [[ "$app_service_exists" == true && "$registry_exists" == true ]] && selected_action=rollout || selected_action="" ;;
+            6) [[ "$resource_group_exists" == true ]] && selected_action=repair || selected_action="" ;;
+            7) [[ "$resource_group_exists" == true && "$managed" == true && "$environment_tag" == "$ENVIRONMENT" ]] && selected_action=uninstall || selected_action="" ;;
+            '') ;;
+            *) selected_action="" ;;
+        esac
+    fi
+    set_task options success "Lifecycle actions were evaluated from the live environment state."
+
+    if [[ -n "$selected_action" ]]; then
+        echo "Starting '$selected_action' with the detected environment defaults."
+        exec "$SCRIPT_DIR/deploy.sh" "$selected_action" --environment "$ENVIRONMENT" --subscription "$SUBSCRIPTION_ID" --resource-group "$RESOURCE_GROUP" --defaults
+    fi
 }
 
 uninstall() {
@@ -2655,8 +2967,8 @@ uninstall() {
     set_task discover success "$RESOURCE_GROUP found with $resource_count resource(s)."
 
     set_task ownership in_progress "Checking the ninjapaws-managed and ninjapaws-environment tags."
-    managed="$(az group show --name "$RESOURCE_GROUP" --query "tags['ninjapaws-managed']" -o tsv)"
-    environment_tag="$(az group show --name "$RESOURCE_GROUP" --query "tags['ninjapaws-environment']" -o tsv)"
+    managed="$(az group show --name "$RESOURCE_GROUP" --query 'tags."ninjapaws-managed"' -o tsv)"
+    environment_tag="$(az group show --name "$RESOURCE_GROUP" --query 'tags."ninjapaws-environment"' -o tsv)"
     if [[ "$managed" == true && "$environment_tag" == "$ENVIRONMENT" ]]; then
         record_check "Resource group is owned by Ninja Paws for this environment" pass "Tags ninjapaws-managed=true and ninjapaws-environment=$ENVIRONMENT are both present."
         set_task ownership success "Ownership confirmed via tags; deletion is safe."
@@ -2688,19 +3000,19 @@ uninstall() {
         set_task teardown success "$RESOURCE_GROUP and all its resources are gone."
         write_state uninstall complete "Resource group deletion confirmed"
     else
-        record_check "Environment is fully removed" unknown "Deletion was requested with --no-wait, so removal was not confirmed. Re-run with --wait, or check the portal."
-        set_task teardown skipped "Not waited on: deletion runs asynchronously. Use --wait to confirm removal."
+        record_check "Environment is fully removed" unknown "Deletion was requested with --no-wait, so removal was not confirmed. Re-run without --no-wait, or check the portal."
+        set_task teardown skipped "Not waited on: deletion runs asynchronously. Run uninstall without --no-wait to confirm removal."
     fi
     echo -e "${GREEN}Uninstall requested for '$RESOURCE_GROUP'.${NC}"
 }
 
 while (($# > 0)); do
     case "$1" in
-        setup|provision|build|deploy|update|verify|repair|doctor|plan|rollout|uninstall)
+        setup|provision|build|deploy|update|verify|repair|doctor|plan|rollout|wizard|uninstall)
             COMMAND="$1"
             shift
             ;;
-        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--image-name|--image-tag|--scenario|--registry-sku|--plan-sku|--plan-capacity)
+        --environment|--subscription|--location|--resource-group|--registry-name|--app-service-name|--app-service-plan-sku|--image-name|--image-tag|--scenario)
             (($# >= 2)) || fail "$1 requires a value."
             case "$1" in
                 --environment) ENVIRONMENT="$2" ;;
@@ -2709,12 +3021,10 @@ while (($# > 0)); do
                 --resource-group) RESOURCE_GROUP="$2" ;;
                 --registry-name) REGISTRY_NAME="$2" ;;
                 --app-service-name) APP_SERVICE_NAME="$2" ;;
+                --app-service-plan-sku) APP_SERVICE_PLAN_SKU="$2" ;;
                 --image-name) IMAGE_NAME="$2" ;;
                 --image-tag) IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=true ;;
                 --scenario) SCENARIO_ID="$2" ;;
-                --registry-sku) CONTAINER_REGISTRY_SKU="$2" ;;
-                --plan-sku) APP_SERVICE_PLAN_SKU="$2" ;;
-                --plan-capacity) APP_SERVICE_PLAN_CAPACITY="$2" ;;
             esac
             shift 2
             ;;
@@ -2723,7 +3033,8 @@ while (($# > 0)); do
         --force) FORCE=true; shift ;;
         --force-rebuild) FORCE_REBUILD=true; shift ;;
         --all-scenarios) ALL_SCENARIOS=true; shift ;;
-        --wait) WAIT_FOR_DELETE=true; shift ;;
+        --wait) WAIT_FOR_DELETE=true; WAIT_FOR_DELETE_EXPLICIT=true; shift ;;
+        --no-wait) WAIT_FOR_DELETE=false; WAIT_FOR_DELETE_EXPLICIT=true; shift ;;
         --no-status-html) NO_STATUS_HTML=true; shift ;;
         --no-open-status) OPEN_STATUS_HTML=false; shift ;;
         --no-archive) ARCHIVE_OUTPUTS=false; shift ;;
@@ -2748,6 +3059,15 @@ set_task preflight in_progress "Checking required tooling and the Azure sign-in 
 require_commands
 record_check "Required local tooling is installed" pass "az, curl, git, and tr are all available on PATH."
 authenticate
+if [[ "$AUTHENTICATION_SKIPPED" == true ]]; then
+    record_check "Azure CLI authentication" unknown "Azure login was not completed; no Azure resources were inspected or changed."
+    set_task preflight skipped "Stopped before Azure inspection because authentication was not completed."
+    set_task permissions skipped "Skipped: Azure authentication was not completed."
+    set_task discover skipped "Skipped: Azure authentication was not completed."
+    set_task options skipped "Skipped: Azure authentication was not completed."
+    finalize_report success "Management wizard stopped cleanly before Azure inspection; no resources were changed."
+    exit 0
+fi
 record_check "Azure CLI is authenticated and the subscription is selectable" pass "Operating against subscription $SUBSCRIPTION_ID."
 set_task preflight success "Tooling present and authenticated against subscription $SUBSCRIPTION_ID."
 print_plan
@@ -2797,12 +3117,16 @@ case "$COMMAND" in
         run_defender_scan
         finalize_report success "Verification completed for ${APP_URL:-the App Service URL}."
         ;;
+    wizard)
+        wizard
+        finalize_report success "Management wizard completed without changing Azure resources."
+        ;;
     uninstall)
         uninstall
         if [[ "$WAIT_FOR_DELETE" == true ]]; then
             finalize_report success "Uninstall completed. $RESOURCE_GROUP and all of its resources are gone."
         else
-            finalize_report success "Uninstall requested. Azure removes $RESOURCE_GROUP asynchronously; re-run with --wait to confirm."
+            finalize_report success "Uninstall requested. Azure removes $RESOURCE_GROUP asynchronously because --no-wait was supplied."
         fi
         ;;
 esac

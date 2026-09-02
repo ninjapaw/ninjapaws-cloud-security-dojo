@@ -1,0 +1,220 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "centralus",
+      "metadata": {
+        "description": "Azure region for deployment"
+      }
+    },
+    "containerRegistryName": {
+      "type": "string",
+      "defaultValue": "ninjapawsdojoprod",
+      "metadata": {
+        "description": "Globally unique Azure Container Registry name"
+      }
+    },
+    "appServiceName": {
+      "type": "string",
+      "defaultValue": "ninjapaws-dojo-app-prod",
+      "metadata": {
+        "description": "Name of the Azure App Service"
+      }
+    },
+    "appServicePlanName": {
+      "type": "string",
+      "defaultValue": "ninjapaws-dojo-plan",
+      "metadata": {
+        "description": "Name of the Azure App Service Plan"
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "B2",
+      "metadata": {
+        "description": "App Service Plan SKU. B1 is frequently capacity-constrained in centralus."
+      }
+    },
+    "imageName": {
+      "type": "string",
+      "defaultValue": "ninjapaws-dojo",
+      "metadata": {
+        "description": "Docker image name stored in ACR"
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "latest",
+      "metadata": {
+        "description": "Docker image tag used by App Service"
+      }
+    },
+    "nginxVersion": {
+      "type": "string",
+      "defaultValue": "1.30.3",
+      "metadata": {
+        "description": "NGINX version reported by the training application"
+      }
+    },
+    "vulnerabilityStatus": {
+      "type": "string",
+      "defaultValue": "vulnerable",
+      "metadata": {
+        "description": "Training status reported by the application"
+      }
+    },
+    "port": {
+      "type": "int",
+      "defaultValue": 3000,
+      "metadata": {
+        "description": "Internal Node.js application port"
+      }
+    },
+    "defenderEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Training dashboard Defender badge toggle"
+      }
+    }
+  },
+  "variables": {
+    "acrName": "[replace(parameters('containerRegistryName'), '-', '')]",
+    "managedIdentityName": "[concat(parameters('appServiceName'), '-identity')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2025-04-01",
+      "name": "[variables('acrName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled",
+        "networkRuleBypassOptions": "AzureServices"
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2024-11-30",
+      "name": "[variables('managedIdentityName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), 'acrPull')]",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2024-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2025-03-01",
+      "name": "[parameters('appServicePlanName')]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]",
+        "capacity": 1
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2025-03-01",
+      "name": "[parameters('appServiceName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]": {}
+        }
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "linuxFxVersion": "[concat('DOCKER|', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer, '/', parameters('imageName'), ':', parameters('imageTag'))]",
+          "alwaysOn": true,
+          "http20Enabled": true,
+          "minTlsVersion": "1.2",
+          "healthCheckPath": "/health",
+          "acrUseManagedIdentityCreds": true,
+          "acrUserManagedIdentityID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2024-11-30').clientId]",
+          "appSettings": [
+            {
+              "name": "DOCKER_REGISTRY_SERVER_URL",
+              "value": "[concat('https://', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer)]"
+            },
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "80"
+            },
+            {
+              "name": "NGINX_VERSION",
+              "value": "[parameters('nginxVersion')]"
+            },
+            {
+              "name": "VULNERABILITY_STATUS",
+              "value": "[parameters('vulnerabilityStatus')]"
+            },
+            {
+              "name": "PORT",
+              "value": "[string(parameters('port'))]"
+            },
+            {
+              "name": "DEFENDER_ENABLED",
+              "value": "[string(parameters('defenderEnabled'))]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "containerRegistryLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2025-04-01').loginServer]"
+    },
+    "containerRegistryName": {
+      "type": "string",
+      "value": "[variables('acrName')]"
+    },
+    "appServiceUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2025-03-01').defaultHostName)]"
+    },
+    "appServiceName": {
+      "type": "string",
+      "value": "[parameters('appServiceName')]"
+    },
+    "managedIdentityId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+    }
+  }
+}

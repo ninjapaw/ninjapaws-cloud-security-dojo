@@ -7,8 +7,7 @@ on:
         description: Version increment to request
         required: true
         type: choice
-        default: auto
-        options: [auto, patch, minor, major, custom]
+        options: [patch, minor, major, custom]
       custom_version:
         description: SemVer version when custom is selected, without the v prefix
         required: false
@@ -17,7 +16,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  models: read
 
 concurrency:
   group: request-release-dev
@@ -41,39 +39,19 @@ jobs:
           ref: dev
           fetch-depth: 0
 
-      - name: Resolve runtime defaults
-        uses: ./.github/actions/resolve-defaults
-        with:
-          vars-json: ${{ toJSON(vars) }}
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_MAJOR_VERSION }}
+          node-version-file: .node-version
           cache: npm
-
-      - name: Determine automatic version bump
-        if: inputs.version_mode == 'auto'
-        id: autobump
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/determine-version-bump.sh
 
       - name: Calculate and validate release version
         env:
           VERSION_MODE: ${{ inputs.version_mode }}
           CUSTOM_VERSION: ${{ inputs.custom_version }}
-          AUTO_BUMP: ${{ steps.autobump.outputs.bump }}
-          AUTO_BUMP_SOURCE: ${{ steps.autobump.outputs.source }}
-          AUTO_BUMP_REASON: ${{ steps.autobump.outputs.reason }}
           GH_TOKEN: ${{ github.token }}
         run: |
           current_version=$(node -p "require('./package.json').version")
-          if [[ "$VERSION_MODE" == auto ]]; then
-            : "${AUTO_BUMP:?Automatic bump determination did not produce a value}"
-            echo "Automatic version bump selected: $AUTO_BUMP ($AUTO_BUMP_SOURCE) - $AUTO_BUMP_REASON"
-            VERSION_MODE="$AUTO_BUMP"
-          fi
           case "$VERSION_MODE" in
             patch|minor|major)
               npm version "$VERSION_MODE" --no-git-tag-version >/dev/null
@@ -94,16 +72,6 @@ jobs:
             echo "Tag $tag already exists." >&2
             exit 1
           fi
-
-          node -e '
-            const fs = require("fs");
-            const path = "config/shared.config.json";
-            const version = process.argv[1];
-            const raw = fs.readFileSync(path, "utf8");
-            const updated = raw.replace(/("configVersion":\s*")[^"]+(")/, `$1${version}$2`);
-            if (updated === raw) throw new Error("configVersion pattern not found in " + path);
-            fs.writeFileSync(path, updated);
-          ' "$version"
 
           repository_name="${GITHUB_REPOSITORY##*/}"
           package_name=$(node -p "require('./package.json').name")
@@ -148,7 +116,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$release_branch"
-          git add package.json package-lock.json config/shared.config.json
+          git add package.json package-lock.json
           git commit -m "chore: release $RELEASE_TAG"
           git push origin "HEAD:$release_branch"
 
@@ -157,4 +125,4 @@ jobs:
             --base main \
             --head "$release_branch" \
             --title "Release $RELEASE_TAG" \
-            --body "This release PR updates package metadata and config/shared.config.json's configVersion to $RELEASE_TAG. Merge it into main after dev validation; the publish workflow will create the tag, GitHub Release, and versioned/latest ACR images."
+            --body "This release PR updates package metadata to $RELEASE_TAG. Merge it into main after dev validation; the publish workflow will create the tag, GitHub Release, and versioned/latest ACR images."

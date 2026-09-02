@@ -36,9 +36,7 @@ Required checks depend on the change and may include infrastructure validation, 
 
 ## Releases
 
-Use **Request release from dev** to select `auto`, `patch`, `minor`, `major`, or `custom`. `auto` (the default) runs `scripts/determine-version-bump.sh`, which classifies the commits since the last release using a Conventional Commits heuristic and, when available, GitHub Models - the AI result can only escalate the bump (e.g. heuristic `patch` -> AI `minor`), never downgrade it, so the workflow always has a safe deterministic fallback. The workflow creates a release PR that synchronizes `package.json`, `package-lock.json`, and `config/shared.config.json`'s `configVersion` to the same version. Merging it into `main` allows **Publish main release** to validate metadata (including that `configVersion` still matches `package.json`), create the version tag, publish the GitHub Release marked `latest`, and publish versioned/`latest` container images.
-
-Use **Publish dev prerelease** from `dev` at any time to preview the next version without touching `package.json`. It runs the same bump determination, tags a `vX.Y.Z-dev.<run>` prerelease, and publishes a GitHub prerelease that is explicitly never marked `latest`.
+Use **Request release from dev** to select a patch, minor, major, or custom SemVer release. The workflow creates a release PR and synchronizes `package.json` and `package-lock.json`. Merging it into `main` allows **Publish main release** to validate metadata, create the version tag and GitHub Release, and publish versioned/latest container images.
 
 ## Legal and Trademark Notice
 

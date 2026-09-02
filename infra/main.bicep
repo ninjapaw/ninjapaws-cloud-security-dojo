@@ -2,31 +2,7 @@ param location string = resourceGroup().location
 param containerRegistryName string
 param appServiceName string
 param appServicePlanName string = '${appServiceName}-plan'
-@description('Azure Container Registry SKU. Basic is the cheapest tier and sufficient for this single-image training scenario.')
-@allowed([
-  'Basic'
-  'Standard'
-  'Premium'
-])
-param containerRegistrySku string = 'Basic'
-@description('App Service Plan SKU. Linux Web App for Containers requires Basic or higher; Free and Shared tiers do not support custom containers, so B1 is the cheapest viable tier.')
-@allowed([
-  'B1'
-  'B2'
-  'B3'
-  'S1'
-  'S2'
-  'S3'
-  'P0v3'
-  'P1v3'
-  'P2v3'
-  'P3v3'
-])
-param appServicePlanSku string = 'B1'
-@description('App Service Plan instance count.')
-@minValue(1)
-@maxValue(10)
-param appServicePlanCapacity int = 1
+param appServicePlanSku string = 'B2'
 param imageName string = 'ninjapaws-dojo'
 param imageTag string = 'latest'
 param nginxVersion string = '1.30.3'
@@ -37,20 +13,18 @@ param defenderAppServicesTier string = 'Standard'
 param defenderContainersTier string = 'Standard'
 param defenderCspmTier string = 'Standard'
 param defenderArmTier string = 'Standard'
-param appNameTag string = ''
 param defenderServerlessProtection bool = true
 param defenderServerlessContainers bool = true
 param defenderRegistryAssessment bool = true
 param defenderDevOpsConnector bool = true
 param githubAdvancedSecurity bool = true
-param agentlessCodeScanningExpected bool = true
 
 // Azure Container Registry
-resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: replace(containerRegistryName, '-', '')
   location: location
   sku: {
-    name: containerRegistrySku
+    name: 'Basic'
   }
   properties: {
     adminUserEnabled: false
@@ -60,7 +34,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
 }
 
 // User-assigned Managed Identity for App Service
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: '${appServiceName}-identity'
   location: location
 }
@@ -77,13 +51,13 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // App Service Plan
-resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
+resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   name: appServicePlanName
   location: location
   kind: 'linux'
   sku: {
     name: appServicePlanSku
-    capacity: appServicePlanCapacity
+    capacity: 1
   }
   properties: {
     reserved: true
@@ -91,7 +65,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 }
 
 // App Service for Linux Container
-resource appService 'Microsoft.Web/sites@2023-01-01' = {
+resource appService 'Microsoft.Web/sites@2025-03-01' = {
   name: appServiceName
   location: location
   identity: {
@@ -156,10 +130,6 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
           value: defenderArmTier
         }
         {
-          name: 'APP_NAME_TAG'
-          value: appNameTag
-        }
-        {
           name: 'DEFENDER_SERVERLESS_PROTECTION'
           value: string(defenderServerlessProtection)
         }
@@ -179,17 +149,13 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
           name: 'GITHUB_ADVANCED_SECURITY'
           value: string(githubAdvancedSecurity)
         }
-        {
-          name: 'DEFENDER_AGENTLESS_CODE_SCANNING'
-          value: string(agentlessCodeScanningExpected)
-        }
       ]
     }
   }
 }
 
 // App Service Health Check
-resource healthCheck 'Microsoft.Web/sites/config@2023-01-01' = {
+resource healthCheck 'Microsoft.Web/sites/config@2025-03-01' = {
   parent: appService
   name: 'web'
   properties: {

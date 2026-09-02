@@ -10,11 +10,18 @@
     "url": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo/issues"
   },
   "homepage": "https://github.com/ninjapaw/ninjapaws-cloud-security-dojo#readme",
-  "main": "app.js",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js",
-    "test": "node --check app.js"
+    "start": "node src/app.js",
+    "dev": "node src/app.js",
+    "test": "node --check src/app.js",
+    "test:repo": "bash scripts/test.sh --skip-azure",
+    "test:e2e": "playwright test",
+    "report": "python3 -m http.server 8000 --directory output",
+    "dojo": "bash scripts/manage.sh",
+    "deploy:plan": "bash scripts/deploy.sh plan --environment dev --defaults",
+    "deploy:doctor": "bash scripts/deploy.sh doctor --environment dev --defaults",
+    "deploy:dev": "bash scripts/deploy.sh deploy --environment dev --defaults --yes"
   },
   "keywords": [
     "security",
@@ -24,10 +31,14 @@
     "training",
     "education"
   ],
-  "author": "Dr Bill Mcilhargey / Ninja Paw",
+  "author": "Microsoft Corporation",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.5.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   },
   "engines": {
     "node": ">=20.0.0"

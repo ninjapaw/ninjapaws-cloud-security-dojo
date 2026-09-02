@@ -18,7 +18,7 @@ for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/P
   fi
 done
 if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
-  windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+  windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
   if [[ -n "$windows_az_path" ]]; then
     azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
     export PATH="$azure_cli_dir:$PATH"
@@ -27,7 +27,7 @@ fi
 
 # Windows az.cmd emits CRLF output when called from WSL/Git Bash.
 az() {
-  command az "$@" | tr -d '\r'
+  MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
 }
 
 environment_name=dev
@@ -54,7 +54,7 @@ Options:
   --location <region>        Azure region (default: centralus)
   --subscription <id>        Azure subscription (default: current az account)
   --repository <owner/name>  GitHub repository (default: current repository)
-  --provision                Also deploy infra/main.bicep and grant ACR build/push roles
+  --provision                Also deploy infra/main.bicep and grant ACR push access
   --defaults                 Accept built-in environment defaults without prompts
   --help                     Show this help
 
@@ -110,25 +110,6 @@ for command_name in az gh tr; do
   command -v "$command_name" >/dev/null || { printf "ERROR: '%s' is required.\n" "$command_name" >&2; exit 1; }
 done
 
-# config/deploy.config.json is the single source of truth for these defaults;
-# do not duplicate literal values here.
-NODE_COMMAND=node
-if ! command -v node >/dev/null 2>&1; then
-  if command -v node.exe >/dev/null 2>&1; then
-    NODE_COMMAND=node.exe
-  elif [[ -x /mnt/c/Program\ Files/nodejs/node.exe ]]; then
-    NODE_COMMAND='/mnt/c/Program Files/nodejs/node.exe'
-  elif [[ -x /c/Program\ Files/nodejs/node.exe ]]; then
-    NODE_COMMAND='/c/Program Files/nodejs/node.exe'
-  else
-    printf 'ERROR: Node.js is required to read config/deploy.config.json defaults.\n' >&2
-    exit 1
-  fi
-fi
-cfg() {
-  (cd "$REPO_ROOT" && "$NODE_COMMAND" -p "require('./config/deploy.config.json').defaults$1")
-}
-
 case "$environment_name" in
   dev)
     deployment_branch=dev
@@ -170,6 +151,10 @@ tenant_id="$(az account show --query tenantId -o tsv)"
 
 gh auth status >/dev/null 2>&1 || { printf "%s\n" "GitHub CLI is not authenticated. Run 'gh auth login' and retry." >&2; exit 1; }
 repository="${repository:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+repository_owner="${repository%%/*}"
+repository_name="${repository#*/}"
+repository_owner_id="$(gh api "users/$repository_owner" --jq .id)"
+repository_id="$(gh api "repos/$repository" --jq .id)"
 
 app_display_name="ninjapaws-cloud-security-dojo-${environment_name}-github"
 
@@ -186,7 +171,7 @@ fi
 
 # Jobs that declare an environment present the environment subject, not the ref subject.
 credential_name="github-${environment_name}"
-credential_subject="repo:${repository}:environment:${environment_name}"
+credential_subject="repo:${repository_owner}@${repository_owner_id}/${repository_name}@${repository_id}:environment:${environment_name}"
 existing_credential="$(az ad app federated-credential list --id "$app_object_id" \
   --query "[?name=='$credential_name'] | [0].id" -o tsv)"
 if [[ -n "$existing_credential" ]]; then
@@ -200,6 +185,7 @@ az ad app federated-credential create --id "$app_object_id" --parameters "$(
 az group create --name "$resource_group" --location "$location" >/dev/null
 
 resource_group_scope="/subscriptions/$subscription_id/resourceGroups/$resource_group"
+subscription_scope="/subscriptions/$subscription_id"
 acr_scope="$resource_group_scope/providers/Microsoft.ContainerRegistry/registries/$acr_name"
 
 ensure_role() {
@@ -224,6 +210,7 @@ ensure_role() {
 # managed identity's AcrPull role assignment.
 ensure_role Contributor "$resource_group_scope"
 ensure_role "Role Based Access Control Administrator" "$resource_group_scope"
+ensure_role "Security Admin" "$subscription_scope"
 
 if [[ "$provision" == true ]]; then
   az deployment group create \
@@ -238,10 +225,8 @@ if [[ "$provision" == true ]]; then
 
   # The registry exists after Bicep completes, so assign image-push access now.
   ensure_role AcrPush "$acr_scope"
-  ensure_role AcrBuild "$acr_scope"
 elif az acr show --name "$acr_name" --resource-group "$resource_group" --output none 2>/dev/null; then
   ensure_role AcrPush "$acr_scope"
-  ensure_role AcrBuild "$acr_scope"
 fi
 
 gh api --method PUT "repos/${repository}/environments/${environment_name}" --input - --silent <<'JSON'
@@ -262,46 +247,41 @@ gh variable set AZURE_LOCATION --env "$environment_name" --repo "$repository" --
 gh variable set AZURE_RESOURCE_GROUP --env "$environment_name" --repo "$repository" --body "$resource_group"
 gh variable set AZURE_CONTAINER_REGISTRY_NAME --env "$environment_name" --repo "$repository" --body "$acr_name"
 gh variable set AZURE_APP_SERVICE_NAME --env "$environment_name" --repo "$repository" --body "$app_service_name"
-gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body "$(cfg .imageName)"
-gh variable set CONTAINER_REGISTRY_SKU --env "$environment_name" --repo "$repository" --body "$(cfg .containerRegistrySku)"
-gh variable set APP_SERVICE_PLAN_SKU --env "$environment_name" --repo "$repository" --body "$(cfg .appServicePlanSku)"
-gh variable set APP_SERVICE_PLAN_CAPACITY --env "$environment_name" --repo "$repository" --body "$(cfg .appServicePlanCapacity)"
-gh variable set BASE_OS_IMAGE --env "$environment_name" --repo "$repository" --body "$(cfg .baseOsImage)"
-gh variable set BASE_OS_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .baseOsVersion)"
-gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .nginxVersion)"
-gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body "$(cfg .vulnerabilityStatus)"
-gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body "$(cfg .nodeMajorVersion)"
-gh variable set PORT --env "$environment_name" --repo "$repository" --body "$(cfg .port)"
-gh variable set NPM_REGISTRY_URL --env "$environment_name" --repo "$repository" --body "$(cfg .npmRegistryUrl)"
-gh variable set NPM_USE_MIRROR --env "$environment_name" --repo "$repository" --body "$(cfg .npmUseMirror)"
-gh variable set NPM_NETWORK_MODE --env "$environment_name" --repo "$repository" --body "$(cfg .npmNetworkMode)"
-gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defenderEnabled)"
-gh variable set DEFENDER_SCAN_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.scanAfterVerify)"
-gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.managePlans)"
-# DEFENDER_TARGET_CVE is intentionally not seeded here: scripts/deploy.sh already falls back to the
-# active scenario's own CVE. Only set this Environment variable manually to search for a different CVE.
-gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.AppServices)"
-gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.Containers)"
-gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.CloudPosture)"
-gh variable set DEFENDER_ARM_TIER --env "$environment_name" --repo "$repository" --body "$(cfg .defender.plans.Arm)"
-gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.manageExtensions)"
-gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessServerlessPosture)"
-gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ServerlessContainers)"
-gh variable set DEFENDER_CSPM_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ContainerRegistriesVulnerabilityAssessments)"
-gh variable set DEFENDER_CSPM_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessDiscoveryForKubernetes)"
-gh variable set DEFENDER_CSPM_VM_SCANNING --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.AgentlessVmScanning)"
-gh variable set DEFENDER_CSPM_SENSITIVE_DATA --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.SensitiveDataDiscovery)"
-gh variable set DEFENDER_CSPM_PERMISSIONS_MANAGEMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.EntraPermissionsManagement)"
-gh variable set DEFENDER_CSPM_API_POSTURE --env "$environment_name" --repo "$repository" --body "$(cfg .defender.cspmExtensions.ApiPosture)"
-gh variable set DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.ContainerRegistriesVulnerabilityAssessments)"
-gh variable set DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.AgentlessDiscoveryForKubernetes)"
-gh variable set DEFENDER_CONTAINERS_VM_SCANNING --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.AgentlessVmScanning)"
-gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$repository" --body "$(cfg .defender.containersExtensions.ContainerSensor)"
-gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.devops.connectorEnabled)"
+gh variable set AZURE_IMAGE_NAME --env "$environment_name" --repo "$repository" --body 'ninjapaws-dojo'
+gh variable set BASE_OS_IMAGE --env "$environment_name" --repo "$repository" --body 'ubuntu'
+gh variable set BASE_OS_VERSION --env "$environment_name" --repo "$repository" --body '24.04'
+gh variable set NGINX_VERSION --env "$environment_name" --repo "$repository" --body '1.30.3'
+gh variable set VULNERABILITY_STATUS --env "$environment_name" --repo "$repository" --body 'vulnerable'
+gh variable set NODE_MAJOR_VERSION --env "$environment_name" --repo "$repository" --body '20'
+gh variable set PORT --env "$environment_name" --repo "$repository" --body '3000'
+gh variable set NPM_REGISTRY_URL --env "$environment_name" --repo "$repository" --body 'https://registry.npmjs.org'
+gh variable set NPM_USE_MIRROR --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set NPM_NETWORK_MODE --env "$environment_name" --repo "$repository" --body 'online'
+gh variable set DEFENDER_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_SCAN_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_MANAGE_PLANS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_TARGET_CVE --env "$environment_name" --repo "$repository" --body 'CVE-2026-42533'
+gh variable set DEFENDER_APPSERVICES_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_CONTAINERS_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_CSPM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_ARM_TIER --env "$environment_name" --repo "$repository" --body 'Standard'
+gh variable set DEFENDER_MANAGE_EXTENSIONS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_SERVERLESS_PROTECTION --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_SERVERLESS_CONTAINERS --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CSPM_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_SENSITIVE_DATA --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_PERMISSIONS_MANAGEMENT --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CSPM_API_POSTURE --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_VM_SCANNING --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$repository" --body 'false'
+gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
 gh variable set DEFENDER_DEVOPS_CONNECTOR_NAME --env "$environment_name" --repo "$repository" --body "ninjapaws-github-$environment_name"
 gh variable set DEFENDER_DEVOPS_GITHUB_OWNER --env "$environment_name" --repo "$repository" --body "${repository%%/*}"
-gh variable set GITHUB_ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
-gh variable set DEFENDER_DEVOPS_AGENTLESS_CODE_SCANNING_EXPECTED --env "$environment_name" --repo "$repository" --body "$(cfg .defender.devops.agentlessCodeScanningExpected)"
+gh variable set ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 
@@ -311,5 +291,5 @@ printf 'Deployment branch: %s\n' "$deployment_branch"
 printf 'Resource group: %s\n' "$resource_group"
 printf 'No client secret was created; Azure identifiers and deployment settings were saved as Environment variables.\n'
 if [[ "$provision" != true ]]; then
-  printf 'Rerun with --provision to deploy infra/main.bicep and grant ACR build/push roles.\n'
+  printf 'Rerun with --provision to deploy infra/main.bicep and grant ACR push access.\n'
 fi
