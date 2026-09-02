@@ -183,8 +183,8 @@ file_contains "$REPO_ROOT/config/deploy.config.json" '"CloudPosture": "Standard"
 file_contains "$REPO_ROOT/config/deploy.config.json" '"AgentlessServerlessPosture": "true"'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"ServerlessContainers": "true"'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"ContainerRegistriesVulnerabilityAssessments": "true"'
-file_contains "$REPO_ROOT/config/deploy.config.json" '"AgentlessVmScanning": "true"'
-file_contains "$REPO_ROOT/config/deploy.config.json" '"ApiPosture": "true"'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"AgentlessVmScanning": "false"'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"ApiPosture": "false"'
 file_contains "$REPO_ROOT/config/deploy.config.json" '"connectorEnabled": "true"'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'apply_plan_extensions'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Registry image security findings'
@@ -196,12 +196,12 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'GitHub Advanced Security'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'On — audited'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'ensure_devops_connector'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'record_advanced_security_state'
-file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CSPM_VM_SCANNING: \${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}"
-file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}"
-file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}"
-file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_VM_SCANNING: \${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}"
-file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}"
-file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}"
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CSPM_VM_SCANNING: \${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}"
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}"
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}"
+file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_VM_SCANNING: \${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}"
+file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}"
+file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'kit-defender-posture.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-cspm-api-posture:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-containers-vm-scanning:'

@@ -61,13 +61,13 @@ jobs:
       DEFENDER_CSPM_SERVERLESS_CONTAINERS: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
       DEFENDER_CSPM_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
       DEFENDER_CSPM_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CSPM_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CSPM_VM_SCANNING: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}
+      DEFENDER_CSPM_VM_SCANNING: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}
       DEFENDER_CSPM_SENSITIVE_DATA: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
       DEFENDER_CSPM_PERMISSIONS_MANAGEMENT: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
-      DEFENDER_CSPM_API_POSTURE: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}
+      DEFENDER_CSPM_API_POSTURE: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}
       DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT: ${{ vars.DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT || 'true' }}
       DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY: ${{ vars.DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY || 'false' }}
-      DEFENDER_CONTAINERS_VM_SCANNING: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}
+      DEFENDER_CONTAINERS_VM_SCANNING: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}
       DEFENDER_CONTAINERS_SENSOR: ${{ vars.DEFENDER_CONTAINERS_SENSOR || 'false' }}
       DEFENDER_DEVOPS_CONNECTOR_ENABLED: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
       DEFENDER_DEVOPS_CONNECTOR_NAME: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
@@ -201,13 +201,13 @@ jobs:
       defender-cspm-serverless-containers: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
       defender-cspm-registry-assessment: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
       defender-cspm-kubernetes-discovery: ${{ vars.DEFENDER_CSPM_KUBERNETES_DISCOVERY || 'false' }}
-      defender-cspm-vm-scanning: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'true' }}
+      defender-cspm-vm-scanning: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}
       defender-cspm-sensitive-data: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
       defender-cspm-permissions-management: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
-      defender-cspm-api-posture: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'true' }}
+      defender-cspm-api-posture: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}
       defender-containers-registry-assessment: ${{ vars.DEFENDER_CONTAINERS_REGISTRY_ASSESSMENT || 'true' }}
       defender-containers-kubernetes-discovery: ${{ vars.DEFENDER_CONTAINERS_KUBERNETES_DISCOVERY || 'false' }}
-      defender-containers-vm-scanning: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'true' }}
+      defender-containers-vm-scanning: ${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}
       defender-containers-sensor: ${{ vars.DEFENDER_CONTAINERS_SENSOR || 'false' }}
       defender-devops-connector-enabled: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
       defender-devops-connector-name: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}

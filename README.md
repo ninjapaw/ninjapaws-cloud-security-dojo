@@ -165,9 +165,6 @@ Evidence to retain for an audit-friendly demo:
 - The Defender Recommendations view or export showing assessment state and timestamp
 - The run ID and commit from the report's audit trail
 - The audit-trail item **Registry image security findings: On — audited**, backed by the live `ContainerRegistriesVulnerabilityAssessments` state
-- The audit-trail item **CSPM agentless scanning for machines: On — audited**, backed by the live Defender CSPM `AgentlessVmScanning` state
-- The audit-trail item **CSPM API Security Posture: On — audited**, backed by the live Defender CSPM `ApiPosture` state
-- The audit-trail item **Agentless scanning for machines: On — audited**, backed by the live `AgentlessVmScanning` state
 
 Cleanup:
 
@@ -222,10 +219,10 @@ Defender CSPM extensions are applied as one set, because the API replaces the wh
 | `ServerlessContainers`                        | `true`  | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | Registry access, required for full serverless container and image posture                                                                |
 | `AgentlessDiscoveryForKubernetes`             | `false` | No AKS or Kubernetes workload is deployed                                                                                                |
-| `AgentlessVmScanning`                         | `true`  | On; scans machines for software, vulnerabilities, and secrets without installed agents                                                   |
+| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                                                                          |
 | `SensitiveDataDiscovery`                      | `false` | This project stores no data; the extension reads customer data, so it stays opt-in                                                       |
 | `EntraPermissionsManagement`                  | `false` | CIEM has tenant-wide scope beyond this scenario                                                                                          |
-| `ApiPosture`                                  | `true`  | On; assesses API exposure, authentication, dormant APIs, sensitive data, and App Service API posture preview                             |
+| `ApiPosture`                                  | `false` | Preview capability is outside the required App Service and ACR scenario                                                                  |
 
 Defender for Containers extensions follow the same pattern:
 
@@ -233,7 +230,7 @@ Defender for Containers extensions follow the same pattern:
 | --------------------------------------------- | ------- | -------------------------------------------------------------------------------------- |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | On; generates and links findings artifacts for every new or updated ACR image          |
 | `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                          |
-| `AgentlessVmScanning`                         | `true`  | On; scans machines for software, vulnerabilities, and secrets without installed agents |
+| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                      |
 | `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                          |
 
 DevOps and code security settings:

@@ -42,15 +42,15 @@
         "ServerlessContainers": "true",
         "ContainerRegistriesVulnerabilityAssessments": "true",
         "AgentlessDiscoveryForKubernetes": "false",
-        "AgentlessVmScanning": "true",
+        "AgentlessVmScanning": "false",
         "SensitiveDataDiscovery": "false",
         "EntraPermissionsManagement": "false",
-        "ApiPosture": "true"
+        "ApiPosture": "false"
       },
       "containersExtensions": {
         "ContainerRegistriesVulnerabilityAssessments": "true",
         "AgentlessDiscoveryForKubernetes": "false",
-        "AgentlessVmScanning": "true",
+        "AgentlessVmScanning": "false",
         "ContainerSensor": "false"
       },
       "devops": {
