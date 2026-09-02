@@ -18,7 +18,7 @@ for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/P
   fi
 done
 if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
-  windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+  windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
   if [[ -n "$windows_az_path" ]]; then
     azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
     export PATH="$azure_cli_dir:$PATH"

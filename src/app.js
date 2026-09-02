@@ -85,12 +85,27 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/evidence', (req, res) => {
+  try {
+    res.json({
+      expected_cve: CVE_ID,
+      expected_nginx_version: DEFAULT_NGINX_VERSION,
+      nginx_version_output: fs.readFileSync('/opt/nginx-version.txt', 'utf8').trim(),
+      package_version: fs.readFileSync('/opt/nginx-package-version.txt', 'utf8').trim(),
+      installed_packages: fs.readFileSync('/opt/nginx-installed-packages.txt', 'utf8').trim()
+    });
+  } catch (error) {
+    console.error('Unable to read build-time NGINX evidence:', error);
+    res.status(500).json({ error: 'Build-time NGINX evidence is unavailable.' });
+  }
+});
+
 // API status endpoint
 app.get('/api/status', (req, res) => {
   const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
   const runtimeVerification = getRuntimeVerification();
   const vulnerabilityDetected = runtimeVerification.vulnerability_detected === true;
-  
+
   res.json({
     environment: 'Ninja Paws Cloud Security Dojo',
     status: 'running',
@@ -382,7 +397,7 @@ app.get('/', (req, res) => {
       <div class="alert-text">
         <strong>${CVE_ID}:</strong> ${VULNERABILITY_DESCRIPTION}
         <br>
-        ${vulnerabilityStatus === 'vulnerable' 
+        ${vulnerabilityStatus === 'vulnerable'
           ? 'This training environment intentionally contains a vulnerable software version (NGINX 1.30.3) for educational detection and remediation demonstrations.'
           : 'This version has been patched. NGINX is now at version 1.30.4 or later with the vulnerability remediated.'
         }
@@ -409,6 +424,7 @@ app.get('/', (req, res) => {
       <ul class="endpoint-list">
         <li><code>/</code> - Human-readable training dashboard</li>
         <li><code>/health</code> - JSON health probe used by App Service and rollout checks</li>
+        <li><code>/evidence</code> - JSON build-time NGINX version and package evidence</li>
         <li><code>/api/status</code> - JSON CVE metadata and runtime package/config evidence</li>
         <li><strong>Internal NGINX evidence:</strong> inspect the <code>map</code> configuration through <code>runtime_verification.map_regex_enabled</code> in <code>/api/status</code>.</li>
       </ul>
@@ -444,7 +460,7 @@ app.listen(PORT, () => {
   console.log(`🥷 Ninja Paws Cloud Security Dojo`);
   console.log(`🏯 Server running on port ${PORT}`);
   console.log(`⚔ Remediation Mission: Detect and fix CVE-2026-42533`);
-  console.log(`✅ Endpoints: / | /health | /api/status`);
+  console.log(`✅ Endpoints: / | /health | /evidence | /api/status`);
 });
 
 module.exports = app;

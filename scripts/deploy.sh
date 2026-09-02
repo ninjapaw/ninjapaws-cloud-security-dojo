@@ -35,7 +35,7 @@ if ! command -v az >/dev/null 2>&1; then
     done
 fi
 if command -v cmd.exe >/dev/null 2>&1; then
-    windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+    windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
         if command -v wslpath >/dev/null 2>&1; then
             AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
@@ -2028,7 +2028,7 @@ sha256_of_stdin() {
 # Content address for the image: every file the Dockerfile copies, plus every build argument.
 compute_build_fingerprint() {
     local file manifest=""
-    for file in Dockerfile package.json package-lock.json src/app.js nginx.conf entrypoint.sh; do
+    for file in Dockerfile package.json package-lock.json src/app.js nginx.conf entrypoint.sh scripts/verify.sh; do
         if [[ -f "$REPO_ROOT/$file" ]]; then
             manifest+="$file $(sha256_of_file "$REPO_ROOT/$file")"$'\n'
         else

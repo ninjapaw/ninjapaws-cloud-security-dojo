@@ -18,7 +18,7 @@ for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/P
     fi
 done
 if command -v cmd.exe >/dev/null 2>&1; then
-    windows_az_path="$(cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+    windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
     if [[ -n "$windows_az_path" ]]; then
         if command -v wslpath >/dev/null 2>&1; then
             AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
@@ -78,6 +78,7 @@ bash -n "$REPO_ROOT/scripts/deploy.sh"
 bash -n "$REPO_ROOT/scripts/manage.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
 bash -n "$REPO_ROOT/scripts/test.sh"
+bash -n "$REPO_ROOT/scripts/verify.sh"
 bash -n "$REPO_ROOT/entrypoint.sh"
 echo "Checking Node.js runtime syntax..."
 (
@@ -129,6 +130,12 @@ file_contains "$REPO_ROOT/Dockerfile" 'npm ci --offline --omit=dev --ignore-scri
 file_contains "$REPO_ROOT/Dockerfile" 'npm ci --omit=dev --ignore-scripts'
 file_contains "$REPO_ROOT/Dockerfile" 'COPY src ./src'
 file_contains "$REPO_ROOT/Dockerfile" 'COPY nginx.conf /etc/nginx/nginx.conf.template'
+file_contains "$REPO_ROOT/Dockerfile" 'RUN nginx -v 2>&1 | tee /opt/nginx-version.txt'
+file_contains "$REPO_ROOT/Dockerfile" 'RUN dpkg-query -W nginx | tee /opt/nginx-package-version.txt'
+file_contains "$REPO_ROOT/Dockerfile" 'RUN dpkg -l | grep nginx | tee /opt/nginx-installed-packages.txt'
+file_contains "$REPO_ROOT/Dockerfile" 'LABEL security.repro.cve="CVE-2026-42533"'
+file_contains "$REPO_ROOT/Dockerfile" 'LABEL security.repro.version="1.30.3"'
+file_contains "$REPO_ROOT/Dockerfile" 'COPY scripts/verify.sh /usr/local/bin/verify.sh'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_IMAGE:'
 file_contains "$REPO_ROOT/docker-compose.yml" 'BASE_OS_VERSION:'
 file_contains "$REPO_ROOT/docker-compose.yml" 'NODE_MAJOR_VERSION:'
@@ -137,12 +144,23 @@ file_contains "$REPO_ROOT/entrypoint.sh" 'Node.js Major:'
 file_contains "$REPO_ROOT/entrypoint.sh" 'Generating NGINX upstream configuration'
 file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_binary_version'
 file_contains "$REPO_ROOT/entrypoint.sh" 'nginx_package_version'
+file_contains "$REPO_ROOT/entrypoint.sh" '===== CVE REPRO ====='
+file_contains "$REPO_ROOT/entrypoint.sh" 'cat /opt/nginx-version.txt'
 file_contains "$REPO_ROOT/src/app.js" 'runtime_verification'
 file_contains "$REPO_ROOT/src/app.js" 'advisory_url: ADVISORY_URL'
 file_contains "$REPO_ROOT/src/app.js" 'fixed_version: FIXED_VERSION'
 file_contains "$REPO_ROOT/src/app.js" 'runtimeVerification.vulnerability_detected === true'
 file_contains "$REPO_ROOT/src/app.js" "app.get('/health'"
+file_contains "$REPO_ROOT/src/app.js" "app.get('/evidence'"
 file_contains "$REPO_ROOT/src/app.js" "app.get('/api/status'"
+file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-version.txt'"
+file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-package-version.txt'"
+file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-installed-packages.txt'"
+file_contains "$REPO_ROOT/scripts/verify.sh" 'expected_version="1.30.3"'
+file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg-query -W nginx'
+file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg -l | grep nginx'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'scripts/verify.sh'
+file_contains "$REPO_ROOT/REPRO.md" 'Defender Inventory detects nginx 1.30.3'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'msedge.exe microsoft-edge microsoft-edge-dev edge'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'DEPLOY_BROWSER:-${BROWSER:-}'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure login was not completed. The read-only wizard stopped before inspecting Azure.'

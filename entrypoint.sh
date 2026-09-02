@@ -11,6 +11,14 @@ echo "📊 Defender Monitoring: ${DEFENDER_ENABLED:-false}"
 echo "⚔ CVE-2026-42533: NGINX map directive and regex matching heap buffer overflow"
 echo "📚 F5 advisory: https://my.f5.com/manage/s/article/K000162097"
 
+echo "===== CVE REPRO ====="
+echo "Target CVE: CVE-2026-42533"
+echo "NGINX Version:"
+cat /opt/nginx-version.txt
+echo "Installed Package:"
+cat /opt/nginx-package-version.txt
+echo "===================="
+
 NGINX_BINARY_VERSION="$(nginx -v 2>&1 | sed -n 's|nginx version: nginx/||p')"
 NGINX_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' nginx 2>/dev/null || true)"
 SCENARIO_CONFIG_STATE="remediated"

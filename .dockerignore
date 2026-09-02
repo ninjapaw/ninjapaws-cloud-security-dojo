@@ -6,6 +6,9 @@ npm-debug.log*
 docs
 infra
 scripts
+!scripts/
+scripts/*
+!scripts/verify.sh
 *.md
 .env
 .env.*
