@@ -1,34 +1,36 @@
 #!/usr/bin/env node
 
-const express = require('express');
-const os = require('os');
-const fs = require('fs');
+const express = require("express");
+const os = require("os");
+const fs = require("fs");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const DEFAULT_NGINX_VERSION = '1.30.3';
-const DEFAULT_VULNERABILITY_STATUS = 'vulnerable';
-const CVE_ID = 'CVE-2026-42533';
-const VULNERABILITY_DESCRIPTION = 'NGINX map directive and regex matching heap buffer overflow';
-const ADVISORY_URL = 'https://my.f5.com/manage/s/article/K000162097';
-const AFFECTED_VERSIONS = 'NGINX Open Source 1.30.0-1.30.3';
-const FIXED_VERSION = '1.30.4';
+const DEFAULT_NGINX_VERSION = "1.30.3";
+const DEFAULT_VULNERABILITY_STATUS = "vulnerable";
+const CVE_ID = "CVE-2026-42533";
+const VULNERABILITY_DESCRIPTION =
+  "NGINX map directive and regex matching heap buffer overflow";
+const ADVISORY_URL = "https://my.f5.com/manage/s/article/K000162097";
+const AFFECTED_VERSIONS = "NGINX Open Source 1.30.0-1.30.3";
+const FIXED_VERSION = "1.30.4";
 
 function getRuntimeVerification() {
   try {
-    return JSON.parse(fs.readFileSync('/run/ninja-paws-runtime.json', 'utf8'));
+    return JSON.parse(fs.readFileSync("/run/ninja-paws-runtime.json", "utf8"));
   } catch (_error) {
     return {
       nginx_binary_version: null,
-      nginx_package_version: null
+      nginx_package_version: null,
     };
   }
 }
 
 function getVulnerabilityStatus(runtimeVerification) {
-  if (runtimeVerification.vulnerability_detected === true) return 'vulnerable';
-  if (runtimeVerification.scenario_config_state === 'remediated') return 'remediated';
-  return 'not_detected';
+  if (runtimeVerification.vulnerability_detected === true) return "vulnerable";
+  if (runtimeVerification.scenario_config_state === "remediated")
+    return "remediated";
+  return "not_detected";
 }
 
 function getRuntimeStatus() {
@@ -37,78 +39,107 @@ function getRuntimeStatus() {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
     vulnerabilityStatus: getVulnerabilityStatus(runtimeVerification),
     vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
-    defenderEnabled: isEnabled('DEFENDER_ENABLED'),
-    detectionReason: runtimeVerification.detection_reason || 'Runtime detection evidence is unavailable.'
+    defenderEnabled: isEnabled("DEFENDER_ENABLED"),
+    detectionReason:
+      runtimeVerification.detection_reason ||
+      "Runtime detection evidence is unavailable.",
   };
 }
 
 // ARM emits string(bool) as "True"/"False", so compare case-insensitively.
 function isEnabled(name) {
-  return String(process.env[name] ?? '').trim().toLowerCase() === 'true';
+  return (
+    String(process.env[name] ?? "")
+      .trim()
+      .toLowerCase() === "true"
+  );
 }
 
 function isTier(name, tier) {
-  return String(process.env[name] ?? '').trim().toLowerCase() === tier.toLowerCase();
+  return (
+    String(process.env[name] ?? "")
+      .trim()
+      .toLowerCase() === tier.toLowerCase()
+  );
 }
 
 // The container holds no Azure credentials, so this reports deployment-time configuration only.
 function getDefenderMonitoring() {
   return {
-    source: 'deployment-configuration',
-    authoritative_source: 'Microsoft Defender for Cloud (Environment settings)',
-    note: 'These flags report what the deployment requested, not a live query of Azure plan state.',
+    source: "deployment-configuration",
+    authoritative_source: "Microsoft Defender for Cloud (Environment settings)",
+    note: "These flags report what the deployment requested, not a live query of Azure plan state.",
     plans: {
-      defender_for_app_service: process.env.DEFENDER_APPSERVICES_TIER || 'unknown',
-      defender_for_containers: process.env.DEFENDER_CONTAINERS_TIER || 'unknown',
-      defender_cspm: process.env.DEFENDER_CSPM_TIER || 'unknown',
-      defender_for_resource_manager: process.env.DEFENDER_ARM_TIER || 'unknown'
+      defender_for_app_service:
+        process.env.DEFENDER_APPSERVICES_TIER || "unknown",
+      defender_for_containers:
+        process.env.DEFENDER_CONTAINERS_TIER || "unknown",
+      defender_cspm: process.env.DEFENDER_CSPM_TIER || "unknown",
+      defender_for_resource_manager: process.env.DEFENDER_ARM_TIER || "unknown",
     },
     monitoring: {
-      defender_dashboard_flag: isEnabled('DEFENDER_ENABLED'),
-      app_service_threat_protection: isTier('DEFENDER_APPSERVICES_TIER', 'Standard'),
-      resource_manager_threat_detection: isTier('DEFENDER_ARM_TIER', 'Standard'),
-      container_registry_vulnerability_assessment: isEnabled('DEFENDER_REGISTRY_ASSESSMENT'),
-      cspm_serverless_protection: isEnabled('DEFENDER_SERVERLESS_PROTECTION'),
-      cspm_serverless_containers: isEnabled('DEFENDER_SERVERLESS_CONTAINERS'),
-      devops_connector_requested: isEnabled('DEFENDER_DEVOPS_CONNECTOR'),
-      github_advanced_security_expected: isEnabled('GITHUB_ADVANCED_SECURITY')
-    }
+      defender_dashboard_flag: isEnabled("DEFENDER_ENABLED"),
+      app_service_threat_protection: isTier(
+        "DEFENDER_APPSERVICES_TIER",
+        "Standard",
+      ),
+      resource_manager_threat_detection: isTier(
+        "DEFENDER_ARM_TIER",
+        "Standard",
+      ),
+      container_registry_vulnerability_assessment: isEnabled(
+        "DEFENDER_REGISTRY_ASSESSMENT",
+      ),
+      cspm_serverless_protection: isEnabled("DEFENDER_SERVERLESS_PROTECTION"),
+      cspm_serverless_containers: isEnabled("DEFENDER_SERVERLESS_CONTAINERS"),
+      devops_connector_requested: isEnabled("DEFENDER_DEVOPS_CONNECTOR"),
+      github_advanced_security_expected: isEnabled("GITHUB_ADVANCED_SECURITY"),
+    },
   };
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get("/health", (req, res) => {
   res.json({
-    status: 'healthy',
+    status: "healthy",
     timestamp: new Date().toISOString(),
-    environment: 'training'
+    environment: "training",
   });
 });
 
-app.get('/evidence', (req, res) => {
+app.get("/evidence", (req, res) => {
   try {
     res.json({
       expected_cve: CVE_ID,
       expected_nginx_version: DEFAULT_NGINX_VERSION,
-      nginx_version_output: fs.readFileSync('/opt/nginx-version.txt', 'utf8').trim(),
-      package_version: fs.readFileSync('/opt/nginx-package-version.txt', 'utf8').trim(),
-      installed_packages: fs.readFileSync('/opt/nginx-installed-packages.txt', 'utf8').trim()
+      nginx_version_output: fs
+        .readFileSync("/opt/nginx-version.txt", "utf8")
+        .trim(),
+      package_version: fs
+        .readFileSync("/opt/nginx-package-version.txt", "utf8")
+        .trim(),
+      installed_packages: fs
+        .readFileSync("/opt/nginx-installed-packages.txt", "utf8")
+        .trim(),
     });
   } catch (error) {
-    console.error('Unable to read build-time NGINX evidence:', error);
-    res.status(500).json({ error: 'Build-time NGINX evidence is unavailable.' });
+    console.error("Unable to read build-time NGINX evidence:", error);
+    res
+      .status(500)
+      .json({ error: "Build-time NGINX evidence is unavailable." });
   }
 });
 
 // API status endpoint
-app.get('/api/status', (req, res) => {
+app.get("/api/status", (req, res) => {
   const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
   const runtimeVerification = getRuntimeVerification();
-  const vulnerabilityDetected = runtimeVerification.vulnerability_detected === true;
+  const vulnerabilityDetected =
+    runtimeVerification.vulnerability_detected === true;
 
   res.json({
-    environment: 'Ninja Paws Cloud Security Dojo',
-    status: 'running',
+    environment: "Ninja Paws Cloud Security Dojo",
+    status: "running",
     nginx_version: nginxVersion,
     vulnerability: {
       cve_id: CVE_ID,
@@ -117,7 +148,7 @@ app.get('/api/status', (req, res) => {
       description: VULNERABILITY_DESCRIPTION,
       advisory_url: ADVISORY_URL,
       affected_versions: AFFECTED_VERSIONS,
-      fixed_version: FIXED_VERSION
+      fixed_version: FIXED_VERSION,
     },
     runtime_verification: runtimeVerification,
     defender_monitoring: getDefenderMonitoring(),
@@ -125,16 +156,17 @@ app.get('/api/status', (req, res) => {
     platform: os.platform(),
     arch: os.arch(),
     uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
 // Home endpoint
-app.get('/', (req, res) => {
-  const { nginxVersion, vulnerabilityStatus, defenderEnabled } = getRuntimeStatus();
+app.get("/", (req, res) => {
+  const { nginxVersion, vulnerabilityStatus, defenderEnabled } =
+    getRuntimeStatus();
   const defenderMonitoring = getDefenderMonitoring();
   const monitoringRow = (label, enabled) =>
-    `<li><code>${label}</code> - ${enabled ? '✅ true' : '⚪ false'}</li>`;
+    `<li><code>${label}</code> - ${enabled ? "✅ true" : "⚪ false"}</li>`;
 
   const html = `
 <!DOCTYPE html>
@@ -379,42 +411,43 @@ app.get('/', (req, res) => {
         </div>
         <div class="status-item">
           <div class="status-label">Vulnerability Status</div>
-          <div class="status-value" style="text-transform: uppercase; font-weight: 600; color: ${vulnerabilityStatus === 'vulnerable' ? '#dc3545' : '#28a745'};">
+          <div class="status-value" style="text-transform: uppercase; font-weight: 600; color: ${vulnerabilityStatus === "vulnerable" ? "#dc3545" : "#28a745"};">
             ${vulnerabilityStatus}
           </div>
         </div>
         <div class="status-item">
           <div class="status-label">Defender Enabled</div>
-          <div class="status-value">${defenderEnabled ? '✅ Yes' : '⏳ Monitoring'}</div>
+          <div class="status-value">${defenderEnabled ? "✅ Yes" : "⏳ Monitoring"}</div>
         </div>
       </div>
     </div>
 
     <div class="vulnerability-alert ${vulnerabilityStatus}">
       <div class="alert-title">
-        ${vulnerabilityStatus === 'vulnerable' ? '⚠️ Vulnerable Version Detected' : '✅ Vulnerability Remediated'}
+        ${vulnerabilityStatus === "vulnerable" ? "⚠️ Vulnerable Version Detected" : "✅ Vulnerability Remediated"}
       </div>
       <div class="alert-text">
         <strong>${CVE_ID}:</strong> ${VULNERABILITY_DESCRIPTION}
         <br>
-        ${vulnerabilityStatus === 'vulnerable'
-          ? 'This training environment intentionally contains a vulnerable software version (NGINX 1.30.3) for educational detection and remediation demonstrations.'
-          : 'This version has been patched. NGINX is now at version 1.30.4 or later with the vulnerability remediated.'
+        ${
+          vulnerabilityStatus === "vulnerable"
+            ? "This training environment intentionally contains a vulnerable software version (NGINX 1.30.3) for educational detection and remediation demonstrations."
+            : "This version has been patched. NGINX is now at version 1.30.4 or later with the vulnerability remediated."
         }
       </div>
-      ${defenderEnabled ? '<span class="defender-badge">🛡 Microsoft Defender Monitoring Active</span>' : ''}
+      ${defenderEnabled ? '<span class="defender-badge">🛡 Microsoft Defender Monitoring Active</span>' : ""}
     </div>
 
     <div class="endpoints">
       <h3>Defender for Cloud Monitoring</h3>
       <ul class="endpoint-list">
-        ${monitoringRow('app_service_threat_protection', defenderMonitoring.monitoring.app_service_threat_protection)}
-        ${monitoringRow('resource_manager_threat_detection', defenderMonitoring.monitoring.resource_manager_threat_detection)}
-        ${monitoringRow('container_registry_vulnerability_assessment', defenderMonitoring.monitoring.container_registry_vulnerability_assessment)}
-        ${monitoringRow('cspm_serverless_protection', defenderMonitoring.monitoring.cspm_serverless_protection)}
-        ${monitoringRow('cspm_serverless_containers', defenderMonitoring.monitoring.cspm_serverless_containers)}
-        ${monitoringRow('devops_connector_requested', defenderMonitoring.monitoring.devops_connector_requested)}
-        ${monitoringRow('github_advanced_security_expected', defenderMonitoring.monitoring.github_advanced_security_expected)}
+        ${monitoringRow("app_service_threat_protection", defenderMonitoring.monitoring.app_service_threat_protection)}
+        ${monitoringRow("resource_manager_threat_detection", defenderMonitoring.monitoring.resource_manager_threat_detection)}
+        ${monitoringRow("container_registry_vulnerability_assessment", defenderMonitoring.monitoring.container_registry_vulnerability_assessment)}
+        ${monitoringRow("cspm_serverless_protection", defenderMonitoring.monitoring.cspm_serverless_protection)}
+        ${monitoringRow("cspm_serverless_containers", defenderMonitoring.monitoring.cspm_serverless_containers)}
+        ${monitoringRow("devops_connector_requested", defenderMonitoring.monitoring.devops_connector_requested)}
+        ${monitoringRow("github_advanced_security_expected", defenderMonitoring.monitoring.github_advanced_security_expected)}
         <li><strong>Declared configuration:</strong> Defender for Cloud remains the authoritative source; see <code>defender_monitoring</code> in <code>/api/status</code>.</li>
       </ul>
     </div>
