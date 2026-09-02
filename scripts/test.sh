@@ -150,12 +150,12 @@ file_contains "$REPO_ROOT/src/app.js" 'runtime_verification'
 file_contains "$REPO_ROOT/src/app.js" 'advisory_url: ADVISORY_URL'
 file_contains "$REPO_ROOT/src/app.js" 'fixed_version: FIXED_VERSION'
 file_contains "$REPO_ROOT/src/app.js" 'runtimeVerification.vulnerability_detected === true'
-file_contains "$REPO_ROOT/src/app.js" "app.get('/health'"
-file_contains "$REPO_ROOT/src/app.js" "app.get('/evidence'"
-file_contains "$REPO_ROOT/src/app.js" "app.get('/api/status'"
-file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-version.txt'"
-file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-package-version.txt'"
-file_contains "$REPO_ROOT/src/app.js" "fs.readFileSync('/opt/nginx-installed-packages.txt'"
+file_contains "$REPO_ROOT/src/app.js" 'app.get("/health"'
+file_contains "$REPO_ROOT/src/app.js" 'app.get("/evidence"'
+file_contains "$REPO_ROOT/src/app.js" 'app.get("/api/status"'
+file_contains "$REPO_ROOT/src/app.js" '.readFileSync("/opt/nginx-version.txt"'
+file_contains "$REPO_ROOT/src/app.js" '.readFileSync("/opt/nginx-package-version.txt"'
+file_contains "$REPO_ROOT/src/app.js" '.readFileSync("/opt/nginx-installed-packages.txt"'
 file_contains "$REPO_ROOT/scripts/verify.sh" 'expected_version="1.30.3"'
 file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg-query -W nginx'
 file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg -l | grep nginx'
