@@ -72,7 +72,7 @@ jobs:
       DEFENDER_DEVOPS_CONNECTOR_ENABLED: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
       DEFENDER_DEVOPS_CONNECTOR_NAME: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
       DEFENDER_DEVOPS_GITHUB_OWNER: ${{ vars.DEFENDER_DEVOPS_GITHUB_OWNER || github.repository_owner }}
-      GITHUB_ADVANCED_SECURITY_EXPECTED: ${{ vars.GITHUB_ADVANCED_SECURITY_EXPECTED || 'true' }}
+      GITHUB_ADVANCED_SECURITY_EXPECTED: ${{ vars.ADVANCED_SECURITY_EXPECTED || 'true' }}
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
       DEPLOY_STAGE: ${{ inputs.stage || 'full' }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -212,4 +212,4 @@ jobs:
       defender-devops-connector-enabled: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
       defender-devops-connector-name: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
       defender-devops-github-owner: ${{ vars.DEFENDER_DEVOPS_GITHUB_OWNER || github.repository_owner }}
-      github-advanced-security-expected: ${{ vars.GITHUB_ADVANCED_SECURITY_EXPECTED || 'true' }}
+      github-advanced-security-expected: ${{ vars.ADVANCED_SECURITY_EXPECTED || 'true' }}

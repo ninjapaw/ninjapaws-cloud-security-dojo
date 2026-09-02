@@ -27,7 +27,7 @@ fi
 
 # Windows az.cmd emits CRLF output when called from WSL/Git Bash.
 az() {
-  command az "$@" | tr -d '\r'
+  MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
 }
 
 environment_name=dev
@@ -54,7 +54,7 @@ Options:
   --location <region>        Azure region (default: centralus)
   --subscription <id>        Azure subscription (default: current az account)
   --repository <owner/name>  GitHub repository (default: current repository)
-  --provision                Also deploy infra/main.bicep and grant ACR build/push roles
+  --provision                Also deploy infra/main.bicep and grant ACR push access
   --defaults                 Accept built-in environment defaults without prompts
   --help                     Show this help
 
@@ -181,6 +181,7 @@ az ad app federated-credential create --id "$app_object_id" --parameters "$(
 az group create --name "$resource_group" --location "$location" >/dev/null
 
 resource_group_scope="/subscriptions/$subscription_id/resourceGroups/$resource_group"
+subscription_scope="/subscriptions/$subscription_id"
 acr_scope="$resource_group_scope/providers/Microsoft.ContainerRegistry/registries/$acr_name"
 
 ensure_role() {
@@ -205,6 +206,7 @@ ensure_role() {
 # managed identity's AcrPull role assignment.
 ensure_role Contributor "$resource_group_scope"
 ensure_role "Role Based Access Control Administrator" "$resource_group_scope"
+ensure_role "Security Admin" "$subscription_scope"
 
 if [[ "$provision" == true ]]; then
   az deployment group create \
@@ -219,10 +221,8 @@ if [[ "$provision" == true ]]; then
 
   # The registry exists after Bicep completes, so assign image-push access now.
   ensure_role AcrPush "$acr_scope"
-  ensure_role AcrBuild "$acr_scope"
 elif az acr show --name "$acr_name" --resource-group "$resource_group" --output none 2>/dev/null; then
   ensure_role AcrPush "$acr_scope"
-  ensure_role AcrBuild "$acr_scope"
 fi
 
 gh api --method PUT "repos/${repository}/environments/${environment_name}" --input - --silent <<'JSON'
@@ -277,7 +277,7 @@ gh variable set DEFENDER_CONTAINERS_SENSOR --env "$environment_name" --repo "$re
 gh variable set DEFENDER_DEVOPS_CONNECTOR_ENABLED --env "$environment_name" --repo "$repository" --body 'true'
 gh variable set DEFENDER_DEVOPS_CONNECTOR_NAME --env "$environment_name" --repo "$repository" --body "ninjapaws-github-$environment_name"
 gh variable set DEFENDER_DEVOPS_GITHUB_OWNER --env "$environment_name" --repo "$repository" --body "${repository%%/*}"
-gh variable set GITHUB_ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
+gh variable set ADVANCED_SECURITY_EXPECTED --env "$environment_name" --repo "$repository" --body 'true'
 # Migrate and remove any legacy copy created by older bootstrap versions.
 gh secret delete AZURE_CLIENT_ID --env "$environment_name" --repo "$repository" --confirm 2>/dev/null || true
 
@@ -287,5 +287,5 @@ printf 'Deployment branch: %s\n' "$deployment_branch"
 printf 'Resource group: %s\n' "$resource_group"
 printf 'No client secret was created; Azure identifiers and deployment settings were saved as Environment variables.\n'
 if [[ "$provision" != true ]]; then
-  printf 'Rerun with --provision to deploy infra/main.bicep and grant ACR build/push roles.\n'
+  printf 'Rerun with --provision to deploy infra/main.bicep and grant ACR push access.\n'
 fi

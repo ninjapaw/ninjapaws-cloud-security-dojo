@@ -109,7 +109,7 @@ jobs:
             DEFENDER_DEVOPS_CONNECTOR_ENABLED \
             DEFENDER_DEVOPS_CONNECTOR_NAME \
             DEFENDER_DEVOPS_GITHUB_OWNER \
-            GITHUB_ADVANCED_SECURITY_EXPECTED; do
+            ADVANCED_SECURITY_EXPECTED; do
             gh variable delete "$variable_name" --env "$ENVIRONMENT" --repo "$GH_REPO" --confirm 2>/dev/null || true
           done
           # Remove the legacy secret form as well as the managed variable form.
