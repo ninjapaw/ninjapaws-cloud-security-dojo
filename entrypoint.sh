@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [ "$#" -gt 0 ]; then
+	exec "$@"
+fi
+
 echo "🥷 Ninja Paws Cloud Security Dojo - Starting"
 echo "🧱 Base OS: ${BASE_OS_IMAGE:-ubuntu}:${BASE_OS_VERSION:-24.04}"
 echo "🛡 NGINX Version: ${NGINX_VERSION:-1.30.3}"
