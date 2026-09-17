@@ -55,6 +55,7 @@ var nicName = '${vmName}-nic'
 var vmSubnetPrefix = '10.20.1.0/24'
 var bastionSubnetPrefix = '10.20.2.0/26'
 var webAppSubnetPrefix = '10.20.3.0/24'
+var privateEndpointSubnetPrefix = '10.20.4.0/27'
 var sqlVmResourceName = vmName
 // Windows computer names are capped at 15 characters and can't contain hyphens meaningfully longer
 // than that; the Azure resource name (vmName) has no such limit, so derive a short one separately.
@@ -143,7 +144,77 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-01-01' = {
           ]
         }
       }
+      {
+        // Dedicated subnet for the Key Vault private endpoint: this subscription's policy baseline
+        // forces publicNetworkAccess to Disabled on every Key Vault, so the Web App can only reach
+        // the vault's secret (the SQL app login password) through a private link on the VNet.
+        name: 'private-endpoint-subnet'
+        properties: {
+          addressPrefix: privateEndpointSubnetPrefix
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
     ] : [])
+  }
+}
+
+// Required because the Key Vault below has publicNetworkAccess: 'Disabled' (this subscription's
+// policy baseline forces it); without a private link + matching DNS, "<vault>.vault.azure.net"
+// would resolve to a public IP the vault firewall rejects, and the Web App's Key Vault reference
+// app setting could never resolve the SQL app login password.
+resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (deployWebApp) {
+  name: 'privatelink.vaultcore.azure.net'
+  location: 'global'
+}
+
+resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (deployWebApp) {
+  parent: keyVaultPrivateDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: vnet.id
+    }
+    registrationEnabled: false
+  }
+}
+
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2025-01-01' = if (deployWebApp) {
+  name: '${keyVaultResourceName}-pe'
+  location: location
+  properties: {
+    subnet: {
+      id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'private-endpoint-subnet')
+    }
+    privateLinkServiceConnections: [
+      {
+        name: '${keyVaultResourceName}-plsc'
+        properties: {
+          privateLinkServiceId: keyVault.id
+          groupIds: [
+            'vault'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource keyVaultPrivateEndpointDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2025-01-01' = if (deployWebApp) {
+  parent: keyVaultPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-vaultcore-azure-net'
+        properties: {
+          privateDnsZoneId: keyVaultPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -355,7 +426,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     // soft-deleted vault from a prior run; the trade-off is that torn-down vaults linger, purgeable
     // only after the default 90-day retention or by an operator with Key Vault purge permission.
     enablePurgeProtection: true
-    publicNetworkAccess: 'Enabled'
+    // This subscription's policy baseline forces Disabled regardless of what's requested here;
+    // the Web App reaches the vault only through the private endpoint/DNS zone set up above.
+    publicNetworkAccess: 'Disabled'
   }
 }
 
@@ -394,6 +467,7 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
     httpsOnly: true
     virtualNetworkSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'webapp-integration-subnet')
     siteConfig: {
+      vnetRouteAllEnabled: true
       linuxFxVersion: 'NODE|20-lts'
       alwaysOn: true
       http20Enabled: true
@@ -435,6 +509,9 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
       ]
     }
   }
+  dependsOn: [
+    keyVaultPrivateEndpointDnsGroup
+  ]
 }
 
 resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWebApp) {

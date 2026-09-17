@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "4942337151901658967"
+      "templateHash": "3192832342669323086"
     }
   },
   "parameters": {
@@ -114,6 +114,7 @@
     "vmSubnetPrefix": "10.20.1.0/24",
     "bastionSubnetPrefix": "10.20.2.0/26",
     "webAppSubnetPrefix": "10.20.3.0/24",
+    "privateEndpointSubnetPrefix": "10.20.4.0/27",
     "sqlVmResourceName": "[parameters('vmName')]",
     "computerName": "[take(replace(parameters('vmName'), '-', ''), 15)]",
     "keyVaultResourceName": "[take(toLower(replace(format('{0}kv{1}', parameters('vmName'), uniqueString(resourceGroup().id, deployment().name)), '-', '')), 24)]"
@@ -151,10 +152,81 @@
             "10.20.0.0/16"
           ]
         },
-        "subnets": "[concat(createArray(createObject('name', 'sql-vm-subnet', 'properties', createObject('addressPrefix', variables('vmSubnetPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))))), if(parameters('deployBastion'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'webapp-integration-subnet', 'properties', createObject('addressPrefix', variables('webAppSubnetPrefix'), 'delegations', createArray(createObject('name', 'webapp-delegation', 'properties', createObject('serviceName', 'Microsoft.Web/serverFarms')))))), createArray()))]"
+        "subnets": "[concat(createArray(createObject('name', 'sql-vm-subnet', 'properties', createObject('addressPrefix', variables('vmSubnetPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))))), if(parameters('deployBastion'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'webapp-integration-subnet', 'properties', createObject('addressPrefix', variables('webAppSubnetPrefix'), 'delegations', createArray(createObject('name', 'webapp-delegation', 'properties', createObject('serviceName', 'Microsoft.Web/serverFarms'))))), createObject('name', 'private-endpoint-subnet', 'properties', createObject('addressPrefix', variables('privateEndpointSubnetPrefix'), 'privateEndpointNetworkPolicies', 'Disabled'))), createArray()))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2024-06-01",
+      "name": "privatelink.vaultcore.azure.net",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.vaultcore.azure.net', format('{0}-link', variables('vnetName')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}-pe', variables('keyVaultResourceName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'private-endpoint-subnet')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('{0}-plsc', variables('keyVaultResourceName'))]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]",
+              "groupIds": [
+                "vault"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}/{1}', format('{0}-pe', variables('keyVaultResourceName')), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-vaultcore-azure-net",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
+        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', variables('keyVaultResourceName')))]"
       ]
     },
     {
@@ -356,7 +428,7 @@
         "enableRbacAuthorization": true,
         "enableSoftDelete": true,
         "enablePurgeProtection": true,
-        "publicNetworkAccess": "Enabled"
+        "publicNetworkAccess": "Disabled"
       }
     },
     {
@@ -399,6 +471,7 @@
         "httpsOnly": true,
         "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'webapp-integration-subnet')]",
         "siteConfig": {
+          "vnetRouteAllEnabled": true,
           "linuxFxVersion": "NODE|20-lts",
           "alwaysOn": true,
           "http20Enabled": true,
@@ -441,6 +514,7 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('{0}-pe', variables('keyVaultResourceName')), 'default')]",
         "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultResourceName'), 'sql-app-login-password')]",
         "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('webAppName')))]"
