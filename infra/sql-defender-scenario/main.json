@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "14205350097827499987"
+      "templateHash": "9163151559136887057"
     }
   },
   "parameters": {
@@ -334,7 +334,7 @@
           ]
         },
         "protectedSettings": {
-          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPassword ''{0}''', parameters('sqlAppLoginPassword'))]"
+          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ''{0}''', base64(parameters('sqlAppLoginPassword')))]"
         }
       },
       "dependsOn": [

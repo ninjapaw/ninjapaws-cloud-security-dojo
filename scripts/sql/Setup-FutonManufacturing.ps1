@@ -24,9 +24,13 @@ param(
     [string]$DatabaseName = 'FutonManufacturing',
     [string]$SourceRepoRawBaseUrl = 'https://raw.githubusercontent.com/microsoft/sql-server-samples/master/samples/databases/futon-manufacturing',
     [string]$AppLoginName = 'futon_app',
+    # Base64-encoded so the raw password (which can contain cmd.exe metacharacters like & % ^ !)
+    # never has to survive the CustomScriptExtension's cmd.exe command line intact.
     [Parameter(Mandatory = $true)]
-    [string]$AppLoginPassword
+    [string]$AppLoginPasswordBase64
 )
+
+$AppLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AppLoginPasswordBase64))
 
 $ErrorActionPreference = 'Stop'
 $logPath = 'C:\NinjaPawsDojo\bootstrap.log'
