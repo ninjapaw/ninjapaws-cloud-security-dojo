@@ -23,7 +23,7 @@ Because this scenario provisions a fundamentally different Azure architecture th
 Security posture baked into the infrastructure:
 
 - No public IP address on the SQL Server VM; management access is exclusively through Azure Bastion.
-- The VM is registered with the SQL IaaS Agent extension (`Microsoft.SqlVirtualMachine/sqlVirtualMachines`), so Azure manages automated patching, automated encrypted backups, and best-practice assessment.
+- The VM is registered with the SQL IaaS Agent extension (`Microsoft.SqlVirtualMachine/sqlVirtualMachines`), so Azure manages automated patching and best-practice assessment. Automated backups are off by default because they require a storage account destination this training scenario doesn't provision; add one and enable `autoBackupSettings` in `infra/sql-defender-scenario/main.bicep` if you need them.
 - Trusted Launch (Secure Boot + vTPM) and encryption-at-host are enabled on the VM.
 - The bootstrap script (`scripts/sql/Setup-FutonManufacturing.ps1`) enables Transparent Data Encryption (TDE) on the restored database, creates a SQL Server Audit that writes login and permission-change events to the Windows Security log, provisions a least-privilege application login (`db_datareader`/`db_datawriter` only) instead of using `sa`, disables the `sa` login and the legacy SQL Server Browser service, and forces encrypted client connections.
 

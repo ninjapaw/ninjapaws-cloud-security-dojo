@@ -279,12 +279,11 @@ resource sqlVirtualMachine 'Microsoft.SqlVirtualMachine/sqlVirtualMachines@2023-
       maintenanceWindowStartingHour: 2
       maintenanceWindowDuration: 60
     }
+    // Automated backups need a storage account URL/key, which this training scenario doesn't
+    // provision (it would add a storage account purely for backup targets); disabled rather than
+    // wired to a placeholder. Add a storage account and set enable/storageAccountUrl to turn it on.
     autoBackupSettings: {
-      enable: true
-      enableEncryption: true
-      retentionPeriod: 7
-      backupScheduleType: 'Automated'
-      backupSystemDbs: true
+      enable: false
     }
     serverConfigurationsManagementSettings: {
       sqlConnectivityUpdateSettings: {
