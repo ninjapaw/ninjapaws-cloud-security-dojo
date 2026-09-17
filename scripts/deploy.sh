@@ -188,6 +188,32 @@ project_meta() {
     printf '%s' "${value:-$2}"
 }
 
+# Lists the scenario IDs registered directly under the top-level "scenarios" object,
+# in file order, without requiring jq. Mirrors config_lookup's line-based assumptions.
+config_scenario_ids() {
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    awk '
+        BEGIN { depth = 0; in_scenarios = 0; scen_depth = -1 }
+        {
+            line = $0
+            gsub(/\r/, "", line)
+            gsub(/^[ \t]+|[ \t]+$/, "", line)
+            if (line ~ /^"[^"]+"[ \t]*:[ \t]*\{/) {
+                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
+                depth++
+                if (depth == 1 && key == "scenarios") { in_scenarios = 1; scen_depth = depth }
+                else if (in_scenarios && depth == scen_depth + 1) { print key }
+                next
+            }
+            if (line ~ /^\}/) {
+                if (in_scenarios && depth == scen_depth) { in_scenarios = 0 }
+                if (depth > 0) depth--
+                next
+            }
+        }
+    ' "$CONFIG_FILE"
+}
+
 resolve_scenario() {
     local configured_ids
     configured_ids="$(config_lookup defaults.scenarioIds)"
@@ -426,6 +452,10 @@ Options:
   --image-tag <tag>        Image tag (default: current Git SHA)
     --scenario <id>          Scenario ID (default: defender-cloud-scenario-1)
     --all-scenarios          Deploy all configured scenarios (currently one scenario)
+
+The wizard command lists every scenario registered in config/deploy.config.json (interactively,
+when not run with --defaults) and hands off to that scenario's own deploy script when one is
+declared, e.g. Scenario 2 (SQL Server on Azure VM) runs via scripts/deploy-sql-scenario.sh.
     --yes                    Skip confirmation; required for non-interactive uninstall
     --defaults               Accept built-in defaults without interactive prompts
   --force                  Allow uninstall of an untagged resource group
@@ -2856,6 +2886,40 @@ doctor() {
 wizard() {
     local resource_group_exists=false app_service_exists=false registry_exists=false
     local managed environment_tag resource_count role_names selected_action=""
+    local target_scenario="$SCENARIO_ID" scenario_ids=() scenario_choice="" scenario_index=0 scenario_id scenario_name target_deploy_script handoff_args
+
+    if [[ -t 0 && "$USE_DEFAULTS" == false ]]; then
+        while IFS= read -r scenario_id; do
+            [[ -n "$scenario_id" ]] && scenario_ids+=("$scenario_id")
+        done < <(config_scenario_ids)
+        if ((${#scenario_ids[@]} > 1)); then
+            echo
+            echo "Ninja Paws Cloud Security Dojo — available scenarios"
+            for scenario_id in "${scenario_ids[@]}"; do
+                scenario_index=$((scenario_index + 1))
+                scenario_name="$(config_lookup "scenarios.$scenario_id.name")"
+                echo "  $scenario_index) $scenario_name"
+                echo "     Workloads: $(config_lookup "scenarios.$scenario_id.workloads")"
+                [[ "$scenario_id" == "$SCENARIO_ID" ]] && echo "     (current default)"
+            done
+            echo
+            read -r -p "Choose a scenario to deploy [1]: " scenario_choice
+            if [[ "$scenario_choice" =~ ^[0-9]+$ ]] && ((scenario_choice >= 1 && scenario_choice <= ${#scenario_ids[@]})); then
+                target_scenario="${scenario_ids[$((scenario_choice - 1))]}"
+            fi
+        fi
+    fi
+
+    # Scenarios that provision a fundamentally different Azure architecture (e.g. the SQL Server
+    # VM scenario) declare their own deployScript instead of the App Service lifecycle below.
+    target_deploy_script="$(config_lookup "scenarios.$target_scenario.deployScript")"
+    if [[ -n "$target_deploy_script" ]]; then
+        handoff_args=(deploy --environment "$ENVIRONMENT")
+        [[ -n "$SUBSCRIPTION_ID" ]] && handoff_args+=(--subscription "$SUBSCRIPTION_ID")
+        [[ "$ASSUME_YES" == true ]] && handoff_args+=(--yes)
+        echo "Starting '$(config_lookup "scenarios.$target_scenario.name")' with ${target_deploy_script}."
+        exec "$REPO_ROOT/$target_deploy_script" "${handoff_args[@]}"
+    fi
 
     set_task permissions in_progress "Checking subscription read access and assigned roles for $AZURE_ACCOUNT_NAME."
     if az group list --query 'length(@)' -o tsv >/dev/null 2>&1; then
