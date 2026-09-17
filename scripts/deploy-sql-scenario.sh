@@ -212,6 +212,11 @@ generate_password() {
     printf '%s%s%s' "${core:0:pos}" "$special_char" "${core:pos}"
 }
 
+# Reads one "properties.outputs" field out of a bicep deployment's JSON, without a jq dependency.
+read_output() {
+    printf '%s' "$1" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).$2.value)" 2>/dev/null || true
+}
+
 run_deployment() {
     local admin_password sql_app_login_password deployment_name output_json vm_principal_id creds_dir creds_file
     admin_password="$(generate_password)"
@@ -248,14 +253,14 @@ run_deployment() {
     warn "Admin credentials saved to $creds_file — treat it as a secret and delete it once you finish the exercise."
     record_check "VM admin credentials saved locally" pass "Written to $creds_file (not committed; output/ is gitignored). Delete this file when the exercise ends."
 
-    KEY_VAULT_NAME="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).keyVaultName.value)" 2>/dev/null || true)"
-    WEB_APP_HOSTNAME="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).webAppHostName.value)" 2>/dev/null || true)"
+    KEY_VAULT_NAME="$(read_output "$output_json" keyVaultName)"
+    WEB_APP_HOSTNAME="$(read_output "$output_json" webAppHostName)"
     unset sql_app_login_password
     if [[ -n "$KEY_VAULT_NAME" ]]; then
         record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
     fi
 
-    vm_principal_id="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).principalId.value)" 2>/dev/null || true)"
+    vm_principal_id="$(read_output "$output_json" principalId)"
     if [[ -n "$vm_principal_id" ]]; then
         record_check "VM has a system-assigned managed identity" pass "principalId $vm_principal_id is available for future Key Vault or RBAC assignments."
     else

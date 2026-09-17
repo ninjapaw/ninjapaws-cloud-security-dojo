@@ -7,28 +7,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-AZURE_REPO_ROOT="$REPO_ROOT"
-if command -v wslpath >/dev/null 2>&1; then
-  AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
-fi
-for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin"; do
-  if [[ ! -x "$azure_cli_dir/az.cmd" && -f "$azure_cli_dir/az.cmd" ]]; then
-    export PATH="$azure_cli_dir:$PATH"
-    break
-  fi
-done
-if ! command -v az >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
-  windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
-  if [[ -n "$windows_az_path" ]]; then
-    azure_cli_dir="$(dirname "$(wslpath -u "$windows_az_path")")"
-    export PATH="$azure_cli_dir:$PATH"
-  fi
-fi
-
-# Windows az.cmd emits CRLF output when called from WSL/Git Bash.
-az() {
-  MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command az "$@" | tr -d '\r'
-}
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 environment_name=dev
 resource_group=""
@@ -64,34 +44,6 @@ The same OIDC service principal is granted access to BOTH resource groups so it 
 either scripts/deploy.sh (Scenario 1) or scripts/deploy-sql-scenario.sh (Scenario 2), and so
 pawprint's hosted dispatch can trigger either scenario's workflow without a separate app.
 EOF
-}
-
-prompt_region() {
-  local default_region="$1" answer index region
-  local regions=(centralus eastus eastus2 westus2 westus3 southcentralus westcentralus northeurope westeurope uksouth southeastasia australiaeast)
-  printf '\nAzure region (default: %s)\n' "$default_region"
-  for index in "${!regions[@]}"; do
-    printf '  %2d) %s\n' "$((index + 1))" "${regions[$index]}"
-  done
-  while true; do
-    read -r -p "Select a region by number or name [$default_region]: " answer
-    answer="${answer:-$default_region}"
-    if [[ "$answer" =~ ^[0-9]+$ ]]; then
-      index=$((answer - 1))
-      if ((index >= 0 && index < ${#regions[@]})); then
-        printf '%s' "${regions[$index]}"
-        return 0
-      fi
-    else
-      for region in "${regions[@]}"; do
-        if [[ "$answer" == "$region" ]]; then
-          printf '%s' "$region"
-          return 0
-        fi
-      done
-    fi
-    printf 'Please choose one of the listed region numbers or names.\n' >&2
-  done
 }
 
 while (($# > 0)); do

@@ -113,12 +113,6 @@ config_setting() {
     printf '%s' "${value:-$fallback}"
 }
 
-project_meta() {
-    local value
-    value="$(config_lookup "project.$1")"
-    printf '%s' "${value:-$2}"
-}
-
 resolve_scenario() {
     local configured_ids
     configured_ids="$(config_lookup defaults.scenarioIds)"
@@ -384,38 +378,6 @@ fail() {
 }
 
 prompt_default() {
-
-    prompt_region() {
-        local default_region="$1" answer index region
-        local regions=(centralus eastus eastus2 westus2 westus3 southcentralus westcentralus northeurope westeurope uksouth southeastasia australiaeast)
-        if [[ ! -t 0 ]]; then
-            printf '%s' "$default_region"
-            return 0
-        fi
-        printf '\nAzure region (default: %s)\n' "$default_region"
-        for index in "${!regions[@]}"; do
-            printf '  %2d) %s\n' "$((index + 1))" "${regions[$index]}"
-        done
-        while true; do
-            read -r -p "Select a region by number or name [$default_region]: " answer
-            answer="${answer:-$default_region}"
-            if [[ "$answer" =~ ^[0-9]+$ ]]; then
-                index=$((answer - 1))
-                if ((index >= 0 && index < ${#regions[@]})); then
-                    printf '%s' "${regions[$index]}"
-                    return 0
-                fi
-            else
-                for region in "${regions[@]}"; do
-                    if [[ "$answer" == "$region" ]]; then
-                        printf '%s' "$region"
-                        return 0
-                    fi
-                done
-            fi
-            printf 'Please choose one of the listed region numbers or names.\n' >&2
-        done
-    }
     local prompt="$1"
     local default_value="$2"
     local answer
