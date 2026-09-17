@@ -9,44 +9,11 @@
 
 set -Eeuo pipefail
 
-RED=$'\033[0;31m'
-GREEN=$'\033[0;32m'
-YELLOW=$'\033[1;33m'
-BLUE=$'\033[0;34m'
-CYAN=$'\033[0;36m'
-NC=$'\033[0m'
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
-
-AZURE_CLI_BIN="${AZURE_CLI_BIN:-az}"
-if ! command -v az >/dev/null 2>&1; then
-    for azure_cli_dir in \
-        "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" \
-        "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin"; do
-        if [[ -f "$azure_cli_dir/az" || -f "$azure_cli_dir/az.cmd" ]]; then
-            export PATH="$azure_cli_dir:$PATH"
-            break
-        fi
-    done
-fi
-if command -v cmd.exe >/dev/null 2>&1; then
-    windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
-    if [[ -n "$windows_az_path" ]]; then
-        if command -v wslpath >/dev/null 2>&1; then
-            AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
-        elif command -v cygpath >/dev/null 2>&1; then
-            AZURE_CLI_BIN="$(cygpath -u "$windows_az_path")"
-        else
-            AZURE_CLI_BIN="$windows_az_path"
-        fi
-        export PATH="$(dirname "$AZURE_CLI_BIN"):$PATH"
-    fi
-fi
-az() {
-    MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command "$AZURE_CLI_BIN" "$@" | tr -d '\r'
-}
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 CONFIG_FILE="${DEPLOY_CONFIG_FILE:-$REPO_ROOT/config/deploy.config.json}"
 SCENARIO_ID="defender-sql-scenario-2"
@@ -62,31 +29,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/output}"
 RUN_STARTED_AT="$(date +%s)"
 RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-config_lookup() {
-    [[ -f "$CONFIG_FILE" ]] || return 0
-    awk -v want="$1" '
-        BEGIN { depth = 0 }
-        {
-            line = $0
-            gsub(/\r/, "", line)
-            gsub(/^[ \t]+|[ \t]+$/, "", line)
-            if (line ~ /^"[^"]+"[ \t]*:[ \t]*\{/) {
-                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
-                depth++; stack[depth] = key; next
-            }
-            if (line ~ /^\}/) { if (depth > 0) depth--; next }
-            if (line ~ /^"[^"]+"[ \t]*:[ \t]*".*"/) {
-                key = line; sub(/^"/, "", key); sub(/".*/, "", key)
-                val = line
-                sub(/^"[^"]+"[ \t]*:[ \t]*"/, "", val); sub(/",?$/, "", val)
-                path = ""
-                for (i = 1; i <= depth; i++) path = path stack[i] "."
-                if (path key == want) { print val; exit }
-            }
-        }
-    ' "$CONFIG_FILE"
-}
-
+# config_lookup and config_scenario_ids come from lib/common.sh.
 config_setting() {
     local key="$1" fallback="$2" value
     value="$(config_lookup "environments.$ENVIRONMENT.$key")"
@@ -158,7 +101,7 @@ DEFENDER_SQL_PLAN="$(config_lookup sqlScenario.defender.sqlPlan)"
 DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
 GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'dev')"
 BOOTSTRAP_SCRIPT_URL="https://raw.githubusercontent.com/ninjapaw/ninjapaws-cloud-security-dojo/${GIT_BRANCH}/scripts/sql/Setup-FutonManufacturing.ps1"
-BICEP_FILE="$REPO_ROOT/infra/sql-defender-scenario/main.bicep"
+BICEP_FILE="$AZURE_REPO_ROOT/infra/sql-defender-scenario/main.bicep"
 
 CHECK_LABELS=()
 CHECK_RESULTS=()

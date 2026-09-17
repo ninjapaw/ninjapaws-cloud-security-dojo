@@ -75,6 +75,8 @@ fi
 
 echo "Checking Bash syntax..."
 bash -n "$REPO_ROOT/scripts/deploy.sh"
+bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
+bash -n "$REPO_ROOT/scripts/lib/common.sh"
 bash -n "$REPO_ROOT/scripts/manage.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
 bash -n "$REPO_ROOT/scripts/test.sh"
@@ -238,9 +240,12 @@ file_contains "$REPO_ROOT/README.md" 'Futon Manufacturing sample database'
 file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'DEFENDER_SERVERS_SUBPLAN'
 file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'SqlServerVirtualMachines'
 file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'sqlVirtualMachines'
-bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
 file_contains "$REPO_ROOT/README.md" 'real F5 advisory'
 file_contains "$REPO_ROOT/README.md" 'Patched-state demonstration'
+file_contains "$REPO_ROOT/scripts/deploy.sh" 'source "$SCRIPT_DIR/lib/common.sh"'
+file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'source "$SCRIPT_DIR/lib/common.sh"'
+file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_lookup()'
+file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_scenario_ids()'
 if [[ "$SKIP_REPORT" == false ]]; then
     rendered_nginx="$(mktemp)"
     test_output="$(mktemp -d)"
