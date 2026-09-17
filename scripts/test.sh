@@ -204,7 +204,9 @@ file_contains "$REPO_ROOT/.github/workflows/deploy.yml" "DEFENDER_CONTAINERS_VM_
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_VM_SCANNING: \${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}"
-file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'kit-defender-posture.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5'
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6'
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-servers-tier:'
+file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-sql-tier:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-cspm-api-posture:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-containers-vm-scanning:'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'cspm-monitor-github'

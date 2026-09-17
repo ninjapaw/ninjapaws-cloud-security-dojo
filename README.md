@@ -42,6 +42,8 @@ bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes
 
 This scenario provisions a billable Azure VM, managed disk, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.
 
+The CI Defender posture audit (`.github/workflows/deploy.yml`, via the shared `kit-defender-posture.yml` from Pawprint) also requests Defender for Servers Plan 2 and Defender for SQL as part of the same subscription-scoped audit used for Scenario 1, so the whole subscription's Defender coverage stays consistent whether or not the SQL VM happens to be deployed at that moment. Override the CI tiers with the `DEFENDER_SERVERS_TIER`, `DEFENDER_SERVERS_SUBPLAN`, and `DEFENDER_SQL_TIER` GitHub Environment variables; set a tier to `disabled` to skip it.
+
 ## What It Demonstrates
 
 - Node.js and Express application with NGINX reverse proxy
@@ -57,7 +59,7 @@ This repository is intentionally wired to the shared [Pawprint](https://github.c
 
 - Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
 - Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5`.
-- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5`. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits.
+- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6`. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits, including Defender for Servers (with sub-plan) and Defender for SQL for Scenario 2.
 - `bicepconfig.json` mirrors the Pawprint linter ruleset so local builds and the shared validator agree, including `use-recent-api-versions`.
 - Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks, scenario CVE evidence), while cross-repo guardrails are centralized in Pawprint.
 

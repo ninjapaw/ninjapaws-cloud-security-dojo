@@ -187,7 +187,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5
+    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6
     with:
       environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name == 'dev' && 'dev' || 'unsupported' }}
       resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
@@ -197,6 +197,9 @@ jobs:
       defender-containers-tier: ${{ vars.DEFENDER_CONTAINERS_TIER || 'Standard' }}
       defender-cspm-tier: ${{ vars.DEFENDER_CSPM_TIER || 'Standard' }}
       defender-arm-tier: ${{ vars.DEFENDER_ARM_TIER || 'Standard' }}
+      defender-servers-tier: ${{ vars.DEFENDER_SERVERS_TIER || 'Standard' }}
+      defender-servers-subplan: ${{ vars.DEFENDER_SERVERS_SUBPLAN || 'P2' }}
+      defender-sql-tier: ${{ vars.DEFENDER_SQL_TIER || 'Standard' }}
       defender-cspm-agentless-serverless-posture: ${{ vars.DEFENDER_CSPM_SERVERLESS_PROTECTION || 'true' }}
       defender-cspm-serverless-containers: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
       defender-cspm-registry-assessment: ${{ vars.DEFENDER_CSPM_REGISTRY_ASSESSMENT || 'true' }}
