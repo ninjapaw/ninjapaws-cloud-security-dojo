@@ -53,7 +53,9 @@ Write-Host "== Ninja Paws Dojo :: Futon Manufacturing bootstrap starting =="
 # interactive "untrusted repository" prompt, and a Custom Script Extension has no stdin to answer it.
 function Invoke-SqlFile {
     param([Parameter(Mandatory = $true)][string]$Path)
-    & sqlcmd -S localhost -E -b -i $Path
+    # -I: sqlcmd defaults QUOTED_IDENTIFIER to OFF (SSMS/Invoke-Sqlcmd default it ON), which breaks
+    # CREATE TABLE statements using indexed views, computed columns, or filtered indexes.
+    & sqlcmd -S localhost -E -b -I -i $Path
     if ($LASTEXITCODE -ne 0) {
         throw "sqlcmd failed executing '$Path' (exit code $LASTEXITCODE)."
     }
@@ -61,7 +63,7 @@ function Invoke-SqlFile {
 
 function Invoke-SqlText {
     param([Parameter(Mandatory = $true)][string]$Query)
-    & sqlcmd -S localhost -E -b -Q $Query
+    & sqlcmd -S localhost -E -b -I -Q $Query
     if ($LASTEXITCODE -ne 0) {
         throw "sqlcmd failed executing inline query (exit code $LASTEXITCODE)."
     }
@@ -147,13 +149,15 @@ END
 "@
 Invoke-SqlText -Query $tdeSql
 
-# 2. Server audit writes to the Windows Security log so Defender for Endpoint / Sentinel can
-#    correlate SQL activity with host-level signals instead of only Application-log noise.
+# 2. Server audit writes to the Windows Application log. SECURITY_LOG would need the SQL
+#    service account granted "Generate security audits" plus an auditpol change on the host,
+#    neither of which this training image has configured; Application log needs neither and
+#    Defender for Endpoint / Sentinel can still collect it.
 $auditSql = @"
 USE master;
 IF NOT EXISTS (SELECT 1 FROM sys.server_audits WHERE name = 'FutonManufacturingAudit')
 BEGIN
-    CREATE SERVER AUDIT FutonManufacturingAudit TO SECURITY_LOG
+    CREATE SERVER AUDIT FutonManufacturingAudit TO APPLICATION_LOG
         WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE);
     ALTER SERVER AUDIT FutonManufacturingAudit WITH (STATE = ON);
 END
