@@ -67,6 +67,41 @@ function Invoke-SqlText {
     }
 }
 
+function Test-SqlSysadmin {
+    $result = & sqlcmd -S localhost -E -h -1 -W -Q "SET NOCOUNT ON; SELECT CAST(IS_SRVROLEMEMBER('sysadmin') AS VARCHAR(1))" 2>$null
+    return (($result -join '') -match '1')
+}
+
+# Custom Script Extension always runs as NT AUTHORITY\SYSTEM, but this marketplace image only
+# grants sysadmin to the (disabled-by-default) 'sa' login -- SYSTEM itself starts with no SQL
+# permissions at all. Recover access the standard, documented way: start the engine in
+# single-user mode, where the connecting Windows administrator is treated as sysadmin regardless
+# of actual role membership, grant SYSTEM sysadmin for real, then go back to normal service mode.
+if (-not (Test-SqlSysadmin)) {
+    Write-Host "NT AUTHORITY\SYSTEM has no SQL Server permissions yet; recovering sysadmin access via single-user mode."
+    $serviceInfo = Get-CimInstance -ClassName Win32_Service -Filter "Name='MSSQLSERVER'"
+    $exePath = ($serviceInfo.PathName -split '"')[1]
+    Stop-Service -Name MSSQLSERVER -Force
+    Start-Sleep -Seconds 5
+    $singleUserProcess = Start-Process -FilePath $exePath -ArgumentList '-m', '-c' -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 15
+    try {
+        & sqlcmd -S localhost -E -Q "ALTER SERVER ROLE sysadmin ADD MEMBER [NT AUTHORITY\SYSTEM];"
+        if ($LASTEXITCODE -ne 0) {
+            throw "ALTER SERVER ROLE failed in single-user mode (exit code $LASTEXITCODE)."
+        }
+    } finally {
+        Stop-Process -Id $singleUserProcess.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
+        Start-Service -Name MSSQLSERVER
+        Start-Sleep -Seconds 20
+    }
+    if (-not (Test-SqlSysadmin)) {
+        throw "NT AUTHORITY\SYSTEM still lacks sysadmin after the single-user mode recovery attempt."
+    }
+    Write-Host "Sysadmin access recovered for NT AUTHORITY\SYSTEM."
+}
+
 $scriptFiles = @(
     '01-schema.sql',
     '02-sample-data.sql',
