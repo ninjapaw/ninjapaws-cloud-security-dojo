@@ -324,9 +324,11 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
       // The password is base64-encoded before it ever reaches commandToExecute: this is a cmd.exe
       // command line (Custom Script Extension always shells out via cmd /c), and several of the
       // generator's allowed special characters (&, %, ^, !) are cmd.exe metacharacters that would
-      // corrupt or split the command if embedded raw, even inside single quotes (which cmd.exe
-      // does not treat as a quoting/escaping character at all).
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 \'${base64(sqlAppLoginPassword)}\''
+      // corrupt or split the command if embedded raw. No surrounding quotes are used either:
+      // neither cmd.exe nor Win32 argv parsing (which powershell.exe uses) treats a single quote
+      // as a quote character, so wrapping the value in '...' would pass the literal quote
+      // characters through as part of the argument instead of stripping them.
+      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)}'
     }
   }
   dependsOn: [
