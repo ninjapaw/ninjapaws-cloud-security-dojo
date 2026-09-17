@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "3192187610348420876"
+      "templateHash": "14205350097827499987"
     }
   },
   "parameters": {
@@ -290,7 +290,7 @@
       "properties": {
         "virtualMachineResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
         "sqlManagement": "Full",
-        "sqlServerLicenseType": "[if(equals(parameters('sqlImageSku'), 'sqldev-gen2'), 'DR', 'PAYG')]",
+        "sqlServerLicenseType": "PAYG",
         "leastPrivilegeMode": "Enabled",
         "autoPatchingSettings": {
           "enable": true,

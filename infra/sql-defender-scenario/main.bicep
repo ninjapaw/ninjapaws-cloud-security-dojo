@@ -271,7 +271,10 @@ resource sqlVirtualMachine 'Microsoft.SqlVirtualMachine/sqlVirtualMachines@2023-
   properties: {
     virtualMachineResourceId: vm.id
     sqlManagement: 'Full'
-    sqlServerLicenseType: sqlImageSku == 'sqldev-gen2' ? 'DR' : 'PAYG'
+    // 'DR' (free disaster-recovery secondary) only applies to Standard/Enterprise editions;
+    // Developer edition (sqldev-gen2, this scenario's default) must use PAYG even though the
+    // edition itself carries no license cost.
+    sqlServerLicenseType: 'PAYG'
     leastPrivilegeMode: 'Enabled'
     autoPatchingSettings: {
       enable: true
