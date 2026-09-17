@@ -58,7 +58,9 @@ var webAppSubnetPrefix = '10.20.3.0/24'
 var sqlVmResourceName = vmName
 // Key Vault names are globally unique and capped at 24 characters; derive a short, RG-scoped
 // name instead of taking it as a param so callers never have to hand-pick one.
-var keyVaultResourceName = take(toLower(replace('${vmName}kv${uniqueString(resourceGroup().id)}', '-', '')), 24)
+// Folds in the deployment name (unique per run) as well as the RG, not just the RG, so a
+// redeploy never targets a vault name that's soft-deleted-but-purge-protected from a prior run.
+var keyVaultResourceName = take(toLower(replace('${vmName}kv${uniqueString(resourceGroup().id, deployment().name)}', '-', '')), 24)
 
 // Log Analytics workspace: required for Defender for Servers Plan 2 (MDE) and SQL Server audit/diagnostic data.
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
@@ -230,8 +232,10 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
         }
       }
     }
+    // Encryption at host is not enabled here because it requires the Microsoft.Compute/EncryptionAtHost
+    // subscription feature to be registered first, which not every subscription has opted into.
+    // Managed disks are still encrypted at rest by default via platform-managed keys either way.
     securityProfile: {
-      encryptionAtHost: true
       securityType: 'TrustedLaunch'
       uefiSettings: {
         secureBootEnabled: true
@@ -330,9 +334,12 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
     enableSoftDelete: true
-    // Purge protection is intentionally off: this training resource group is deleted and
-    // recreated often, and a protected vault would block reusing the same derived name.
-    enablePurgeProtection: false
+    // This subscription's policy baseline requires purge protection on every Key Vault, so it
+    // can't be turned off for easier redeploys. The name below folds in the deployment name (which
+    // the deploy script makes unique per run) specifically so a repeat deploy never collides with a
+    // soft-deleted vault from a prior run; the trade-off is that torn-down vaults linger, purgeable
+    // only after the default 90-day retention or by an operator with Key Vault purge permission.
+    enablePurgeProtection: true
     publicNetworkAccess: 'Enabled'
   }
 }
