@@ -105,3 +105,13 @@ config_scenario_ids() {
         }
     ' "$CONFIG_FILE"
 }
+
+html_escape() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+project_meta() {
+    local value
+    value="$(config_lookup "project.$1")"
+    printf '%s' "${value:-$2}"
+}

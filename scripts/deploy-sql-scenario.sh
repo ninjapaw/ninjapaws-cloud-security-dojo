@@ -431,12 +431,13 @@ render_check_rows_html() {
             *) cls=na; text='Not applicable' ;;
         esac
         printf '<tr><td>%s</td><td><span class="pill %s">%s</span></td><td>%s</td></tr>\n' \
-            "$label" "$cls" "$text" "$detail"
+            "$(html_escape "$label")" "$cls" "$text" "$(html_escape "$detail")"
     done
 }
 
 write_report() {
     local out_dir out_file pass_count fail_count unknown_count demo_site_html
+    local app_version verdict verdict_class verdict_note headline
     out_dir="$OUTPUT_ROOT/$ENVIRONMENT"
     mkdir -p "$out_dir"
     out_file="$out_dir/sql-deployment-$ENVIRONMENT.html"
@@ -448,11 +449,25 @@ write_report() {
             unknown) unknown_count=$((unknown_count + 1)) ;;
         esac
     done
+    app_version="$(sed -n 's/.*"version"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" 2>/dev/null | head -1)"
+    app_version="${app_version:-unknown}"
     if [[ -n "$WEB_APP_HOSTNAME" ]]; then
         demo_site_html="<a href=\"https://$WEB_APP_HOSTNAME/\" target=\"_blank\" rel=\"noopener\">https://$WEB_APP_HOSTNAME/</a><br><a href=\"https://$WEB_APP_HOSTNAME/api/status\" target=\"_blank\" rel=\"noopener\">/api/status</a> &middot; <a href=\"https://$WEB_APP_HOSTNAME/health\" target=\"_blank\" rel=\"noopener\">/health</a>"
     else
         demo_site_html='Not deployed (deployWebApp=false).'
     fi
+
+    if ((fail_count > 0)); then
+        verdict="FAILED"; verdict_class="bad"
+        verdict_note="$fail_count check(s) failed. Review the verification matrix below before relying on this environment."
+    elif ((unknown_count > 0)); then
+        verdict="COMPLETED WITH WARNINGS"; verdict_class="warn"
+        verdict_note="$unknown_count check(s) could not be confirmed automatically. Review the verification matrix below."
+    else
+        verdict="SUCCEEDED"; verdict_class="ok"
+        verdict_note="All $pass_count checks passed."
+    fi
+    headline="Scenario 2 deployment: $ENVIRONMENT"
 
     cat > "$out_file" <<HTML
 <!doctype html>
@@ -460,64 +475,110 @@ write_report() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ninja Paws Dojo — SQL Scenario Deployment ($ENVIRONMENT)</title>
+<title>$(html_escape "$(project_meta name 'Ninja Paws Cloud Security Dojo')") — Scenario 2 deployment ($ENVIRONMENT)</title>
 <style>
-  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#0a1220; color:#d9e7f5; }
-  body { margin:0; padding:24px 32px 48px; }
-  h1 { color:#f2a24a; font-size:20px; letter-spacing:.03em; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 18px; margin:18px 0 28px; }
-  .item { border:1px solid #28415c; border-radius:10px; padding:10px 14px; background:#0d1a2b; }
-  .label { color:#8fa6bc; font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
-  .value { font-size:14px; margin-top:4px; }
-  table { border-collapse:collapse; width:100%; margin-top:8px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #28415c; font-size:13px; }
-  th { color:#8fa6bc; text-transform:uppercase; font-size:11px; letter-spacing:.06em; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
-  .pill.ok { background:#123a25; color:#7be2a5; }
-  .pill.bad { background:#3a1c1c; color:#f0b4b4; }
-  .pill.warn { background:#3a2f14; color:#f2cf7c; }
-  .pill.na { background:#1c2636; color:#8fa6bc; }
-  .warn-strip { padding:10px 14px; border-radius:8px; background:#3a1c1c; border:1px solid #6d2b2b; color:#f0b4b4; font-size:12px; margin-bottom:20px; }
-  .foot { margin-top:28px; color:#58718b; font-size:11px; }
-  a { color:#7cc4f2; }
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #eef3f8; color: #152238; }
+    body { margin: 0; padding: 32px; background: radial-gradient(circle at 85% 0%, #cde7f2 0, transparent 35%), #eef3f8; }
+    main { max-width: 1040px; margin: auto; }
+    header, section { background: #fff; border: 1px solid #dbe3ee; border-radius: 14px; box-shadow: 0 8px 24px #17203312; }
+    header { padding: 28px; margin-bottom: 18px; border-top: 5px solid #d98932; }
+    .brand { display: flex; align-items: center; gap: 12px; color: #102f4d; letter-spacing: .08em; font-size: 13px; }
+    .brand small { display: block; color: #77869a; font-size: 9px; letter-spacing: .16em; margin-top: 3px; }
+    .mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px 12px 12px 4px; background: #102f4d; color: #f2a24a; font-weight: 800; letter-spacing: 0; }
+    h1 { margin: 24px 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 6px; font-size: 18px; }
+    p { margin: 6px 0; color: #5b6678; }
+    section { padding: 22px; margin: 18px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .item { background: #f7f9fc; border-radius: 10px; padding: 14px; }
+    .label { color: #68758a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .value { margin-top: 5px; font-weight: 650; overflow-wrap: anywhere; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; background: #eef2f8; padding: 1px 5px; border-radius: 5px; }
+    a { color: #1769aa; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 99px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; white-space: nowrap; }
+    .pill.ok { background: #e7f5ee; color: #176b43; }
+    .pill.bad { background: #fdeaea; color: #a02020; }
+    .pill.warn { background: #fdf3e0; color: #8a5a10; }
+    .pill.na { background: #f0eef6; color: #5b4f80; }
+    .verdict { font-size: 15px; padding: 7px 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e7edf5; vertical-align: top; overflow-wrap: anywhere; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #68758a; }
+    .banner { padding: 14px 16px; border-radius: 10px; background: #fdeaea; border: 1px solid #f3c9c9; color: #7d1f1f; margin-top: 14px; }
+    footer { margin: 24px 0 8px; padding: 20px 22px; border-top: 3px solid #d98932; background: #fff; border-radius: 14px; border: 1px solid #dbe3ee; }
+    footer p { margin: 5px 0; font-size: 12px; color: #68758a; }
+    footer .disclaimer { color: #7d1f1f; background: #fdeaea; border: 1px solid #f3c9c9; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+    @media (max-width: 600px) { body { padding: 14px; } h1 { font-size: 23px; } }
+    @media print {
+        @page { size: A4; margin: 14mm 12mm; }
+        :root, body { background: #fff !important; }
+        body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        main { max-width: none; }
+        header, section, footer { box-shadow: none; border: 1px solid #d4dbe6; border-radius: 8px; break-inside: avoid; page-break-inside: avoid; }
+        table { break-inside: avoid; page-break-inside: avoid; }
+        tr { break-inside: avoid; page-break-inside: avoid; }
+        thead { display: table-header-group; }
+    }
 </style>
 </head>
 <body>
-<h1>Ninja Paws Cloud Security Dojo — Scenario 2: SQL Server on Azure VM Protection</h1>
-<div class="warn-strip"><strong>USE AT YOUR OWN RISK.</strong> This provisions a billable Azure VM and Log Analytics workspace. Keep it in an isolated subscription and delete it with the uninstall command when the exercise ends.</div>
-<div class="grid">
-  <div class="item"><div class="label">Scenario</div><div class="value">$SCENARIO_NAME</div></div>
-  <div class="item"><div class="label">Environment</div><div class="value">$ENVIRONMENT</div></div>
-  <div class="item"><div class="label">Resource group</div><div class="value">$RESOURCE_GROUP</div></div>
-  <div class="item"><div class="label">Region</div><div class="value">$LOCATION</div></div>
-  <div class="item"><div class="label">VM name / size</div><div class="value">$VM_NAME / $VM_SIZE</div></div>
-  <div class="item"><div class="label">SQL image</div><div class="value">MicrosoftSQLServer:sql2022-ws2022:$SQL_IMAGE_SKU</div></div>
-  <div class="item"><div class="label">Sample database</div><div class="value">Futon Manufacturing (<a href="https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/futon-manufacturing" target="_blank" rel="noopener">source</a>)</div></div>
-  <div class="item"><div class="label">Defender for Servers</div><div class="value">$DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN</div></div>
-  <div class="item"><div class="label">Defender for SQL</div><div class="value">$DEFENDER_SQL_PLAN</div></div>
-  <div class="item"><div class="label">Pawton Manufacturing dashboard</div><div class="value">$WEB_APP_NAME ($WEB_APP_PLAN_SKU)</div></div>
-  <div class="item"><div class="label">Checks passed</div><div class="value">$pass_count / ${#CHECK_RESULTS[@]}</div></div>
-  <div class="item"><div class="label">Checks failed / not sure</div><div class="value">$fail_count / $unknown_count</div></div>
-  <div class="item"><div class="label">Run started</div><div class="value">$RUN_STARTED_ISO</div></div>
-</div>
-<h2>Verification matrix</h2>
-<table>
-  <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
-  <tbody>
+<main>
+    <header>
+        <div class="brand"><span class="mark">NP</span><span><strong>NINJA PAWS</strong><small> CLOUD SECURITY DOJO</small></span></div>
+        <h1>$(html_escape "$headline")</h1>
+        <p>Azure lifecycle command <code>deploy-sql-scenario.sh deploy</code> targeting environment <strong>$(html_escape "$ENVIRONMENT")</strong>.</p>
+        <p><span class="pill $verdict_class verdict">$(html_escape "$verdict")</span></p>
+        <p>$(html_escape "$verdict_note")</p>
+    </header>
+
+    <section>
+        <h2>Executive summary</h2>
+        <div class="grid">
+            <div class="item"><div class="label">Scenario</div><div class="value">$(html_escape "$SCENARIO_NAME")<br><code>$(html_escape "$SCENARIO_ID")</code></div></div>
+            <div class="item"><div class="label">Environment</div><div class="value">$(html_escape "$ENVIRONMENT")</div></div>
+            <div class="item"><div class="label">Resource group</div><div class="value">$(html_escape "$RESOURCE_GROUP")</div></div>
+            <div class="item"><div class="label">Region</div><div class="value">$(html_escape "$LOCATION")</div></div>
+            <div class="item"><div class="label">VM name / size</div><div class="value">$(html_escape "$VM_NAME") / $(html_escape "$VM_SIZE")</div></div>
+            <div class="item"><div class="label">SQL image</div><div class="value">MicrosoftSQLServer:sql2022-ws2022:$(html_escape "$SQL_IMAGE_SKU")</div></div>
+            <div class="item"><div class="label">Sample database</div><div class="value">Futon Manufacturing (<a href="https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/futon-manufacturing" target="_blank" rel="noopener">source</a>)</div></div>
+            <div class="item"><div class="label">Defender for Servers</div><div class="value">$(html_escape "$DEFENDER_SERVERS_PLAN") / $(html_escape "$DEFENDER_SERVERS_SUBPLAN")</div></div>
+            <div class="item"><div class="label">Defender for SQL</div><div class="value">$(html_escape "$DEFENDER_SQL_PLAN")</div></div>
+            <div class="item"><div class="label">Pawton Manufacturing dashboard</div><div class="value">$(html_escape "$WEB_APP_NAME") ($(html_escape "$WEB_APP_PLAN_SKU"))</div></div>
+            <div class="item"><div class="label">Checks passed</div><div class="value">$pass_count / ${#CHECK_RESULTS[@]}</div></div>
+            <div class="item"><div class="label">Run started (UTC)</div><div class="value">$(html_escape "$RUN_STARTED_ISO")</div></div>
+        </div>
+        $( ((fail_count > 0)) && printf '<div class="banner"><strong>%s check(s) failed.</strong> See the verification matrix below.</div>' "$fail_count" )
+    </section>
+
+    <section>
+        <h2>Verification matrix</h2>
+        <p>Every automated check run against the live Azure environment after deployment.</p>
+        <table>
+            <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+            <tbody>
 $(render_check_rows_html)
-  </tbody>
-</table>
-<h2>Environment access</h2>
-<div class="grid">
-  <div class="item"><div class="label">Live demo site</div><div class="value">$demo_site_html</div></div>
-  <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">$RESOURCE_GROUP</a></div></div>
-  <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $VM_NAME &gt; Connect &gt; Bastion. No public IP is exposed on this VM.</div></div>
-  <div class="item"><div class="label">VM admin credentials</div><div class="value"><code>$OUTPUT_ROOT/$ENVIRONMENT/sql-vm-credentials.txt</code><br>Local file only, not committed. Delete it once you finish the exercise.</div></div>
-  <div class="item"><div class="label">SQL app login password</div><div class="value">Key Vault <code>${KEY_VAULT_NAME:-not deployed}</code>, secret <code>sql-app-login-password</code></div></div>
-  <div class="item"><div class="label">Defender recommendations</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>
-  <div class="item"><div class="label">Bootstrap log on the VM</div><div class="value"><code>C:\NinjaPawsDojo\bootstrap.log</code></div></div>
-</div>
-<div class="foot">Ninja Paws Cloud Security Dojo &middot; Independent community project &middot; Provided as-is, without warranty. Generated $(date -u +%Y-%m-%dT%H:%M:%SZ).</div>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Environment access</h2>
+        <div class="grid">
+            <div class="item"><div class="label">Live demo site</div><div class="value">$demo_site_html</div></div>
+            <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/overview" target="_blank" rel="noopener">$(html_escape "$RESOURCE_GROUP")</a></div></div>
+            <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $(html_escape "$VM_NAME") &gt; Connect &gt; Bastion. No public IP is exposed on this VM.</div></div>
+            <div class="item"><div class="label">VM admin credentials</div><div class="value"><code>$(html_escape "$OUTPUT_ROOT/$ENVIRONMENT/sql-vm-credentials.txt")</code><br>Local file only, not committed. Delete it once you finish the exercise.</div></div>
+            <div class="item"><div class="label">SQL app login password</div><div class="value">Key Vault <code>$(html_escape "${KEY_VAULT_NAME:-not deployed}")</code>, secret <code>sql-app-login-password</code></div></div>
+            <div class="item"><div class="label">Defender recommendations</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>
+            <div class="item"><div class="label">Bootstrap log on the VM</div><div class="value"><code>C:\NinjaPawsDojo\bootstrap.log</code></div></div>
+        </div>
+    </section>
+
+    <footer>
+        <p class="disclaimer"><strong>USE AT YOUR OWN RISK.</strong> $(html_escape "$(project_meta disclaimer 'Provided as-is, without warranty of any kind.')") This provisions a billable Azure VM and Log Analytics workspace; keep it in an isolated subscription and delete it with the uninstall command when the exercise ends.</p>
+        <p>$(html_escape "$(project_meta name 'Ninja Paws Cloud Security Dojo')") v$(html_escape "$app_version") &middot; $(html_escape "$(project_meta copyright 'Copyright (c) Ninja Paws')") &middot; Licensed under $(html_escape "$(project_meta license MIT)") &middot; Provided as-is, without warranty. Generated $(date -u +%Y-%m-%dT%H:%M:%SZ).</p>
+    </footer>
+</main>
 </body>
 </html>
 HTML

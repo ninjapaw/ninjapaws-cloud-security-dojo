@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "3192832342669323086"
+      "templateHash": "7515643065886266594"
     }
   },
   "parameters": {
@@ -471,8 +471,7 @@
         "httpsOnly": true,
         "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'webapp-integration-subnet')]",
         "siteConfig": {
-          "vnetRouteAllEnabled": true,
-          "linuxFxVersion": "NODE|20-lts",
+          "linuxFxVersion": "NODE|22-lts",
           "alwaysOn": true,
           "http20Enabled": true,
           "minTlsVersion": "1.2",
@@ -492,7 +491,7 @@
             },
             {
               "name": "SQL_APP_LOGIN_PASSWORD",
-              "value": "[format('@Microsoft.KeyVault(SecretUri={0})', reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultResourceName'), 'sql-app-login-password'), '2024-11-01').secretUri)]"
+              "value": "[parameters('sqlAppLoginPassword')]"
             },
             {
               "name": "WEBSITES_PORT",
@@ -508,7 +507,11 @@
             },
             {
               "name": "WEBSITE_NODE_DEFAULT_VERSION",
-              "value": "~20"
+              "value": "~22"
+            },
+            {
+              "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",
+              "value": "600"
             }
           ]
         }
@@ -516,7 +519,6 @@
       "dependsOn": [
         "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('{0}-pe', variables('keyVaultResourceName')), 'default')]",
         "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
-        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultResourceName'), 'sql-app-login-password')]",
         "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('webAppName')))]"
       ]
     },

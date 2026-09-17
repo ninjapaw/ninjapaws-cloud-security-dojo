@@ -193,12 +193,29 @@ Invoke-SqlText -Query $auditSql
 #    never the shared sa account. The password is supplied by the deploy script (the same value
 #    it also writes to Key Vault for the dashboard Web App), never generated locally, so both
 #    sides of the connection always agree on the credential.
+#
+#    This marketplace image defaults to Windows-only authentication (registry LoginMode = 1), so
+#    a SQL login can be created successfully yet still fail every connection attempt with the
+#    generic "Login failed for user" error -- indistinguishable from a wrong password without
+#    checking SERVERPROPERTY('IsIntegratedSecurityOnly'). Enable mixed mode before creating the
+#    login and restart the service so the change takes effect immediately.
+$loginModePath = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQLServer'
+if ((Get-ItemProperty -Path $loginModePath -Name LoginMode -ErrorAction SilentlyContinue).LoginMode -ne 2) {
+    Set-ItemProperty -Path $loginModePath -Name LoginMode -Value 2
+    Restart-Service -Name MSSQLSERVER -Force
+    Start-Sleep -Seconds 10
+    Write-Host "Enabled SQL Server + Windows Authentication mode (was Windows-only) and restarted the service."
+}
 $appPassword = $AppLoginPassword
 $loginSql = @"
 USE master;
 IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$AppLoginName')
 BEGIN
     CREATE LOGIN [$AppLoginName] WITH PASSWORD = N'$appPassword', CHECK_POLICY = ON, CHECK_EXPIRATION = ON;
+END
+ELSE
+BEGIN
+    ALTER LOGIN [$AppLoginName] WITH PASSWORD = N'$appPassword';
 END
 USE $DatabaseName;
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$AppLoginName')

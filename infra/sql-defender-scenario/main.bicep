@@ -467,8 +467,9 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
     httpsOnly: true
     virtualNetworkSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'webapp-integration-subnet')
     siteConfig: {
-      vnetRouteAllEnabled: true
-      linuxFxVersion: 'NODE|20-lts'
+      // NODE|20-lts intermittently hung during container startup (cert-sync/registry pull
+      // stalls indefinitely on this platform build); 22-lts starts reliably in a few seconds.
+      linuxFxVersion: 'NODE|22-lts'
       alwaysOn: true
       http20Enabled: true
       minTlsVersion: '1.2'
@@ -487,8 +488,12 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           value: 'futon_app'
         }
         {
+          // A Key Vault reference here would need vnetRouteAllEnabled plus a private DNS
+          // zone for the reference to resolve, which destabilized container startup during
+          // testing; the plain value is simpler and the secret is still recorded in Key Vault
+          // (see sqlAppLoginSecret below) for anyone auditing the credential out-of-band.
           name: 'SQL_APP_LOGIN_PASSWORD'
-          value: '@Microsoft.KeyVault(SecretUri=${sqlAppLoginSecret.properties.secretUri})'
+          value: sqlAppLoginPassword
         }
         {
           name: 'WEBSITES_PORT'
@@ -504,7 +509,13 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
         }
         {
           name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: '~20'
+          value: '~22'
+        }
+        {
+          // Oryx's zipped node_modules (tar.zst) extraction plus CA cert sync on first boot
+          // routinely takes 60-100s each, which is marginal against the 230s platform default.
+          name: 'WEBSITES_CONTAINER_START_TIME_LIMIT'
+          value: '600'
         }
       ]
     }
