@@ -219,19 +219,19 @@ Defender CSPM extensions are applied as one set, because the API replaces the wh
 | `ServerlessContainers`                        | `true`  | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | Registry access, required for full serverless container and image posture                                                                |
 | `AgentlessDiscoveryForKubernetes`             | `false` | No AKS or Kubernetes workload is deployed                                                                                                |
-| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                                                                          |
+| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                                                                         |
 | `SensitiveDataDiscovery`                      | `false` | This project stores no data; the extension reads customer data, so it stays opt-in                                                       |
 | `EntraPermissionsManagement`                  | `false` | CIEM has tenant-wide scope beyond this scenario                                                                                          |
 | `ApiPosture`                                  | `false` | Preview capability is outside the required App Service and ACR scenario                                                                  |
 
 Defender for Containers extensions follow the same pattern:
 
-| Containers extension                          | Default | Why                                                                                    |
-| --------------------------------------------- | ------- | -------------------------------------------------------------------------------------- |
-| `ContainerRegistriesVulnerabilityAssessments` | `true`  | On; generates and links findings artifacts for every new or updated ACR image          |
-| `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                          |
-| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                      |
-| `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                          |
+| Containers extension                          | Default | Why                                                                           |
+| --------------------------------------------- | ------- | ----------------------------------------------------------------------------- |
+| `ContainerRegistriesVulnerabilityAssessments` | `true`  | On; generates and links findings artifacts for every new or updated ACR image |
+| `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                 |
+| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                              |
+| `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                 |
 
 DevOps and code security settings:
 

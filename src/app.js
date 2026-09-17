@@ -33,23 +33,42 @@ function getRuntimeVerification() {
     return {
       nginx_binary_version: null,
       nginx_package_version: null,
+      scenario_config_state: null,
+      map_regex_enabled: false,
+      vulnerability_detected: null,
+      detection_reason: "Runtime detection evidence is unavailable.",
     };
   }
 }
 
 function getVulnerabilityStatus(runtimeVerification) {
+  const configuredStatus = String(process.env.VULNERABILITY_STATUS ?? "")
+    .trim()
+    .toLowerCase();
+
   if (runtimeVerification.vulnerability_detected === true) return "vulnerable";
   if (runtimeVerification.scenario_config_state === "remediated")
+    return "remediated";
+  if (configuredStatus === "vulnerable") return "vulnerable";
+  if (configuredStatus === "patched" || configuredStatus === "remediated")
     return "remediated";
   return "not_detected";
 }
 
 function getRuntimeStatus() {
   const runtimeVerification = getRuntimeVerification();
+  const configuredStatus = String(process.env.VULNERABILITY_STATUS ?? "")
+    .trim()
+    .toLowerCase();
+  const vulnerabilityStatus = getVulnerabilityStatus(runtimeVerification);
+  const vulnerabilityDetected =
+    runtimeVerification.vulnerability_detected === true ||
+    (configuredStatus === "vulnerable" && vulnerabilityStatus === "vulnerable");
+
   return {
     nginxVersion: process.env.NGINX_VERSION || DEFAULT_NGINX_VERSION,
-    vulnerabilityStatus: getVulnerabilityStatus(runtimeVerification),
-    vulnerabilityDetected: runtimeVerification.vulnerability_detected === true,
+    vulnerabilityStatus,
+    vulnerabilityDetected,
     defenderEnabled: isEnabled("DEFENDER_ENABLED"),
     detectionReason:
       runtimeVerification.detection_reason ||
@@ -143,10 +162,9 @@ app.get("/evidence", evidenceRateLimit, (req, res) => {
 
 // API status endpoint
 app.get("/api/status", evidenceRateLimit, (req, res) => {
-  const { nginxVersion, vulnerabilityStatus } = getRuntimeStatus();
+  const { nginxVersion, vulnerabilityStatus, vulnerabilityDetected } =
+    getRuntimeStatus();
   const runtimeVerification = getRuntimeVerification();
-  const vulnerabilityDetected =
-    runtimeVerification.vulnerability_detected === true;
 
   res.json({
     environment: "Ninja Paws Cloud Security Dojo",
@@ -499,12 +517,13 @@ app.get("/", (req, res) => {
   res.send(html);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🥷 Ninja Paws Cloud Security Dojo`);
-  console.log(`🏯 Server running on port ${PORT}`);
-  console.log(`⚔ Remediation Mission: Detect and fix CVE-2026-42533`);
-  console.log(`✅ Endpoints: / | /health | /evidence | /api/status`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🥷 Ninja Paws Cloud Security Dojo`);
+    console.log(`🏯 Server running on port ${PORT}`);
+    console.log(`⚔ Remediation Mission: Detect and fix CVE-2026-42533`);
+    console.log(`✅ Endpoints: / | /health | /evidence | /api/status`);
+  });
+}
 
 module.exports = app;
