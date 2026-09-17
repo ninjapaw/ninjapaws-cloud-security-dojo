@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "18311111263118467981"
+      "templateHash": "5380073641140607151"
     }
   },
   "parameters": {
@@ -115,6 +115,7 @@
     "bastionSubnetPrefix": "10.20.2.0/26",
     "webAppSubnetPrefix": "10.20.3.0/24",
     "sqlVmResourceName": "[parameters('vmName')]",
+    "computerName": "[take(replace(parameters('vmName'), '-', ''), 15)]",
     "keyVaultResourceName": "[take(toLower(replace(format('{0}kv{1}', parameters('vmName'), uniqueString(resourceGroup().id, deployment().name)), '-', '')), 24)]"
   },
   "resources": [
@@ -233,7 +234,7 @@
           "vmSize": "[parameters('vmSize')]"
         },
         "osProfile": {
-          "computerName": "[parameters('vmName')]",
+          "computerName": "[variables('computerName')]",
           "adminUsername": "[parameters('adminUsername')]",
           "adminPassword": "[parameters('adminPassword')]",
           "windowsConfiguration": {

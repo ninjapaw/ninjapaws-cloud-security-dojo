@@ -56,6 +56,9 @@ var vmSubnetPrefix = '10.20.1.0/24'
 var bastionSubnetPrefix = '10.20.2.0/26'
 var webAppSubnetPrefix = '10.20.3.0/24'
 var sqlVmResourceName = vmName
+// Windows computer names are capped at 15 characters and can't contain hyphens meaningfully longer
+// than that; the Azure resource name (vmName) has no such limit, so derive a short one separately.
+var computerName = take(replace(vmName, '-', ''), 15)
 // Key Vault names are globally unique and capped at 24 characters; derive a short, RG-scoped
 // name instead of taking it as a param so callers never have to hand-pick one.
 // Folds in the deployment name (unique per run) as well as the RG, not just the RG, so a
@@ -208,7 +211,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
       vmSize: vmSize
     }
     osProfile: {
-      computerName: vmName
+      computerName: computerName
       adminUsername: adminUsername
       adminPassword: adminPassword
       windowsConfiguration: {
