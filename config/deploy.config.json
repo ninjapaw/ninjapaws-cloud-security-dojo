@@ -89,7 +89,7 @@
   },
   "sqlScenario": {
     "vmSize": "Standard_D4s_v5",
-    "sqlImageSku": "sqldev",
+    "sqlImageSku": "sqldev-gen2",
     "deployBastion": "true",
     "deployWebApp": "true",
     "webAppPlanSku": "B1",

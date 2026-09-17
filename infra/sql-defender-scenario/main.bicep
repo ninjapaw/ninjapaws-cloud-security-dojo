@@ -20,12 +20,12 @@ param adminPassword string
 param vmSize string = 'Standard_D4s_v5'
 
 @allowed([
-  'sqldev'
-  'standard'
-  'enterprise'
+  'sqldev-gen2'
+  'standard-gen2'
+  'enterprise-gen2'
 ])
-@description('SQL Server 2022 on Windows Server 2022 marketplace image SKU. sqldev is free for training/dev use.')
-param sqlImageSku string = 'sqldev'
+@description('SQL Server 2022 on Windows Server 2022 marketplace image SKU. Must be a -gen2 SKU: Trusted Launch (below) requires a generation 2 image, and the publisher no longer offers generation 1 SKUs for this offer. sqldev-gen2 is free for training/dev use.')
+param sqlImageSku string = 'sqldev-gen2'
 
 @description('Log Analytics workspace name backing Defender for Servers and SQL auditing.')
 param workspaceName string = '${vmName}-law'
@@ -261,7 +261,7 @@ resource sqlVirtualMachine 'Microsoft.SqlVirtualMachine/sqlVirtualMachines@2023-
   properties: {
     virtualMachineResourceId: vm.id
     sqlManagement: 'Full'
-    sqlServerLicenseType: sqlImageSku == 'sqldev' ? 'DR' : 'PAYG'
+    sqlServerLicenseType: sqlImageSku == 'sqldev-gen2' ? 'DR' : 'PAYG'
     leastPrivilegeMode: 'Enabled'
     autoPatchingSettings: {
       enable: true
