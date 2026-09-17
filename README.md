@@ -362,6 +362,8 @@ bash scripts/setup-azure-github-oidc.sh --environment dev
 
 Use `--defaults` for Central US and the current Azure subscription, or choose a numbered region during the interactive prompt. Pass `--subscription <id>` when you need to change subscriptions. Review the generated GitHub Environment variables before enabling `--provision`; Defender plan tiers can incur subscription charges.
 
+The same command also creates Scenario 2's resource group (`NP-ninjapaws-dojo-sql-<env>-CentralUS` by default, override with `--sql-resource-group`) and grants the same OIDC identity Contributor and Role Based Access Control Administrator there — so one GitHub Environment/service principal can run either `deploy.yml` (Scenario 1) or `deploy-sql-scenario.yml` (Scenario 2), including from pawprint's hosted dispatch.
+
 ## Azure Deployment
 
 Use `scripts/manage.sh` as the management entry point. With no arguments, it runs a read-only wizard that detects `dev` or `main` from the current Git branch, validates the Azure connection, confirms subscription read access, inspects the configured environment, and offers only lifecycle actions supported by the detected state. `scripts/deploy.sh` remains available for direct automation and supports `plan`, `doctor`, `provision`, `build`, `deploy`, `verify`, `repair`, and guarded `uninstall` stages.
@@ -485,7 +487,8 @@ Package metadata must match the repository name and description, remain MIT lice
 
 - `validate-infrastructure.yml`: Bash, package, ARM JSON, and Bicep checks
 - `validate-remediation.yml`: container remediation and endpoint validation
-- `deploy.yml`: branch-aware staged Azure deployment
+- `deploy.yml`: branch-aware staged Azure deployment (Scenario 1: NGINX CVE / App Service + ACR)
+- `deploy-sql-scenario.yml`: plan/doctor/deploy/uninstall lifecycle for Scenario 2 (SQL Server on Azure VM); a separate workflow because it's a separate architecture and resource group from Scenario 1
 - `promote-dev-to-main.yml`: opens the dev-to-main promotion PR
 - `request-release.yml`: prepares a versioned release PR
 - `publish-release.yml`: publishes tags, GitHub Releases, and ACR images
