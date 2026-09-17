@@ -135,9 +135,12 @@ Write-Host "== Applying SQL Server security best practices =="
 # 1. Transparent Data Encryption protects the data and log files at rest.
 $tdeSql = @"
 USE master;
-IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'FutonManufacturingTDECert')
+IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
 BEGIN
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = '$(Get-RandomPassword)';
+END
+IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'FutonManufacturingTDECert')
+BEGIN
     CREATE CERTIFICATE FutonManufacturingTDECert WITH SUBJECT = 'Futon Manufacturing TDE protector';
 END
 USE $DatabaseName;
