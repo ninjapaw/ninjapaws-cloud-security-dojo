@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "5380073641140607151"
+      "templateHash": "3389359388202540835"
     }
   },
   "parameters": {
@@ -240,7 +240,7 @@
           "windowsConfiguration": {
             "enableAutomaticUpdates": true,
             "patchSettings": {
-              "patchMode": "AutomaticByPlatform"
+              "patchMode": "AutomaticByOS"
             }
           }
         },

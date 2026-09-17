@@ -216,8 +216,11 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
       adminPassword: adminPassword
       windowsConfiguration: {
         enableAutomaticUpdates: true
+        // AutomaticByPlatform (VM Guest Patching) is not supported on this SQL Server
+        // marketplace image; the SQL IaaS Agent's own autoPatchingSettings (below) already
+        // schedules OS/engine patching, so plain Windows Update (AutomaticByOS) is enough here.
         patchSettings: {
-          patchMode: 'AutomaticByPlatform'
+          patchMode: 'AutomaticByOS'
         }
       }
     }
