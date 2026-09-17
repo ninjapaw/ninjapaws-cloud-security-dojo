@@ -34,7 +34,7 @@ bash scripts/deploy-sql-scenario.sh doctor --environment dev
 bash scripts/deploy-sql-scenario.sh deploy --environment dev
 ```
 
-Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, and the Futon Manufacturing bootstrap result), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings. When finished, tear the environment down to avoid ongoing VM charges:
+Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, and the Futon Manufacturing bootstrap result), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings. The generated Windows administrator password is written once to `output/dev/sql-vm-credentials.txt` (gitignored, never printed to the console or captured in CI logs) because it is otherwise unrecoverable and is required to sign in over Bastion; treat that file as a secret and delete it once you finish the exercise. When finished, tear the environment down to avoid ongoing VM charges:
 
 ```bash
 bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes

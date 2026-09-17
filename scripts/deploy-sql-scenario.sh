@@ -9,12 +9,12 @@
 
 set -Eeuo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -116,7 +116,9 @@ Options:
   --resource-group <name>    Override the resource group name
   --vm-name <name>           Override the VM name
   --admin-username <name>    Windows admin username (default: ninjapawsadmin)
-  --defaults                 Accept all config defaults without prompting
+  --defaults                 Accepted for CLI consistency with deploy.sh; this script has no
+                              interactive setting prompts to skip. Use --yes to also skip the
+                              deployment confirmation prompt.
   --yes                      Skip confirmation prompts
   --help                     Show this help
 EOF
@@ -224,6 +226,7 @@ cmd_doctor() {
         warn "Could not resolve the VM size family for quota checks."
     fi
     info "Checking resource providers..."
+    local provider state
     for provider in Microsoft.Compute Microsoft.Network Microsoft.SqlVirtualMachine Microsoft.OperationalInsights Microsoft.Security; do
         state="$(az provider show --namespace "$provider" --query registrationState -o tsv 2>/dev/null || true)"
         [[ "$state" == Registered ]] && ok "$provider: Registered" || warn "$provider: ${state:-unknown} (deploy will attempt to register it)"
@@ -241,19 +244,23 @@ ensure_resource_group() {
 }
 
 generate_password() {
-    # 24 random bytes, base64, stripped to alnum, plus fixed complexity suffix so it always
-    # satisfies Windows password policy without ever being echoed to stdout.
-    local raw
+    # 24 alnum characters plus one random special character inserted at a random position,
+    # so the generated password satisfies Windows complexity rules without any fixed,
+    # predictable suffix (a static suffix would leak part of every password we generate).
+    local core specials='!@#$%^&*-_=' special_char pos
     if command -v openssl >/dev/null 2>&1; then
-        raw="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9')"
+        core="$(openssl rand -base64 33 | tr -dc 'A-Za-z0-9')"
     else
-        raw="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+        core="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
     fi
-    printf '%s!9Aa' "${raw:0:20}"
+    core="${core:0:24}"
+    special_char="${specials:$((RANDOM % ${#specials})):1}"
+    pos=$((RANDOM % (${#core} + 1)))
+    printf '%s%s%s' "${core:0:pos}" "$special_char" "${core:pos}"
 }
 
 run_deployment() {
-    local admin_password deployment_name output_json vm_principal_id
+    local admin_password deployment_name output_json vm_principal_id creds_dir creds_file
     admin_password="$(generate_password)"
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -266,10 +273,32 @@ run_deployment() {
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
                      deployBastion="$DEPLOY_BASTION" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
-    unset admin_password
     ok "Infrastructure deployed."
 
+    # The generated admin password is otherwise unrecoverable, and this VM has no public IP,
+    # so the only way to sign in over Bastion afterward is to persist it to the gitignored
+    # local output/ directory. Never print it to stdout, which CI systems capture in logs.
+    creds_dir="$OUTPUT_ROOT/$ENVIRONMENT"
+    mkdir -p "$creds_dir"
+    creds_file="$creds_dir/sql-vm-credentials.txt"
+    {
+        printf 'VM name:        %s\n' "$VM_NAME"
+        printf 'Admin username: %s\n' "$ADMIN_USERNAME"
+        printf 'Admin password: %s\n' "$admin_password"
+        printf 'Generated:      %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'Connect through Azure Bastion in the portal; this VM has no public IP.\n'
+    } > "$creds_file"
+    chmod 600 "$creds_file" 2>/dev/null || true
+    unset admin_password
+    warn "Admin credentials saved to $creds_file — treat it as a secret and delete it once you finish the exercise."
+    record_check "VM admin credentials saved locally" pass "Written to $creds_file (not committed; output/ is gitignored). Delete this file when the exercise ends."
+
     vm_principal_id="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).principalId.value)" 2>/dev/null || true)"
+    if [[ -n "$vm_principal_id" ]]; then
+        record_check "VM has a system-assigned managed identity" pass "principalId $vm_principal_id is available for future Key Vault or RBAC assignments."
+    else
+        record_check "VM has a system-assigned managed identity" unknown "Could not read the managed identity principal ID from deployment outputs."
+    fi
 
     info "Activating Defender for Servers ($DEFENDER_SERVERS_SUBPLAN) — includes Defender for Endpoint onboarding..."
     if az security pricing create --name "$DEFENDER_SERVERS_PLAN" --tier Standard --sub-plan "$DEFENDER_SERVERS_SUBPLAN" --output none 2>/dev/null; then
@@ -287,15 +316,13 @@ run_deployment() {
 
     info "Waiting for the futon-manufacturing bootstrap extension to finish (this restores the sample database)..."
     local attempt=0 ext_state=""
-    while ((attempt < 40)); do
+    while ((attempt < 60)); do
         ext_state="$(az vm extension show --resource-group "$RESOURCE_GROUP" --vm-name "$VM_NAME" --name futon-manufacturing-bootstrap --query provisioningState -o tsv 2>/dev/null || true)"
         [[ "$ext_state" == Succeeded || "$ext_state" == Failed ]] && break
         sleep 15
         attempt=$((attempt + 1))
     done
     [[ "$ext_state" == Succeeded ]] && ok "Bootstrap extension finished: $ext_state" || warn "Bootstrap extension state: ${ext_state:-unknown} — check the VM's C:\\NinjaPawsDojo\\bootstrap.log over Bastion."
-
-    printf '%s' "$vm_principal_id"
 }
 
 run_verification() {
@@ -436,6 +463,7 @@ $(render_check_rows_html)
 <div class="grid">
   <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">$RESOURCE_GROUP</a></div></div>
   <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $VM_NAME &gt; Connect &gt; Bastion. No public IP is exposed on this VM.</div></div>
+  <div class="item"><div class="label">VM admin credentials</div><div class="value"><code>$OUTPUT_ROOT/$ENVIRONMENT/sql-vm-credentials.txt</code><br>Local file only, not committed. Delete it once you finish the exercise.</div></div>
   <div class="item"><div class="label">Defender recommendations</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>
   <div class="item"><div class="label">Bootstrap log on the VM</div><div class="value"><code>C:\NinjaPawsDojo\bootstrap.log</code></div></div>
 </div>

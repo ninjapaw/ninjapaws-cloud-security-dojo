@@ -31,9 +31,15 @@ Start-Transcript -Path $logPath -Append
 
 function Get-RandomPassword {
     param([int]$Length = 24)
+    $specials = '!@#$%^&*-_='
     $bytes = New-Object byte[] $Length
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    return ([Convert]::ToBase64String($bytes) -replace '[^a-zA-Z0-9]', 'x').Substring(0, $Length) + '!9Aa'
+    $core = ([Convert]::ToBase64String($bytes) -replace '[^a-zA-Z0-9]', 'x').Substring(0, $Length)
+    # Insert one random special character at a random position instead of a fixed suffix,
+    # so no part of the generated password is predictable across runs.
+    $specialChar = $specials[(Get-Random -Maximum $specials.Length)]
+    $insertAt = Get-Random -Maximum ($core.Length + 1)
+    return $core.Insert($insertAt, $specialChar)
 }
 
 Write-Host "== Ninja Paws Dojo :: Futon Manufacturing bootstrap starting =="
