@@ -15,6 +15,11 @@ on:
         default: dev
         type: choice
         options: [dev, prod]
+      confirm_resource_group:
+        description: "Uninstall only: type the exact resource group name to confirm deletion"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -33,6 +38,9 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      # Matches config/deploy.config.json's environments.<env>.sqlResourceGroup default; this
+      # workflow never overrides --resource-group, so the script always resolves to this name.
+      SQL_RESOURCE_GROUP: ${{ inputs.environment == 'prod' && 'NP-ninjapaws-dojo-sql-Prod-CentralUS' || 'NP-ninjapaws-dojo-sql-Dev-CentralUS' }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -46,7 +54,13 @@ jobs:
           : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
           : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
           : "${SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
-
+      - name: 🛑 Validate deletion confirmation
+        if: inputs.stage == 'uninstall'
+        run: |
+          if [[ "${{ inputs.confirm_resource_group }}" != "$SQL_RESOURCE_GROUP" ]]; then
+            echo "::error title=Confirmation mismatch::Type '$SQL_RESOURCE_GROUP' exactly in confirm_resource_group to delete it. No deletion was attempted."
+            exit 1
+          fi
       - name: 🔐 Azure Login
         if: inputs.stage != 'plan'
         uses: azure/login@v2
