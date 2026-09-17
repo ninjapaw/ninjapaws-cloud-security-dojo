@@ -12,9 +12,11 @@
          for Endpoint / MDE), a least-privilege application login instead of sa,
          and disabling the legacy SQL Server Browser service.
 
-    This script deliberately avoids embedding any secret in its own body; the
-    application login password is generated locally and only ever printed to the
-    local transcript log on the VM, never returned to Azure Resource Manager.
+    This script uses sqlcmd.exe (bundled with every SQL Server engine install) rather than the
+    SqlServer PowerShell module, because Install-Module can hang on an interactive repository-
+    trust prompt that a Custom Script Extension has no stdin to answer. The application login
+    password is supplied by the deploy script and never printed anywhere other than this VM's
+    local transcript log.
 #>
 
 [CmdletBinding()]
@@ -46,11 +48,23 @@ function Get-RandomPassword {
 
 Write-Host "== Ninja Paws Dojo :: Futon Manufacturing bootstrap starting =="
 
-# SQL Server 2022 marketplace images register the default instance as MSSQLSERVER; module
-# ships with the image so this does not require internet access to the PowerShell Gallery.
-Import-Module SqlServer -ErrorAction SilentlyContinue
-if (-not (Get-Module -ListAvailable -Name SqlServer)) {
-    Install-Module -Name SqlServer -Force -AllowClobber -Scope AllUsers -ErrorAction Stop
+# sqlcmd.exe ships with every SQL Server engine install and needs no PowerShell Gallery access.
+# Invoke-Sqlcmd (the SqlServer module) was avoided deliberately: Install-Module can block on an
+# interactive "untrusted repository" prompt, and a Custom Script Extension has no stdin to answer it.
+function Invoke-SqlFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    & sqlcmd -S localhost -E -b -i $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "sqlcmd failed executing '$Path' (exit code $LASTEXITCODE)."
+    }
+}
+
+function Invoke-SqlText {
+    param([Parameter(Mandatory = $true)][string]$Query)
+    & sqlcmd -S localhost -E -b -Q $Query
+    if ($LASTEXITCODE -ne 0) {
+        throw "sqlcmd failed executing inline query (exit code $LASTEXITCODE)."
+    }
 }
 
 $scriptFiles = @(
@@ -76,7 +90,7 @@ Write-Host "== Restoring Futon Manufacturing sample database =="
 foreach ($file in $scriptFiles) {
     $path = Join-Path $downloadDir $file
     Write-Host "Executing $file"
-    Invoke-Sqlcmd -ServerInstance 'localhost' -InputFile $path -QueryTimeout 0 -ErrorAction Stop
+    Invoke-SqlFile -Path $path
 }
 
 Write-Host "== Applying SQL Server security best practices =="
@@ -96,7 +110,7 @@ BEGIN
     ALTER DATABASE $DatabaseName SET ENCRYPTION ON;
 END
 "@
-Invoke-Sqlcmd -ServerInstance 'localhost' -Query $tdeSql -ErrorAction Stop
+Invoke-SqlText -Query $tdeSql
 
 # 2. Server audit writes to the Windows Security log so Defender for Endpoint / Sentinel can
 #    correlate SQL activity with host-level signals instead of only Application-log noise.
@@ -127,7 +141,7 @@ BEGIN
         WITH (STATE = ON);
 END
 "@
-Invoke-Sqlcmd -ServerInstance 'localhost' -Query $auditSql -ErrorAction Stop
+Invoke-SqlText -Query $auditSql
 
 # 3. Least-privilege application login: db_datareader/db_datawriter only, never sysadmin, and
 #    never the shared sa account. The password is supplied by the deploy script (the same value
@@ -150,7 +164,7 @@ END
 -- Disable the shared sa login; the dojo never uses it after bootstrap.
 ALTER LOGIN [sa] DISABLE;
 "@
-Invoke-Sqlcmd -ServerInstance 'localhost' -Query $loginSql -ErrorAction Stop
+Invoke-SqlText -Query $loginSql
 Write-Host "Application login '$AppLoginName' created; its password matches the Key Vault secret the dashboard Web App reads."
 
 # 4. Turn off the SQL Server Browser service; the dojo uses a fixed static port (1433) and does
