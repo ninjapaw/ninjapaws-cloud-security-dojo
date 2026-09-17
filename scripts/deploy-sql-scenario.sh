@@ -23,6 +23,9 @@ SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-${SUBSCRIPTION_ID:-}}"
 LOCATION="${AZURE_LOCATION:-centralus}"
 RESOURCE_GROUP=""
 VM_NAME=""
+WEB_APP_NAME=""
+WEB_APP_HOSTNAME=""
+KEY_VAULT_NAME=""
 ADMIN_USERNAME="${SQL_VM_ADMIN_USERNAME:-ninjapawsadmin}"
 ASSUME_YES=false
 OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/output}"
@@ -58,6 +61,7 @@ Options:
   --location <region>        Azure region (default: centralus)
   --resource-group <name>    Override the resource group name
   --vm-name <name>           Override the VM name
+  --web-app-name <name>      Override the Pawton Manufacturing Web App name
   --admin-username <name>    Windows admin username (default: ninjapawsadmin)
   --defaults                 Accepted for CLI consistency with deploy.sh; this script has no
                               interactive setting prompts to skip. Use --yes to also skip the
@@ -75,6 +79,7 @@ while (($# > 0)); do
         --location) LOCATION="$2"; shift 2 ;;
         --resource-group) RESOURCE_GROUP="$2"; shift 2 ;;
         --vm-name) VM_NAME="$2"; shift 2 ;;
+        --web-app-name) WEB_APP_NAME="$2"; shift 2 ;;
         --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
         --defaults) shift ;;
         --yes) ASSUME_YES=true; shift ;;
@@ -99,6 +104,9 @@ DEFENDER_SERVERS_SUBPLAN="$(config_lookup sqlScenario.defender.serversSubPlan)"
 DEFENDER_SERVERS_SUBPLAN="${DEFENDER_SERVERS_SUBPLAN:-P2}"
 DEFENDER_SQL_PLAN="$(config_lookup sqlScenario.defender.sqlPlan)"
 DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
+DEPLOY_WEB_APP="$(config_setting deployWebApp true)"
+WEB_APP_NAME="${WEB_APP_NAME:-$(config_setting webAppName "ninjapaws-pawton-${ENVIRONMENT}")}"
+WEB_APP_PLAN_SKU="$(config_setting webAppPlanSku B1)"
 GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'dev')"
 BOOTSTRAP_SCRIPT_URL="https://raw.githubusercontent.com/ninjapaw/ninjapaws-cloud-security-dojo/${GIT_BRANCH}/scripts/sql/Setup-FutonManufacturing.ps1"
 BICEP_FILE="$AZURE_REPO_ROOT/infra/sql-defender-scenario/main.bicep"
@@ -143,6 +151,8 @@ ${BLUE}Azure Bastion:${NC} $DEPLOY_BASTION (no public IP is attached to the VM)
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
 ${BLUE}Defender for SQL:${NC} $DEFENDER_SQL_PLAN (Standard tier)
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
+${BLUE}Pawton Manufacturing Web App:${NC} $WEB_APP_NAME ($WEB_APP_PLAN_SKU, deployWebApp=$DEPLOY_WEB_APP)
+${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet; no public database endpoint
 
 EOF
 }
@@ -203,8 +213,9 @@ generate_password() {
 }
 
 run_deployment() {
-    local admin_password deployment_name output_json vm_principal_id creds_dir creds_file
+    local admin_password sql_app_login_password deployment_name output_json vm_principal_id creds_dir creds_file
     admin_password="$(generate_password)"
+    sql_app_login_password="$(generate_password)"
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
     info "Deploying infrastructure ($deployment_name)..."
@@ -214,7 +225,8 @@ run_deployment() {
         --template-file "$BICEP_FILE" \
         --parameters vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
-                     deployBastion="$DEPLOY_BASTION" \
+                     deployBastion="$DEPLOY_BASTION" deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
+                     webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
 
@@ -235,6 +247,13 @@ run_deployment() {
     unset admin_password
     warn "Admin credentials saved to $creds_file — treat it as a secret and delete it once you finish the exercise."
     record_check "VM admin credentials saved locally" pass "Written to $creds_file (not committed; output/ is gitignored). Delete this file when the exercise ends."
+
+    KEY_VAULT_NAME="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).keyVaultName.value)" 2>/dev/null || true)"
+    WEB_APP_HOSTNAME="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).webAppHostName.value)" 2>/dev/null || true)"
+    unset sql_app_login_password
+    if [[ -n "$KEY_VAULT_NAME" ]]; then
+        record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
+    fi
 
     vm_principal_id="$(printf '%s' "$output_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).principalId.value)" 2>/dev/null || true)"
     if [[ -n "$vm_principal_id" ]]; then
@@ -266,11 +285,43 @@ run_deployment() {
         attempt=$((attempt + 1))
     done
     [[ "$ext_state" == Succeeded ]] && ok "Bootstrap extension finished: $ext_state" || warn "Bootstrap extension state: ${ext_state:-unknown} — check the VM's C:\\NinjaPawsDojo\\bootstrap.log over Bastion."
+
+    if [[ "$DEPLOY_WEB_APP" == true && -n "$WEB_APP_NAME" ]]; then
+        deploy_web_app_code
+    else
+        record_check "Pawton Manufacturing dashboard deployed" not_applicable "Disabled by configuration (deployWebApp=$DEPLOY_WEB_APP)."
+    fi
+}
+
+# Zips the Astro/Node.js app source (no node_modules/dist) and lets App Service's Oryx
+# build step run "npm install && npm run build" server-side, matching SCM_DO_BUILD_DURING_DEPLOYMENT.
+deploy_web_app_code() {
+    local app_dir zip_path deploy_error
+    app_dir="$REPO_ROOT/apps/pawton-manufacturing"
+    zip_path="$(mktemp -u).zip"
+
+    info "Packaging the Pawton Manufacturing dashboard from $app_dir..."
+    if ! command -v zip >/dev/null 2>&1; then
+        record_check "Pawton Manufacturing dashboard deployed" unknown "The 'zip' command is not available here; deploy manually with 'az webapp deploy --resource-group $RESOURCE_GROUP --name $WEB_APP_NAME --src-path <app.zip> --type zip'."
+        return 0
+    fi
+    (cd "$app_dir" && zip -rq "$zip_path" . -x 'node_modules/*' -x 'dist/*' -x '.astro/*')
+
+    info "Deploying to $WEB_APP_NAME (remote build via Oryx)..."
+    if deploy_error="$(az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --src-path "$zip_path" --type zip --async false --output none 2>&1)"; then
+        ok "Pawton Manufacturing dashboard code deployed."
+        record_check "Pawton Manufacturing dashboard deployed" pass "Zip-deployed $app_dir to $WEB_APP_NAME; Oryx runs the Astro build remotely."
+    else
+        warn "Web app code deployment failed: ${deploy_error:-no error detail returned}"
+        record_check "Pawton Manufacturing dashboard deployed" fail "az webapp deploy failed: ${deploy_error:-no error detail returned}"
+    fi
+    rm -f "$zip_path"
 }
 
 run_verification() {
     info "Running verification checks..."
     local vm_state defender_servers_tier defender_servers_subplan defender_sql_tier nic_public_ip bastion_state sqlvm_state ext_state
+    local web_app_state web_app_subnet defender_appservices_tier health_body root_http_code health_http_code
 
     vm_state="$(az vm get-instance-view --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" -o tsv 2>/dev/null || true)"
     if [[ "$vm_state" == "VM running" ]]; then
@@ -319,6 +370,54 @@ run_verification() {
     ext_state="$(az vm extension show --resource-group "$RESOURCE_GROUP" --vm-name "$VM_NAME" --name futon-manufacturing-bootstrap --query provisioningState -o tsv 2>/dev/null || true)"
     [[ "$ext_state" == Succeeded ]] && record_check "Futon Manufacturing sample database restored" pass "Bootstrap Custom Script Extension finished successfully." \
         || record_check "Futon Manufacturing sample database restored" unknown "Bootstrap extension state: ${ext_state:-unavailable}."
+
+    if [[ "$DEPLOY_WEB_APP" != true || -z "$WEB_APP_NAME" ]]; then
+        record_check "Pawton Manufacturing dashboard is running" not_applicable "Disabled by configuration."
+        return 0
+    fi
+
+    web_app_state="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --query state -o tsv 2>/dev/null || true)"
+    [[ "$web_app_state" == Running ]] && record_check "Pawton Manufacturing Web App is running" pass "App Service reports state '$web_app_state'." \
+        || record_check "Pawton Manufacturing Web App is running" unknown "App Service reports state '${web_app_state:-unavailable}'."
+
+    web_app_subnet="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --query virtualNetworkSubnetId -o tsv 2>/dev/null || true)"
+    if [[ -n "$web_app_subnet" && "$web_app_subnet" == *webapp-integration-subnet* ]]; then
+        record_check "Web App reaches SQL over a private VNet connection" pass "Regional VNet integration is configured; no public database endpoint is involved."
+    else
+        record_check "Web App reaches SQL over a private VNet connection" unknown "virtualNetworkSubnetId reported: '${web_app_subnet:-none}'."
+    fi
+
+    if [[ -n "$KEY_VAULT_NAME" ]] && az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name sql-app-login-password --query id -o tsv >/dev/null 2>&1; then
+        record_check "SQL app login password retrievable from Key Vault" pass "Secret 'sql-app-login-password' exists in $KEY_VAULT_NAME and is readable with the current identity."
+    else
+        record_check "SQL app login password retrievable from Key Vault" unknown "Could not confirm the secret in ${KEY_VAULT_NAME:-the Key Vault}; the current identity may lack the Key Vault Secrets Officer/User role."
+    fi
+
+    # Defender for App Service is a subscription-wide plan, so this Web App is covered by the
+    # same plan Scenario 1 requests -- this check demonstrates that shared coverage, not a
+    # separate activation, which is why this script never calls 'az security pricing create' for it.
+    defender_appservices_tier="$(az security pricing show --name AppServices --query pricingTier -o tsv 2>/dev/null || true)"
+    if [[ "$defender_appservices_tier" == Standard ]]; then
+        record_check "Defender for App Service covers this Web App" pass "Subscription-wide AppServices plan is Standard, so it protects $WEB_APP_NAME automatically."
+    else
+        record_check "Defender for App Service covers this Web App" unknown "Subscription reports AppServices tier='${defender_appservices_tier:-unknown}'. Enable it via Scenario 1's deploy or 'az security pricing create --name AppServices --tier Standard'."
+    fi
+
+    if [[ -n "$WEB_APP_HOSTNAME" ]]; then
+        root_http_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "https://$WEB_APP_HOSTNAME/" 2>/dev/null || true)"
+        [[ "$root_http_code" == 200 ]] && record_check "Dashboard home page responds" pass "HTTP $root_http_code from https://$WEB_APP_HOSTNAME/." \
+            || record_check "Dashboard home page responds" unknown "HTTP ${root_http_code:-no response} from https://$WEB_APP_HOSTNAME/; the Oryx build may still be running."
+
+        health_body="$(curl -sk --max-time 20 "https://$WEB_APP_HOSTNAME/health" 2>/dev/null || true)"
+        health_http_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "https://$WEB_APP_HOSTNAME/health" 2>/dev/null || true)"
+        if [[ "$health_http_code" == 200 && "$health_body" == *'"connected"'* ]]; then
+            record_check "Dashboard reaches the SQL Server VM" pass "/health reports the database connected."
+        else
+            record_check "Dashboard reaches the SQL Server VM" unknown "/health returned HTTP ${health_http_code:-no response}: ${health_body:-no body}."
+        fi
+    else
+        record_check "Dashboard home page responds" unknown "No web app hostname was returned by the deployment outputs."
+    fi
 }
 
 render_check_rows_html() {
@@ -337,7 +436,7 @@ render_check_rows_html() {
 }
 
 write_report() {
-    local out_dir out_file pass_count fail_count unknown_count
+    local out_dir out_file pass_count fail_count unknown_count demo_site_html
     out_dir="$OUTPUT_ROOT/$ENVIRONMENT"
     mkdir -p "$out_dir"
     out_file="$out_dir/sql-deployment-$ENVIRONMENT.html"
@@ -349,6 +448,11 @@ write_report() {
             unknown) unknown_count=$((unknown_count + 1)) ;;
         esac
     done
+    if [[ -n "$WEB_APP_HOSTNAME" ]]; then
+        demo_site_html="<a href=\"https://$WEB_APP_HOSTNAME/\" target=\"_blank\" rel=\"noopener\">https://$WEB_APP_HOSTNAME/</a><br><a href=\"https://$WEB_APP_HOSTNAME/api/status\" target=\"_blank\" rel=\"noopener\">/api/status</a> &middot; <a href=\"https://$WEB_APP_HOSTNAME/health\" target=\"_blank\" rel=\"noopener\">/health</a>"
+    else
+        demo_site_html='Not deployed (deployWebApp=false).'
+    fi
 
     cat > "$out_file" <<HTML
 <!doctype html>
@@ -391,6 +495,7 @@ write_report() {
   <div class="item"><div class="label">Sample database</div><div class="value">Futon Manufacturing (<a href="https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/futon-manufacturing" target="_blank" rel="noopener">source</a>)</div></div>
   <div class="item"><div class="label">Defender for Servers</div><div class="value">$DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN</div></div>
   <div class="item"><div class="label">Defender for SQL</div><div class="value">$DEFENDER_SQL_PLAN</div></div>
+  <div class="item"><div class="label">Pawton Manufacturing dashboard</div><div class="value">$WEB_APP_NAME ($WEB_APP_PLAN_SKU)</div></div>
   <div class="item"><div class="label">Checks passed</div><div class="value">$pass_count / ${#CHECK_RESULTS[@]}</div></div>
   <div class="item"><div class="label">Checks failed / not sure</div><div class="value">$fail_count / $unknown_count</div></div>
   <div class="item"><div class="label">Run started</div><div class="value">$RUN_STARTED_ISO</div></div>
@@ -404,9 +509,11 @@ $(render_check_rows_html)
 </table>
 <h2>Environment access</h2>
 <div class="grid">
+  <div class="item"><div class="label">Live demo site</div><div class="value">$demo_site_html</div></div>
   <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/overview" target="_blank" rel="noopener">$RESOURCE_GROUP</a></div></div>
   <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $VM_NAME &gt; Connect &gt; Bastion. No public IP is exposed on this VM.</div></div>
   <div class="item"><div class="label">VM admin credentials</div><div class="value"><code>$OUTPUT_ROOT/$ENVIRONMENT/sql-vm-credentials.txt</code><br>Local file only, not committed. Delete it once you finish the exercise.</div></div>
+  <div class="item"><div class="label">SQL app login password</div><div class="value">Key Vault <code>${KEY_VAULT_NAME:-not deployed}</code>, secret <code>sql-app-login-password</code></div></div>
   <div class="item"><div class="label">Defender recommendations</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>
   <div class="item"><div class="label">Bootstrap log on the VM</div><div class="value"><code>C:\NinjaPawsDojo\bootstrap.log</code></div></div>
 </div>
@@ -430,6 +537,7 @@ cmd_deploy() {
     write_report
     echo
     ok "Scenario 2 deployment complete. See the report above for verification results."
+    [[ -n "$WEB_APP_HOSTNAME" ]] && echo -e "${GREEN}Pawton Manufacturing dashboard:${NC} https://$WEB_APP_HOSTNAME/ (Oryx build can take a couple of minutes after this script finishes)"
     echo -e "${YELLOW}Reminder:${NC} run '$0 uninstall --environment $ENVIRONMENT --yes' when finished to avoid ongoing VM charges."
 }
 

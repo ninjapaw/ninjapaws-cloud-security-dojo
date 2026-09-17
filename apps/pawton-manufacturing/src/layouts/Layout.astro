@@ -1,0 +1,47 @@
+---
+const { title = 'Overview' } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title} — Pawton Manufacturing</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0a1220; color: #d9e7f5; }
+    body { margin: 0; }
+    header { padding: 20px 32px; border-bottom: 1px solid #28415c; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+    header h1 { color: #f2a24a; font-size: 20px; margin: 0; }
+    nav a { color: #7cc4f2; margin-left: 18px; text-decoration: none; font-size: 14px; }
+    nav a:hover { text-decoration: underline; }
+    main { padding: 24px 32px 48px; max-width: 1100px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin: 18px 0; }
+    .card { border: 1px solid #28415c; border-radius: 10px; padding: 16px; background: #0d1a2b; }
+    .card .label { color: #8fa6bc; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    .card .value { font-size: 26px; margin-top: 6px; color: #7be2a5; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #28415c; font-size: 13px; }
+    th { color: #8fa6bc; text-transform: uppercase; font-size: 11px; }
+    .warn { padding: 10px 14px; border-radius: 8px; background: #3a2f14; border: 1px solid #6d5a1f; color: #f2cf7c; font-size: 12px; margin-bottom: 16px; }
+    footer { padding: 16px 32px; color: #58718b; font-size: 11px; border-top: 1px solid #28415c; }
+    a.pill { color: #102f4d; background: #f2a24a; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🐾 Pawton Manufacturing</h1>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/inventory">Inventory</a>
+      <a href="/sales">Sales</a>
+      <a href="/production">Production</a>
+    </nav>
+  </header>
+  <main>
+    <slot />
+  </main>
+  <footer>
+    Ninja Paws Cloud Security Dojo &middot; Scenario 2 demo data (Futon Manufacturing sample from microsoft/sql-server-samples) &middot; Not a real business. Protected by Microsoft Defender for App Service, Defender for SQL, and Defender for Servers.
+  </footer>
+</body>
+</html>

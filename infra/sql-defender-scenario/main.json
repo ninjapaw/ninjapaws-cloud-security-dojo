@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "12752409896568339629"
+      "templateHash": "12143078580926036231"
     }
   },
   "parameters": {
@@ -78,6 +78,33 @@
       "metadata": {
         "description": "Enable Azure Bastion for browser-based RDP instead of a public IP on the VM."
       }
+    },
+    "deployWebApp": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection."
+      }
+    },
+    "webAppName": {
+      "type": "string",
+      "defaultValue": "[format('{0}-web', parameters('vmName'))]",
+      "metadata": {
+        "description": "Name of the Linux Web App hosting the Pawton Manufacturing dashboard."
+      }
+    },
+    "webAppPlanSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "metadata": {
+        "description": "App Service plan SKU for the dashboard Web App."
+      }
+    },
+    "sqlAppLoginPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password for the least-privilege futon_app SQL login, shared between the Key Vault secret the Web App reads and the VM bootstrap script that creates the login. No default; the deploy script generates a random value per run."
+      }
     }
   },
   "variables": {
@@ -86,7 +113,9 @@
     "nicName": "[format('{0}-nic', parameters('vmName'))]",
     "vmSubnetPrefix": "10.20.1.0/24",
     "bastionSubnetPrefix": "10.20.2.0/26",
-    "sqlVmResourceName": "[parameters('vmName')]"
+    "webAppSubnetPrefix": "10.20.3.0/24",
+    "sqlVmResourceName": "[parameters('vmName')]",
+    "keyVaultResourceName": "[take(toLower(replace(format('{0}kv{1}', parameters('vmName'), uniqueString(resourceGroup().id)), '-', '')), 24)]"
   },
   "resources": [
     {
@@ -107,7 +136,7 @@
       "name": "[variables('nsgName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "securityRules": []
+        "securityRules": "[if(parameters('deployWebApp'), createArray(createObject('name', 'AllowWebAppToSql', 'properties', createObject('priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', variables('webAppSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray())]"
       }
     },
     {
@@ -121,7 +150,7 @@
             "10.20.0.0/16"
           ]
         },
-        "subnets": "[concat(createArray(createObject('name', 'sql-vm-subnet', 'properties', createObject('addressPrefix', variables('vmSubnetPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))))), if(parameters('deployBastion'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix')))), createArray()))]"
+        "subnets": "[concat(createArray(createObject('name', 'sql-vm-subnet', 'properties', createObject('addressPrefix', variables('vmSubnetPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))))), if(parameters('deployBastion'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'webapp-integration-subnet', 'properties', createObject('addressPrefix', variables('webAppSubnetPrefix'), 'delegations', createArray(createObject('name', 'webapp-delegation', 'properties', createObject('serviceName', 'Microsoft.Web/serverFarms')))))), createArray()))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
@@ -309,12 +338,132 @@
           ]
         },
         "protectedSettings": {
-          "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1"
+          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPassword ''{0}''', parameters('sqlAppLoginPassword'))]"
         }
       },
       "dependsOn": [
         "[resourceId('Microsoft.SqlVirtualMachine/sqlVirtualMachines', variables('sqlVmResourceName'))]",
         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2024-11-01",
+      "name": "[variables('keyVaultResourceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "enablePurgeProtection": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'sql-app-login-password')]",
+      "properties": {
+        "value": "[parameters('sqlAppLoginPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2025-03-01",
+      "name": "[format('{0}-plan', parameters('webAppName'))]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('webAppPlanSku')]",
+        "capacity": 1
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2025-03-01",
+      "name": "[parameters('webAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('webAppName')))]",
+        "httpsOnly": true,
+        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'webapp-integration-subnet')]",
+        "siteConfig": {
+          "linuxFxVersion": "NODE|20-lts",
+          "alwaysOn": true,
+          "http20Enabled": true,
+          "minTlsVersion": "1.2",
+          "healthCheckPath": "/health",
+          "appSettings": [
+            {
+              "name": "SQL_SERVER_HOST",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2025-01-01').ipConfigurations[0].properties.privateIPAddress]"
+            },
+            {
+              "name": "SQL_DATABASE",
+              "value": "FutonManufacturing"
+            },
+            {
+              "name": "SQL_APP_LOGIN",
+              "value": "futon_app"
+            },
+            {
+              "name": "SQL_APP_LOGIN_PASSWORD",
+              "value": "[format('@Microsoft.KeyVault(SecretUri={0})', reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultResourceName'), 'sql-app-login-password'), '2024-11-01').secretUri)]"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8080"
+            },
+            {
+              "name": "PORT",
+              "value": "8080"
+            },
+            {
+              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+              "value": "true"
+            },
+            {
+              "name": "WEBSITE_NODE_DEFAULT_VERSION",
+              "value": "~20"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultResourceName'), 'sql-app-login-password')]",
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('webAppName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName')), parameters('webAppName'), 'kvSecretsUser')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2025-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
       ]
     }
   ],
@@ -350,6 +499,18 @@
     "principalId": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-11-01', 'full').identity.principalId]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultResourceName')]"
+    },
+    "webAppName": {
+      "type": "string",
+      "value": "[if(parameters('deployWebApp'), parameters('webAppName'), '')]"
+    },
+    "webAppHostName": {
+      "type": "string",
+      "value": "[if(parameters('deployWebApp'), reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2025-03-01').defaultHostName, '')]"
     }
   }
 }

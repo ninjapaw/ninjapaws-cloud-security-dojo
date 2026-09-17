@@ -36,12 +36,29 @@ param bootstrapScriptUrl string
 @description('Enable Azure Bastion for browser-based RDP instead of a public IP on the VM.')
 param deployBastion bool = true
 
+@description('Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection.')
+param deployWebApp bool = true
+
+@description('Name of the Linux Web App hosting the Pawton Manufacturing dashboard.')
+param webAppName string = '${vmName}-web'
+
+@description('App Service plan SKU for the dashboard Web App.')
+param webAppPlanSku string = 'B1'
+
+@secure()
+@description('Password for the least-privilege futon_app SQL login, shared between the Key Vault secret the Web App reads and the VM bootstrap script that creates the login. No default; the deploy script generates a random value per run.')
+param sqlAppLoginPassword string
+
 var nsgName = '${vmName}-nsg'
 var vnetName = '${vmName}-vnet'
 var nicName = '${vmName}-nic'
 var vmSubnetPrefix = '10.20.1.0/24'
 var bastionSubnetPrefix = '10.20.2.0/26'
+var webAppSubnetPrefix = '10.20.3.0/24'
 var sqlVmResourceName = vmName
+// Key Vault names are globally unique and capped at 24 characters; derive a short, RG-scoped
+// name instead of taking it as a param so callers never have to hand-pick one.
+var keyVaultResourceName = take(toLower(replace('${vmName}kv${uniqueString(resourceGroup().id)}', '-', '')), 24)
 
 // Log Analytics workspace: required for Defender for Servers Plan 2 (MDE) and SQL Server audit/diagnostic data.
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
@@ -55,14 +72,28 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   }
 }
 
-// No inbound rules are defined here on purpose: RDP goes through Bastion and SQL access
-// is expected over a private connection. Defender for Servers Just-In-Time VM Access
-// manages any temporary exceptions instead of a standing allow rule.
+// No inbound rules are defined here on purpose except the one path the dashboard Web App needs:
+// RDP goes through Bastion, and every other SQL client is expected to use a private connection.
+// Defender for Servers Just-In-Time VM Access manages any temporary exceptions beyond that.
 resource nsg 'Microsoft.Network/networkSecurityGroups@2025-01-01' = {
   name: nsgName
   location: location
   properties: {
-    securityRules: []
+    securityRules: deployWebApp ? [
+      {
+        name: 'AllowWebAppToSql'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '1433'
+          sourceAddressPrefix: webAppSubnetPrefix
+          destinationAddressPrefix: vmSubnetPrefix
+        }
+      }
+    ] : []
   }
 }
 
@@ -90,6 +121,21 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-01-01' = {
         name: 'AzureBastionSubnet'
         properties: {
           addressPrefix: bastionSubnetPrefix
+        }
+      }
+    ] : [], deployWebApp ? [
+      {
+        name: 'webapp-integration-subnet'
+        properties: {
+          addressPrefix: webAppSubnetPrefix
+          delegations: [
+            {
+              name: 'webapp-delegation'
+              properties: {
+                serviceName: 'Microsoft.Web/serverFarms'
+              }
+            }
+          ]
         }
       }
     ] : [])
@@ -263,12 +309,120 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
       ]
     }
     protectedSettings: {
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1'
+      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPassword \'${sqlAppLoginPassword}\''
     }
   }
   dependsOn: [
     sqlVirtualMachine
   ]
+}
+
+// Holds the futon_app SQL login password so both the VM bootstrap script and the dashboard Web
+// App use the same credential, without ever putting it in an ARM output or app-visible setting.
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
+  name: keyVaultResourceName
+  location: location
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    // Purge protection is intentionally off: this training resource group is deleted and
+    // recreated often, and a protected vault would block reusing the same derived name.
+    enablePurgeProtection: false
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource sqlAppLoginSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'sql-app-login-password'
+  properties: {
+    value: sqlAppLoginPassword
+  }
+}
+
+// Pawton Manufacturing dashboard: Astro/Node.js Web App reading the restored sample data. It
+// never touches the internet path to SQL Server -- regional VNet integration routes its traffic
+// to the private IP on the sql-vm-subnet, and the NSG only allows that one subnet on port 1433.
+resource webAppPlan 'Microsoft.Web/serverfarms@2025-03-01' = if (deployWebApp) {
+  name: '${webAppName}-plan'
+  location: location
+  kind: 'linux'
+  sku: {
+    name: webAppPlanSku
+    capacity: 1
+  }
+  properties: {
+    reserved: true
+  }
+}
+
+resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
+  name: webAppName
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: webAppPlan.id
+    httpsOnly: true
+    virtualNetworkSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'webapp-integration-subnet')
+    siteConfig: {
+      linuxFxVersion: 'NODE|20-lts'
+      alwaysOn: true
+      http20Enabled: true
+      minTlsVersion: '1.2'
+      healthCheckPath: '/health'
+      appSettings: [
+        {
+          name: 'SQL_SERVER_HOST'
+          value: nic.properties.ipConfigurations[0].properties.privateIPAddress
+        }
+        {
+          name: 'SQL_DATABASE'
+          value: 'FutonManufacturing'
+        }
+        {
+          name: 'SQL_APP_LOGIN'
+          value: 'futon_app'
+        }
+        {
+          name: 'SQL_APP_LOGIN_PASSWORD'
+          value: '@Microsoft.KeyVault(SecretUri=${sqlAppLoginSecret.properties.secretUri})'
+        }
+        {
+          name: 'WEBSITES_PORT'
+          value: '8080'
+        }
+        {
+          name: 'PORT'
+          value: '8080'
+        }
+        {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'true'
+        }
+        {
+          name: 'WEBSITE_NODE_DEFAULT_VERSION'
+          value: '~20'
+        }
+      ]
+    }
+  }
+}
+
+resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWebApp) {
+  scope: keyVault
+  name: guid(keyVault.id, webAppName, 'kvSecretsUser')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: webApp!.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 // SQL Server audit and Windows Security events reach this workspace through the Microsoft
@@ -282,3 +436,6 @@ output workspaceCustomerId string = workspace.properties.customerId
 output bastionName string = deployBastion ? bastion.name : ''
 output vnetId string = vnet.id
 output principalId string = vm.identity.principalId
+output keyVaultName string = keyVaultResourceName
+output webAppName string = deployWebApp ? webApp!.name : ''
+output webAppHostName string = deployWebApp ? webApp!.properties.defaultHostName : ''

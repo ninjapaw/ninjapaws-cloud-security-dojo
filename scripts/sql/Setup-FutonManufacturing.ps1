@@ -21,7 +21,9 @@
 param(
     [string]$DatabaseName = 'FutonManufacturing',
     [string]$SourceRepoRawBaseUrl = 'https://raw.githubusercontent.com/microsoft/sql-server-samples/master/samples/databases/futon-manufacturing',
-    [string]$AppLoginName = 'futon_app'
+    [string]$AppLoginName = 'futon_app',
+    [Parameter(Mandatory = $true)]
+    [string]$AppLoginPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,8 +130,10 @@ END
 Invoke-Sqlcmd -ServerInstance 'localhost' -Query $auditSql -ErrorAction Stop
 
 # 3. Least-privilege application login: db_datareader/db_datawriter only, never sysadmin, and
-#    never the shared sa account. The generated password is written only to the local log.
-$appPassword = Get-RandomPassword
+#    never the shared sa account. The password is supplied by the deploy script (the same value
+#    it also writes to Key Vault for the dashboard Web App), never generated locally, so both
+#    sides of the connection always agree on the credential.
+$appPassword = $AppLoginPassword
 $loginSql = @"
 USE master;
 IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$AppLoginName')
@@ -147,7 +151,7 @@ END
 ALTER LOGIN [sa] DISABLE;
 "@
 Invoke-Sqlcmd -ServerInstance 'localhost' -Query $loginSql -ErrorAction Stop
-Write-Host "Application login '$AppLoginName' created. Password stored only in $logPath on this VM."
+Write-Host "Application login '$AppLoginName' created; its password matches the Key Vault secret the dashboard Web App reads."
 
 # 4. Turn off the SQL Server Browser service; the dojo uses a fixed static port (1433) and does
 #    not need named-instance discovery, which is an unnecessary attack surface on the network.

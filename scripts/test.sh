@@ -248,6 +248,23 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'source "$SCRIPT_DIR/lib/common.sh"
 file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'source "$SCRIPT_DIR/lib/common.sh"'
 file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_lookup()'
 file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_scenario_ids()'
+file_contains "$REPO_ROOT/README.md" 'Pawton Manufacturing'
+file_contains "$REPO_ROOT/config/deploy.config.json" '"webAppName": "ninjapaws-pawton-dev"'
+file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'deploy_web_app_code'
+file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'sql_app_login_password'
+file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'Microsoft.KeyVault/vaults'
+file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'sqlAppLoginPassword'
+file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'virtualNetworkSubnetId'
+file_contains "$REPO_ROOT/scripts/sql/Setup-FutonManufacturing.ps1" 'AppLoginPassword'
+test -f "$REPO_ROOT/apps/pawton-manufacturing/package.json"
+test -f "$REPO_ROOT/apps/pawton-manufacturing/astro.config.mjs"
+(
+    cd "$REPO_ROOT/apps/pawton-manufacturing"
+    "$NODE_COMMAND" --check src/lib/db.mjs
+    "$NODE_COMMAND" --check src/pages/health.js
+    "$NODE_COMMAND" --check src/pages/api/status.js
+    "$NODE_COMMAND" -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))"
+)
 if [[ "$SKIP_REPORT" == false ]]; then
     rendered_nginx="$(mktemp)"
     test_output="$(mktemp -d)"

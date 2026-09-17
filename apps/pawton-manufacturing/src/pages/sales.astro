@@ -1,0 +1,34 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { isDatabaseConfigured, query } from '../lib/db.mjs';
+
+let rows = [];
+let columns = [];
+let error = null;
+if (isDatabaseConfigured()) {
+  try {
+    rows = await query('SELECT TOP 25 * FROM vw_Sales_ByChannel');
+    columns = rows.length ? Object.keys(rows[0]) : [];
+  } catch (err) {
+    error = err.message;
+  }
+} else {
+  error = 'Database is not configured on this Web App yet.';
+}
+---
+<Layout title="Sales">
+  <h2>Sales by channel</h2>
+  <p>Retail, Online, and Wholesale performance, from the <code>vw_Sales_ByChannel</code> report view.</p>
+  {error && <div class="warn">{error}</div>}
+  {!error && rows.length === 0 && <p>No sales rows returned.</p>}
+  {!error && rows.length > 0 && (
+    <table>
+      <thead><tr>{columns.map((c) => <th>{c}</th>)}</tr></thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr>{columns.map((c) => <td>{String(row[c] ?? '')}</td>)}</tr>
+        ))}
+      </tbody>
+    </table>
+  )}
+</Layout>

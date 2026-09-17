@@ -27,6 +27,17 @@ Security posture baked into the infrastructure:
 - Trusted Launch (Secure Boot + vTPM) and encryption-at-host are enabled on the VM.
 - The bootstrap script (`scripts/sql/Setup-FutonManufacturing.ps1`) enables Transparent Data Encryption (TDE) on the restored database, creates a SQL Server Audit that writes login and permission-change events to the Windows Security log, provisions a least-privilege application login (`db_datareader`/`db_datawriter` only) instead of using `sa`, disables the `sa` login and the legacy SQL Server Browser service, and forces encrypted client connections.
 
+### Pawton Manufacturing: the live demo site
+
+Scenario 2 also deploys **Pawton Manufacturing** ("paw" + "futon" — the fictional futon manufacturer behind the sample data), a small Astro/Node.js dashboard at `apps/pawton-manufacturing/` that reads the restored Futon Manufacturing data live: item/warehouse/customer counts, inventory valuation, sales by channel, and production order status. It exists to make Scenario 2 tangible with a real, running application instead of only infrastructure evidence, and it extends the story to a workload type Scenario 1 doesn't cover on its own:
+
+- It runs on its own Azure App Service for Linux (Node 20), which **Microsoft Defender for App Service already protects** the moment that plan is Standard at subscription scope — the same plan Scenario 1 requests. No extra Defender activation is needed for this Web App; the deployment report includes a check that confirms the subscription-wide plan already covers it.
+- It reaches SQL Server only through **regional VNet integration** into the same VNet as the SQL VM; the NSG allows port 1433 solely from the Web App's delegated subnet. There is still no public database endpoint anywhere in this scenario.
+- It authenticates with the same least-privilege `futon_app` SQL login the bootstrap script creates, using a password shared through an **Azure Key Vault** secret (an App Service Key Vault reference), never a plaintext app setting.
+- Together with Scenario 1, this now demonstrates Defender for App Service, Defender for Containers, Defender CSPM, Defender for Servers Plan 2, and Defender for SQL side by side, backed by running (not simulated) workloads.
+
+Deployment code is zip-deployed from `apps/pawton-manufacturing/` after the Bicep infrastructure finishes; Azure's Oryx build service runs `npm install`/`npm run build` remotely, so no local Node toolchain is required to deploy it. See `apps/pawton-manufacturing/README.md` for local development.
+
 Quick start:
 
 ```bash
@@ -34,13 +45,13 @@ bash scripts/deploy-sql-scenario.sh doctor --environment dev
 bash scripts/deploy-sql-scenario.sh deploy --environment dev
 ```
 
-Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, and the Futon Manufacturing bootstrap result), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings. The generated Windows administrator password is written once to `output/dev/sql-vm-credentials.txt` (gitignored, never printed to the console or captured in CI logs) because it is otherwise unrecoverable and is required to sign in over Bastion; treat that file as a secret and delete it once you finish the exercise. When finished, tear the environment down to avoid ongoing VM charges:
+Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, the Futon Manufacturing bootstrap result, and the Pawton Manufacturing dashboard's reachability and database connectivity), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings, or open the dashboard URL printed at the end of the run. The generated Windows administrator password is written once to `output/dev/sql-vm-credentials.txt` (gitignored, never printed to the console or captured in CI logs) because it is otherwise unrecoverable and is required to sign in over Bastion; treat that file as a secret and delete it once you finish the exercise. The `futon_app` SQL login password lives only in Azure Key Vault (`az keyvault secret show --vault-name <name> --name sql-app-login-password`), not in any local file. When finished, tear the environment down to avoid ongoing VM charges:
 
 ```bash
 bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes
 ```
 
-This scenario provisions a billable Azure VM, managed disk, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.
+This scenario provisions a billable Azure VM, managed disk, App Service plan, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.
 
 The CI Defender posture audit (`.github/workflows/deploy.yml`, via the shared `kit-defender-posture.yml` from Pawprint) also requests Defender for Servers Plan 2 and Defender for SQL as part of the same subscription-scoped audit used for Scenario 1, so the whole subscription's Defender coverage stays consistent whether or not the SQL VM happens to be deployed at that moment. Override the CI tiers with the `DEFENDER_SERVERS_TIER`, `DEFENDER_SERVERS_SUBPLAN`, and `DEFENDER_SQL_TIER` GitHub Environment variables; set a tier to `disabled` to skip it.
 

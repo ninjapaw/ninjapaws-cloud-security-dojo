@@ -1,0 +1,40 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { isDatabaseConfigured, query } from '../lib/db.mjs';
+
+let stats = null;
+let error = null;
+if (isDatabaseConfigured()) {
+  try {
+    const [items] = await query('SELECT COUNT(*) AS Count FROM Items');
+    const [warehouses] = await query('SELECT COUNT(*) AS Count FROM Warehouse');
+    const [customers] = await query('SELECT COUNT(*) AS Count FROM Customer');
+    const [openOrders] = await query(
+      "SELECT COUNT(*) AS Count FROM ProductionOrder WHERE Status IN ('Planned','Released','InProgress')"
+    );
+    stats = {
+      items: items.Count,
+      warehouses: warehouses.Count,
+      customers: customers.Count,
+      openOrders: openOrders.Count,
+    };
+  } catch (err) {
+    error = err.message;
+  }
+} else {
+  error = 'SQL_SERVER_HOST / SQL_APP_LOGIN_PASSWORD are not configured on this Web App yet.';
+}
+---
+<Layout title="Overview">
+  <p>Live data from the <strong>Futon Manufacturing</strong> sample database, running on the Scenario 2 SQL Server VM and reached only over a private VNet connection &mdash; there is no public database endpoint.</p>
+  {error && <div class="warn">Could not reach the database: {error}</div>}
+  {stats && (
+    <div class="grid">
+      <div class="card"><div class="label">Items</div><div class="value">{stats.items}</div></div>
+      <div class="card"><div class="label">Warehouses</div><div class="value">{stats.warehouses}</div></div>
+      <div class="card"><div class="label">Customers</div><div class="value">{stats.customers}</div></div>
+      <div class="card"><div class="label">Open production orders</div><div class="value">{stats.openOrders}</div></div>
+    </div>
+  )}
+  <p><a class="pill" href="/api/status">View /api/status</a></p>
+</Layout>

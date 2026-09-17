@@ -91,6 +91,8 @@
     "vmSize": "Standard_D4s_v5",
     "sqlImageSku": "sqldev",
     "deployBastion": "true",
+    "deployWebApp": "true",
+    "webAppPlanSku": "B1",
     "workspaceRetentionDays": "30",
     "defender": {
       "serversPlan": "VirtualMachines",
@@ -111,7 +113,8 @@
       "npmUseMirror": "true",
       "npmNetworkMode": "online",
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Dev-CentralUS",
-      "sqlVmName": "ninjapaws-sql-vm-dev"
+      "sqlVmName": "ninjapaws-sql-vm-dev",
+      "webAppName": "ninjapaws-pawton-dev"
     },
     "prod": {
       "branch": "main",
@@ -125,7 +128,8 @@
       "npmUseMirror": "true",
       "npmNetworkMode": "online",
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Prod-CentralUS",
-      "sqlVmName": "ninjapaws-sql-vm-prod"
+      "sqlVmName": "ninjapaws-sql-vm-prod",
+      "webAppName": "ninjapaws-pawton-prod"
     }
   }
 }
