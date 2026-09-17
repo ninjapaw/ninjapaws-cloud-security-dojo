@@ -66,6 +66,7 @@ done
 for command_name in az gh tr; do
   command -v "$command_name" >/dev/null || { printf "ERROR: '%s' is required.\n" "$command_name" >&2; exit 1; }
 done
+command -v "$NODE_COMMAND" >/dev/null || { printf "ERROR: Node.js is required (checked for '%s').\n" "$NODE_COMMAND" >&2; exit 1; }
 
 case "$environment_name" in
   dev)
@@ -131,8 +132,10 @@ if [[ -z "$service_principal_object_id" ]]; then
 fi
 
 # Jobs that declare an environment present the environment subject, not the ref subject.
+# Computed by the vendored copy of pawprint's github-oidc-subject.mjs so every repo in the
+# org agrees on this format byte-for-byte instead of each hand-interpolating the same string.
 credential_name="github-${environment_name}"
-credential_subject="repo:${repository_owner}@${repository_owner_id}/${repository_name}@${repository_id}:environment:${environment_name}"
+credential_subject="$("$NODE_COMMAND" "$SCRIPT_DIR/compute-oidc-subject.mjs" "$repository_owner" "$repository_owner_id" "$repository_name" "$repository_id" "$environment_name")"
 existing_credential="$(az ad app federated-credential list --id "$app_object_id" \
   --query "[?name=='$credential_name'] | [0].id" -o tsv)"
 if [[ -n "$existing_credential" ]]; then

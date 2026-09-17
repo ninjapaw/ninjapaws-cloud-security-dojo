@@ -54,6 +54,19 @@ az() {
     MSYS2_ARG_CONV_EXCL='/subscriptions/;/providers/;/resourceGroups/' command "$AZURE_CLI_BIN" "$@" | tr -d '\r'
 }
 
+# Node isn't always on PATH in Git Bash/WSL even when it's installed for Windows.
+if command -v node >/dev/null 2>&1; then
+    NODE_COMMAND=node
+elif command -v node.exe >/dev/null 2>&1; then
+    NODE_COMMAND=node.exe
+elif [[ -x /mnt/c/Program\ Files/nodejs/node.exe ]]; then
+    NODE_COMMAND='/mnt/c/Program Files/nodejs/node.exe'
+elif [[ -x /c/Program\ Files/nodejs/node.exe ]]; then
+    NODE_COMMAND='/c/Program Files/nodejs/node.exe'
+else
+    NODE_COMMAND=node
+fi
+
 # Read a dotted path of string values out of the config file without requiring jq.
 config_lookup() {
     [[ -f "$CONFIG_FILE" ]] || return 0
