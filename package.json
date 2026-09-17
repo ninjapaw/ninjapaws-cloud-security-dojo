@@ -21,7 +21,11 @@
     "dojo": "bash scripts/manage.sh",
     "deploy:plan": "bash scripts/deploy.sh plan --environment dev --defaults",
     "deploy:doctor": "bash scripts/deploy.sh doctor --environment dev --defaults",
-    "deploy:dev": "bash scripts/deploy.sh deploy --environment dev --defaults --yes"
+    "deploy:dev": "bash scripts/deploy.sh deploy --environment dev --defaults --yes",
+    "deploy:sql:plan": "bash scripts/deploy-sql-scenario.sh plan --environment dev",
+    "deploy:sql:doctor": "bash scripts/deploy-sql-scenario.sh doctor --environment dev",
+    "deploy:sql:dev": "bash scripts/deploy-sql-scenario.sh deploy --environment dev --yes",
+    "deploy:sql:uninstall": "bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes"
   },
   "keywords": [
     "security",

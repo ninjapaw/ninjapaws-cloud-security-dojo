@@ -1,0 +1,355 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.46.1.21595",
+      "templateHash": "12752409896568339629"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources in this scenario."
+      }
+    },
+    "vmName": {
+      "type": "string",
+      "defaultValue": "ninjapaws-sql-vm",
+      "metadata": {
+        "description": "Base name used to derive the VM, NIC, disk, and related resource names."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "Windows administrator login for the SQL Server VM. Must not be a literal default; supply at deploy time."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Windows administrator password for the SQL Server VM. No default; the deploy script generates a random value per run."
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D4s_v5",
+      "allowedValues": [
+        "Standard_D2s_v5",
+        "Standard_D4s_v5",
+        "Standard_D4ds_v5"
+      ],
+      "metadata": {
+        "description": "VM size. D-series with local/temp SSD supports SQL Server tempdb placement best practices."
+      }
+    },
+    "sqlImageSku": {
+      "type": "string",
+      "defaultValue": "sqldev",
+      "allowedValues": [
+        "sqldev",
+        "standard",
+        "enterprise"
+      ],
+      "metadata": {
+        "description": "SQL Server 2022 on Windows Server 2022 marketplace image SKU. sqldev is free for training/dev use."
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "defaultValue": "[format('{0}-law', parameters('vmName'))]",
+      "metadata": {
+        "description": "Log Analytics workspace name backing Defender for Servers and SQL auditing."
+      }
+    },
+    "bootstrapScriptUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Raw content base URL used to fetch the futon-manufacturing bootstrap script onto the VM."
+      }
+    },
+    "deployBastion": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Azure Bastion for browser-based RDP instead of a public IP on the VM."
+      }
+    }
+  },
+  "variables": {
+    "nsgName": "[format('{0}-nsg', parameters('vmName'))]",
+    "vnetName": "[format('{0}-vnet', parameters('vmName'))]",
+    "nicName": "[format('{0}-nic', parameters('vmName'))]",
+    "vmSubnetPrefix": "10.20.1.0/24",
+    "bastionSubnetPrefix": "10.20.2.0/26",
+    "sqlVmResourceName": "[parameters('vmName')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2025-02-01",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('nsgName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": []
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.20.0.0/16"
+          ]
+        },
+        "subnets": "[concat(createArray(createObject('name', 'sql-vm-subnet', 'properties', createObject('addressPrefix', variables('vmSubnetPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))))), if(parameters('deployBastion'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix')))), createArray()))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployBastion')]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}-bastion-pip', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+    {
+      "condition": "[parameters('deployBastion')]",
+      "type": "Microsoft.Network/bastionHosts",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}-bastion', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "bastion-ipconfig",
+            "properties": {
+              "subnet": {
+                "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2025-01-01').subnets[1].id]"
+              },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-bastion-pip', parameters('vmName')))]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-bastion-pip', parameters('vmName')))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('nicName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2025-01-01').subnets[0].id]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-11-01",
+      "name": "[parameters('vmName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[parameters('vmName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]",
+          "windowsConfiguration": {
+            "enableAutomaticUpdates": true,
+            "patchSettings": {
+              "patchMode": "AutomaticByPlatform"
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftSQLServer",
+            "offer": "sql2022-ws2022",
+            "sku": "[parameters('sqlImageSku')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "Premium_LRS"
+            }
+          }
+        },
+        "securityProfile": {
+          "encryptionAtHost": true,
+          "securityType": "TrustedLaunch",
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.SqlVirtualMachine/sqlVirtualMachines",
+      "apiVersion": "2023-10-01",
+      "name": "[variables('sqlVmResourceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "virtualMachineResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+        "sqlManagement": "Full",
+        "sqlServerLicenseType": "[if(equals(parameters('sqlImageSku'), 'sqldev'), 'DR', 'PAYG')]",
+        "leastPrivilegeMode": "Enabled",
+        "autoPatchingSettings": {
+          "enable": true,
+          "dayOfWeek": "Sunday",
+          "maintenanceWindowStartingHour": 2,
+          "maintenanceWindowDuration": 60
+        },
+        "autoBackupSettings": {
+          "enable": true,
+          "enableEncryption": true,
+          "retentionPeriod": 7,
+          "backupScheduleType": "Automated",
+          "backupSystemDbs": true
+        },
+        "serverConfigurationsManagementSettings": {
+          "sqlConnectivityUpdateSettings": {
+            "connectivityType": "PRIVATE",
+            "port": 1433
+          },
+          "sqlWorkloadTypeUpdateSettings": {
+            "sqlWorkloadType": "OLTP"
+          },
+          "additionalFeaturesServerConfigurations": {
+            "isRServicesEnabled": false
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', parameters('vmName'), 'futon-manufacturing-bootstrap')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publisher": "Microsoft.Compute",
+        "type": "CustomScriptExtension",
+        "typeHandlerVersion": "1.10",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "fileUris": [
+            "[parameters('bootstrapScriptUrl')]"
+          ]
+        },
+        "protectedSettings": {
+          "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.SqlVirtualMachine/sqlVirtualMachines', variables('sqlVmResourceName'))]",
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "vmName": {
+      "type": "string",
+      "value": "[parameters('vmName')]"
+    },
+    "vmResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+    },
+    "sqlVirtualMachineId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.SqlVirtualMachine/sqlVirtualMachines', variables('sqlVmResourceName'))]"
+    },
+    "workspaceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+    },
+    "workspaceCustomerId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), '2025-02-01').customerId]"
+    },
+    "bastionName": {
+      "type": "string",
+      "value": "[if(parameters('deployBastion'), format('{0}-bastion', parameters('vmName')), '')]"
+    },
+    "vnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), '2024-11-01', 'full').identity.principalId]"
+    }
+  }
+}

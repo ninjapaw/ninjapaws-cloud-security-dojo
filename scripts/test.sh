@@ -232,6 +232,13 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
 file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
 file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation'
 file_contains "$REPO_ROOT/README.md" 'Defender for Cloud - Scenario 1'
+file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 2: SQL Server on Azure VM Protection'
+file_contains "$REPO_ROOT/README.md" 'Defender for Cloud - Scenario 2'
+file_contains "$REPO_ROOT/README.md" 'Futon Manufacturing sample database'
+file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'DEFENDER_SERVERS_SUBPLAN'
+file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'SqlServerVirtualMachines'
+file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'sqlVirtualMachines'
+bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
 file_contains "$REPO_ROOT/README.md" 'real F5 advisory'
 file_contains "$REPO_ROOT/README.md" 'Patched-state demonstration'
 if [[ "$SKIP_REPORT" == false ]]; then

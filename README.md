@@ -14,6 +14,34 @@ A defensive cloud-security training environment demonstrating container vulnerab
 
 Scenarios are registered in `config/deploy.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
 
+## Defender for Cloud - Scenario 2
+
+**SQL Server on Azure VM Protection** deploys SQL Server 2022 on a Windows Server 2022 Azure VM (the official `MicrosoftSQLServer:sql2022-ws2022` marketplace image), seeds it with the [Futon Manufacturing sample database](https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/futon-manufacturing) from `microsoft/sql-server-samples`, and demonstrates full IaaS-workload coverage: **Microsoft Defender for Servers Plan 2** (which includes automatic Microsoft Defender for Endpoint onboarding, vulnerability assessment, Just-In-Time VM access, and file integrity monitoring) and **Microsoft Defender for SQL** (SQL-specific threat detection and vulnerability assessment for the database engine).
+
+Because this scenario provisions a fundamentally different Azure architecture than Scenario 1 (an IaaS virtual machine and SQL Server engine, instead of App Service and a container registry), it uses its own deploy script, `scripts/deploy-sql-scenario.sh`, and its own Bicep template, `infra/sql-defender-scenario/main.bicep`, rather than sharing Scenario 1's App Service-specific lifecycle.
+
+Security posture baked into the infrastructure:
+
+- No public IP address on the SQL Server VM; management access is exclusively through Azure Bastion.
+- The VM is registered with the SQL IaaS Agent extension (`Microsoft.SqlVirtualMachine/sqlVirtualMachines`), so Azure manages automated patching, automated encrypted backups, and best-practice assessment.
+- Trusted Launch (Secure Boot + vTPM) and encryption-at-host are enabled on the VM.
+- The bootstrap script (`scripts/sql/Setup-FutonManufacturing.ps1`) enables Transparent Data Encryption (TDE) on the restored database, creates a SQL Server Audit that writes login and permission-change events to the Windows Security log, provisions a least-privilege application login (`db_datareader`/`db_datawriter` only) instead of using `sa`, disables the `sa` login and the legacy SQL Server Browser service, and forces encrypted client connections.
+
+Quick start:
+
+```bash
+bash scripts/deploy-sql-scenario.sh doctor --environment dev
+bash scripts/deploy-sql-scenario.sh deploy --environment dev
+```
+
+Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, and the Futon Manufacturing bootstrap result), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings. When finished, tear the environment down to avoid ongoing VM charges:
+
+```bash
+bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes
+```
+
+This scenario provisions a billable Azure VM, managed disk, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.
+
 ## What It Demonstrates
 
 - Node.js and Express application with NGINX reverse proxy

@@ -70,6 +70,32 @@
       "affectedVersion": "1.30.3",
       "fixedVersion": "1.30.4",
       "workloads": "App Service, Azure Container Registry, Defender for App Service, Defender for Containers, Defender CSPM"
+    },
+    "defender-sql-scenario-2": {
+      "name": "Defender for Cloud - Scenario 2: SQL Server on Azure VM Protection",
+      "shortName": "SQL Server on Azure VM Protection",
+      "cve": "N/A",
+      "advisoryUrl": "https://learn.microsoft.com/azure/defender-for-cloud/defender-for-sql-introduction",
+      "affectedVersion": "unhardened baseline",
+      "fixedVersion": "Defender for Servers Plan 2 + Defender for SQL hardened baseline",
+      "workloads": "Azure VM, SQL Server 2022, Azure Bastion, Defender for Servers Plan 2 (Defender for Endpoint), Defender for SQL, Log Analytics",
+      "deployScript": "scripts/deploy-sql-scenario.sh",
+      "infraPath": "infra/sql-defender-scenario/main.bicep",
+      "sampleDatabase": {
+        "name": "Futon Manufacturing",
+        "source": "https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/futon-manufacturing"
+      }
+    }
+  },
+  "sqlScenario": {
+    "vmSize": "Standard_D4s_v5",
+    "sqlImageSku": "sqldev",
+    "deployBastion": "true",
+    "workspaceRetentionDays": "30",
+    "defender": {
+      "serversPlan": "VirtualMachines",
+      "serversSubPlan": "P2",
+      "sqlPlan": "SqlServerVirtualMachines"
     }
   },
   "environments": {
@@ -83,7 +109,9 @@
       "defenderEnabled": "true",
       "npmRegistryUrl": "https://registry.npmjs.org",
       "npmUseMirror": "true",
-      "npmNetworkMode": "online"
+      "npmNetworkMode": "online",
+      "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Dev-CentralUS",
+      "sqlVmName": "ninjapaws-sql-vm-dev"
     },
     "prod": {
       "branch": "main",
@@ -95,7 +123,9 @@
       "defenderEnabled": "true",
       "npmRegistryUrl": "https://registry.npmjs.org",
       "npmUseMirror": "true",
-      "npmNetworkMode": "online"
+      "npmNetworkMode": "online",
+      "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Prod-CentralUS",
+      "sqlVmName": "ninjapaws-sql-vm-prod"
     }
   }
 }
