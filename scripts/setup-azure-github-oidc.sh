@@ -48,7 +48,8 @@ Usage: scripts/setup-azure-github-oidc.sh --environment <dev|prod> [options]
 
 Options:
   --environment <name>       GitHub Environment: dev or prod (default: dev)
-  --resource-group <name>    Azure resource group
+  --resource-group <name>    Azure resource group (Scenario 1: App Service + ACR)
+  --sql-resource-group <name> Azure resource group for Scenario 2 (SQL Server on Azure VM)
   --registry-name <name>     Azure Container Registry name
   --app-service-name <name>  App Service name
   --location <region>        Azure region (default: centralus)
@@ -59,6 +60,9 @@ Options:
   --help                     Show this help
 
 Defaults for --environment prod match the existing production resources.
+The same OIDC service principal is granted access to BOTH resource groups so it can run
+either scripts/deploy.sh (Scenario 1) or scripts/deploy-sql-scenario.sh (Scenario 2), and so
+pawprint's hosted dispatch can trigger either scenario's workflow without a separate app.
 EOF
 }
 
@@ -94,6 +98,7 @@ while (($# > 0)); do
   case "$1" in
     --environment) environment_name="$2"; shift 2 ;;
     --resource-group) resource_group="$2"; shift 2 ;;
+    --sql-resource-group) sql_resource_group="$2"; shift 2 ;;
     --registry-name) registry_name="$2"; shift 2 ;;
     --app-service-name) app_service_name="$2"; shift 2 ;;
     --location) location="$2"; shift 2 ;;
@@ -114,12 +119,14 @@ case "$environment_name" in
   dev)
     deployment_branch=dev
     resource_group="${resource_group:-NP-ninjapaws-dojo-Dev-CentralUS}"
+    sql_resource_group="${sql_resource_group:-NP-ninjapaws-dojo-sql-Dev-CentralUS}"
     registry_name="${registry_name:-ninjapawsdojodev}"
     app_service_name="${app_service_name:-ninjapaws-dojo-app-dev}"
     ;;
   prod)
     deployment_branch=main
     resource_group="${resource_group:-NP-ninjapaws-dojo-Prod-CentralUS}"
+    sql_resource_group="${sql_resource_group:-NP-ninjapaws-dojo-sql-Prod-CentralUS}"
     registry_name="${registry_name:-ninjapawsdojoprod}"
     app_service_name="${app_service_name:-ninjapaws-dojo-app-prod}"
     ;;
@@ -135,6 +142,8 @@ if [[ -t 0 && "$use_defaults" == false ]]; then
   location="$(prompt_region "$location")"
   read -r -p "Resource group [$resource_group]: " answer
   resource_group="${answer:-$resource_group}"
+  read -r -p "SQL scenario resource group [$sql_resource_group]: " answer
+  sql_resource_group="${answer:-$sql_resource_group}"
   read -r -p "Container Registry [$registry_name]: " answer
   registry_name="${answer:-$registry_name}"
   acr_name="${registry_name//-/}"
@@ -211,6 +220,14 @@ ensure_role() {
 ensure_role Contributor "$resource_group_scope"
 ensure_role "Role Based Access Control Administrator" "$resource_group_scope"
 ensure_role "Security Admin" "$subscription_scope"
+
+# Scenario 2 (SQL Server on Azure VM) provisions into a separate resource group; grant the
+# SAME service principal the same roles there so one OIDC identity/GitHub Environment can run
+# either scenario's deploy workflow (scripts/deploy.sh or scripts/deploy-sql-scenario.sh).
+az group create --name "$sql_resource_group" --location "$location" >/dev/null
+sql_resource_group_scope="/subscriptions/$subscription_id/resourceGroups/$sql_resource_group"
+ensure_role Contributor "$sql_resource_group_scope"
+ensure_role "Role Based Access Control Administrator" "$sql_resource_group_scope"
 
 if [[ "$provision" == true ]]; then
   az deployment group create \

@@ -1,0 +1,72 @@
+name: 🛡️ Deploy SQL Scenario (Scenario 2) to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Lifecycle stage
+        required: false
+        default: deploy
+        type: choice
+        options: [plan, doctor, deploy, uninstall]
+      environment:
+        description: Target environment
+        required: false
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+# Scenario 2 provisions its own resource group and VM, independent of Scenario 1's App
+# Service/ACR estate, so it gets its own concurrency group instead of sharing Scenario 1's.
+concurrency:
+  group: deploy-sql-scenario-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  sql-scenario:
+    name: SQL Server VM scenario (${{ inputs.stage }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: 🥷 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧭 Verify required environment variables
+        run: |
+          : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
+          : "${SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
+
+      - name: 🔐 Azure Login
+        if: inputs.stage != 'plan'
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.SUBSCRIPTION_ID }}
+
+      - name: 🧭 Run SQL scenario lifecycle
+        run: |
+          scripts/deploy-sql-scenario.sh "${{ inputs.stage }}" \
+            --environment "$DEPLOY_ENVIRONMENT" \
+            --subscription "$SUBSCRIPTION_ID" \
+            --yes
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## 🛡️ SQL Scenario Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Stage:** ${{ inputs.stage }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Environment:** $DEPLOY_ENVIRONMENT" >> "$GITHUB_STEP_SUMMARY"

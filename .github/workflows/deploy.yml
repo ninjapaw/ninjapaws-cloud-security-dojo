@@ -15,7 +15,7 @@ on:
         required: false
         default: full
         type: choice
-        options: [full, doctor, provision, build, deploy, verify, repair]
+        options: [full, doctor, provision, build, deploy, verify, repair, uninstall]
 
 permissions:
   contents: read
@@ -125,7 +125,7 @@ jobs:
           subscription-id: ${{ env.SUBSCRIPTION_ID }}
 
       - name: 🧪 Validate Bicep and preview changes
-        if: env.DEPLOY_STAGE != 'verify' && env.DEPLOY_STAGE != 'build'
+        if: env.DEPLOY_STAGE != 'verify' && env.DEPLOY_STAGE != 'build' && env.DEPLOY_STAGE != 'uninstall'
         run: |
           scripts/deploy.sh doctor \
             --environment "$DEPLOY_ENVIRONMENT" \
@@ -142,7 +142,7 @@ jobs:
         run: |
           case "$DEPLOY_STAGE" in
             full) stage=deploy ;;
-            doctor|provision|build|deploy|verify|repair) stage="$DEPLOY_STAGE" ;;
+            doctor|provision|build|deploy|verify|repair|uninstall) stage="$DEPLOY_STAGE" ;;
             *) echo "Unsupported deployment stage: $DEPLOY_STAGE" >&2; exit 1 ;;
           esac
           scripts/deploy.sh "$stage" \
@@ -158,6 +158,13 @@ jobs:
 
       - name: 📊 Deployment summary
         run: |
+          if [[ "$DEPLOY_STAGE" == uninstall ]]; then
+            echo "## 🗑️ Uninstall Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Environment:** $DEPLOY_ENVIRONMENT" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Resource group removed:** $RESOURCE_GROUP" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "## 🚀 Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Environment:** $DEPLOY_ENVIRONMENT" >> "$GITHUB_STEP_SUMMARY"
@@ -182,7 +189,7 @@ jobs:
 
   defender-posture:
     name: Defender posture audit
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.stage != 'uninstall')
     needs: build-and-deploy
     permissions:
       contents: read
