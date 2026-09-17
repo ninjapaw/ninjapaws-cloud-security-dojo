@@ -12,12 +12,12 @@ param adminUsername string
 param adminPassword string
 
 @allowed([
-  'Standard_D2s_v5'
-  'Standard_D4s_v5'
-  'Standard_D4ds_v5'
+  'Standard_D2s_v4'
+  'Standard_D4s_v4'
+  'Standard_D4ds_v4'
 ])
-@description('VM size. D-series with local/temp SSD supports SQL Server tempdb placement best practices.')
-param vmSize string = 'Standard_D4s_v5'
+@description('VM size. D-series with local/temp SSD supports SQL Server tempdb placement best practices. v4 sizes are used because the v5 generation has no capacity in this subscription/region.')
+param vmSize string = 'Standard_D4s_v4'
 
 @allowed([
   'sqldev-gen2'

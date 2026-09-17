@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "15025537903999720524"
+      "templateHash": "4869052009973469449"
     }
   },
   "parameters": {
@@ -37,14 +37,14 @@
     },
     "vmSize": {
       "type": "string",
-      "defaultValue": "Standard_D4s_v5",
+      "defaultValue": "Standard_D4s_v4",
       "allowedValues": [
-        "Standard_D2s_v5",
-        "Standard_D4s_v5",
-        "Standard_D4ds_v5"
+        "Standard_D2s_v4",
+        "Standard_D4s_v4",
+        "Standard_D4ds_v4"
       ],
       "metadata": {
-        "description": "VM size. D-series with local/temp SSD supports SQL Server tempdb placement best practices."
+        "description": "VM size. D-series with local/temp SSD supports SQL Server tempdb placement best practices. v4 sizes are used because the v5 generation has no capacity in this subscription/region."
       }
     },
     "sqlImageSku": {
