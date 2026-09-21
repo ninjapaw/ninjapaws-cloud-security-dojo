@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "1556154979313873944"
+      "templateHash": "9168535571680062830"
     }
   },
   "parameters": {
@@ -77,6 +77,13 @@
       "defaultValue": true,
       "metadata": {
         "description": "Enable Azure Bastion for browser-based RDP in addition to the configured VM network access."
+      }
+    },
+    "allowAnyBastionSourceIp": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Allow Just-in-Time RDP access requests from any source IP instead of only the Bastion subnet. Defaults to Any; set false to restrict JIT RDP requests to the Bastion subnet CIDR."
       }
     },
     "allowPublicSqlAccess": {
@@ -296,6 +303,31 @@
       "dependsOn": [
         "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-bastion-pip', parameters('vmName')))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployBastion')]",
+      "type": "Microsoft.Security/locations/jitNetworkAccessPolicies",
+      "apiVersion": "2020-01-01",
+      "name": "[format('{0}/default', parameters('location'))]",
+      "kind": "Basic",
+      "properties": {
+        "virtualMachines": [
+          {
+            "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+            "ports": [
+              {
+                "number": 3389,
+                "protocol": "*",
+                "allowedSourceAddressPrefix": "[if(parameters('allowAnyBastionSourceIp'), '*', variables('bastionSubnetPrefix'))]",
+                "maxRequestAccessDuration": "PT3H"
+              }
+            ]
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
       ]
     },
     {

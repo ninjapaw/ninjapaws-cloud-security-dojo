@@ -36,6 +36,9 @@ param bootstrapScriptUrl string
 @description('Enable Azure Bastion for browser-based RDP in addition to the configured VM network access.')
 param deployBastion bool = true
 
+@description('Allow Just-in-Time RDP access requests from any source IP instead of only the Bastion subnet. Defaults to Any; set false to restrict JIT RDP requests to the Bastion subnet CIDR.')
+param allowAnyBastionSourceIp bool = true
+
 @description('Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access.')
 param allowPublicSqlAccess bool = false
 
@@ -273,6 +276,28 @@ resource bastion 'Microsoft.Network/bastionHosts@2025-01-01' = if (deployBastion
             id: bastionPublicIp.id
           }
         }
+      }
+    ]
+  }
+}
+
+// Replaces the default Just-in-Time RDP policy (which Defender for Cloud otherwise leaves scoped to
+// whatever custom IP range a requester last chose) with an explicit, source-controlled baseline.
+resource jitPolicy 'Microsoft.Security/locations/jitNetworkAccessPolicies@2020-01-01' = if (deployBastion) {
+  name: '${location}/default'
+  kind: 'Basic'
+  properties: {
+    virtualMachines: [
+      {
+        id: vm.id
+        ports: [
+          {
+            number: 3389
+            protocol: '*'
+            allowedSourceAddressPrefix: allowAnyBastionSourceIp ? '*' : bastionSubnetPrefix
+            maxRequestAccessDuration: 'PT3H'
+          }
+        ]
       }
     ]
   }
