@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "17227602662657515840"
+      "templateHash": "1556154979313873944"
     }
   },
   "parameters": {
@@ -448,6 +448,7 @@
       "apiVersion": "2024-11-01",
       "name": "[variables('keyVaultResourceName')]",
       "location": "[parameters('location')]",
+      "tags": "[if(parameters('allowPublicKeyVaultAccess'), createObject('SecurityControl', 'Ignore'), createObject())]",
       "properties": {
         "sku": {
           "family": "A",

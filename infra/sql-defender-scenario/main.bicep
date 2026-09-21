@@ -440,6 +440,9 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: keyVaultResourceName
   location: location
+  tags: allowPublicKeyVaultAccess ? {
+    SecurityControl: 'Ignore'
+  } : {}
   properties: {
     sku: {
       family: 'A'
