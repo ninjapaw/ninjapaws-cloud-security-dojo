@@ -588,6 +588,17 @@ run_deployment() {
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
 
+    # ARM only applies osProfile.adminPassword when the VM is first created; redeploying an
+    # existing VM with a new generated password leaves the OS password unchanged, so the
+    # recorded/Key Vault credentials would silently stop matching what's on the VM. The
+    # VMAccess extension resets the OS password directly, keeping the two in sync every run.
+    if az vm user update --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
+        --username "$ADMIN_USERNAME" --password "$admin_password" --output none 2>/dev/null; then
+        record_check "VM admin password synced to the OS" pass "Reset via the VMAccess extension so Bastion sign-in matches the recorded credentials."
+    else
+        record_check "VM admin password synced to the OS" fail "VMAccess extension reset failed; the recorded password may not match the VM. Re-run 'az vm user update' manually."
+    fi
+
     # Persist the generated admin password to the gitignored local output/ directory for Bastion
     # and other SQL VM access. Never print it to stdout, which CI systems capture in logs.
     creds_dir="$OUTPUT_ROOT/$ENVIRONMENT"
