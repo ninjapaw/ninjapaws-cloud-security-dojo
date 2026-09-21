@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7173088690762563271"
+      "templateHash": "4591535032728561827"
     }
   },
   "parameters": {
@@ -76,7 +76,14 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Enable Azure Bastion for browser-based RDP instead of a public IP on the VM."
+        "description": "Enable Azure Bastion for browser-based RDP in addition to the configured VM network access."
+      }
+    },
+    "allowPublicSqlAccess": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access."
       }
     },
     "deployWebApp": {
@@ -117,7 +124,7 @@
     "privateEndpointSubnetPrefix": "10.20.4.0/27",
     "sqlVmResourceName": "[parameters('vmName')]",
     "computerName": "[take(replace(parameters('vmName'), '-', ''), 15)]",
-    "keyVaultResourceName": "[take(toLower(replace(format('{0}kv{1}', parameters('vmName'), uniqueString(resourceGroup().id, deployment().name)), '-', '')), 24)]"
+    "keyVaultResourceName": "[take(toLower(replace(format('{0}kv', parameters('vmName')), '-', '')), 24)]"
   },
   "resources": [
     {
@@ -138,7 +145,7 @@
       "name": "[variables('nsgName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "securityRules": "[if(parameters('deployWebApp'), createArray(createObject('name', 'AllowWebAppToSql', 'properties', createObject('priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', variables('webAppSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray())]"
+        "securityRules": "[concat(if(parameters('allowPublicSqlAccess'), createArray(createObject('name', 'AllowPublicSql', 'properties', createObject('priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', '*', 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'AllowWebAppToSql', 'properties', createObject('priority', 110, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', variables('webAppSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()))]"
       }
     },
     {
@@ -243,6 +250,19 @@
       }
     },
     {
+      "condition": "[parameters('allowPublicSqlAccess')]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}-sql-pip', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+    {
       "condition": "[parameters('deployBastion')]",
       "type": "Microsoft.Network/bastionHosts",
       "apiVersion": "2025-01-01",
@@ -284,12 +304,14 @@
               "privateIPAllocationMethod": "Dynamic",
               "subnet": {
                 "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2025-01-01').subnets[0].id]"
-              }
+              },
+              "publicIPAddress": "[if(parameters('allowPublicSqlAccess'), createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('{0}-sql-pip', parameters('vmName')))), null())]"
             }
           }
         ]
       },
       "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-sql-pip', parameters('vmName')))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ]
     },
@@ -428,7 +450,7 @@
         "enableRbacAuthorization": true,
         "enableSoftDelete": true,
         "enablePurgeProtection": true,
-        "publicNetworkAccess": "Disabled"
+        "publicNetworkAccess": "Enabled"
       }
     },
     {
@@ -437,6 +459,28 @@
       "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'sql-app-login-password')]",
       "properties": {
         "value": "[parameters('sqlAppLoginPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'vm-admin-username')]",
+      "properties": {
+        "value": "[parameters('adminUsername')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'vm-admin-password')]",
+      "properties": {
+        "value": "[parameters('adminPassword')]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
@@ -588,6 +632,10 @@
     "keyVaultName": {
       "type": "string",
       "value": "[variables('keyVaultResourceName')]"
+    },
+    "sqlPublicIpAddress": {
+      "type": "string",
+      "value": "[if(parameters('allowPublicSqlAccess'), coalesce(tryGet(tryGet(if(parameters('allowPublicSqlAccess'), reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-sql-pip', parameters('vmName'))), '2025-01-01', 'full'), null()), 'properties'), 'ipAddress'), ''), '')]"
     },
     "webAppName": {
       "type": "string",

@@ -33,8 +33,11 @@ param workspaceName string = '${vmName}-law'
 @description('Raw content base URL used to fetch the futon-manufacturing bootstrap script onto the VM.')
 param bootstrapScriptUrl string
 
-@description('Enable Azure Bastion for browser-based RDP instead of a public IP on the VM.')
+@description('Enable Azure Bastion for browser-based RDP in addition to the configured VM network access.')
 param deployBastion bool = true
+
+@description('Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access.')
+param allowPublicSqlAccess bool = false
 
 @description('Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection.')
 param deployWebApp bool = true
@@ -60,11 +63,9 @@ var sqlVmResourceName = vmName
 // Windows computer names are capped at 15 characters and can't contain hyphens meaningfully longer
 // than that; the Azure resource name (vmName) has no such limit, so derive a short one separately.
 var computerName = take(replace(vmName, '-', ''), 15)
-// Key Vault names are globally unique and capped at 24 characters; derive a short, RG-scoped
-// name instead of taking it as a param so callers never have to hand-pick one.
-// Folds in the deployment name (unique per run) as well as the RG, not just the RG, so a
-// redeploy never targets a vault name that's soft-deleted-but-purge-protected from a prior run.
-var keyVaultResourceName = take(toLower(replace('${vmName}kv${uniqueString(resourceGroup().id, deployment().name)}', '-', '')), 24)
+// Key Vault names are globally unique and capped at 24 characters. Keep one stable vault per
+// environment so redeployments update its secrets instead of creating a new vault each time.
+var keyVaultResourceName = take(toLower(replace('${vmName}kv', '-', '')), 24)
 
 // Log Analytics workspace: required for Defender for Servers Plan 2 (MDE) and SQL Server audit/diagnostic data.
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
@@ -78,18 +79,31 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   }
 }
 
-// No inbound rules are defined here on purpose except the one path the dashboard Web App needs:
-// RDP goes through Bastion, and every other SQL client is expected to use a private connection.
-// Defender for Servers Just-In-Time VM Access manages any temporary exceptions beyond that.
 resource nsg 'Microsoft.Network/networkSecurityGroups@2025-01-01' = {
   name: nsgName
   location: location
   properties: {
-    securityRules: deployWebApp ? [
+    securityRules: concat(
+      allowPublicSqlAccess ? [
+        {
+          name: 'AllowPublicSql'
+          properties: {
+            priority: 100
+            direction: 'Inbound'
+            access: 'Allow'
+            protocol: 'Tcp'
+            sourcePortRange: '*'
+            destinationPortRange: '1433'
+            sourceAddressPrefix: '*'
+            destinationAddressPrefix: vmSubnetPrefix
+          }
+        }
+      ] : [],
+      deployWebApp ? [
       {
         name: 'AllowWebAppToSql'
         properties: {
-          priority: 100
+          priority: 110
           direction: 'Inbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -99,7 +113,8 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2025-01-01' = {
           destinationAddressPrefix: vmSubnetPrefix
         }
       }
-    ] : []
+      ] : []
+    )
   }
 }
 
@@ -145,9 +160,8 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-01-01' = {
         }
       }
       {
-        // Dedicated subnet for the Key Vault private endpoint: this subscription's policy baseline
-        // forces publicNetworkAccess to Disabled on every Key Vault, so the Web App can only reach
-        // the vault's secret (the SQL app login password) through a private link on the VNet.
+        // Dedicated subnet for the Key Vault private endpoint so the Web App can resolve the SQL
+        // app login password over the VNet even though the vault also permits public access.
         name: 'private-endpoint-subnet'
         properties: {
           addressPrefix: privateEndpointSubnetPrefix
@@ -158,10 +172,8 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-01-01' = {
   }
 }
 
-// Required because the Key Vault below has publicNetworkAccess: 'Disabled' (this subscription's
-// policy baseline forces it); without a private link + matching DNS, "<vault>.vault.azure.net"
-// would resolve to a public IP the vault firewall rejects, and the Web App's Key Vault reference
-// app setting could never resolve the SQL app login password.
+// Keeps the Web App's Key Vault traffic on the VNet while authorized operators can also use the
+// vault's public endpoint.
 resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (deployWebApp) {
   name: 'privatelink.vaultcore.azure.net'
   location: 'global'
@@ -229,6 +241,17 @@ resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2025-01-01' = if (
   }
 }
 
+resource sqlPublicIp 'Microsoft.Network/publicIPAddresses@2025-01-01' = if (allowPublicSqlAccess) {
+  name: '${vmName}-sql-pip'
+  location: location
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
 resource bastion 'Microsoft.Network/bastionHosts@2025-01-01' = if (deployBastion) {
   name: '${vmName}-bastion'
   location: location
@@ -252,7 +275,6 @@ resource bastion 'Microsoft.Network/bastionHosts@2025-01-01' = if (deployBastion
   }
 }
 
-// No public IP: the VM is reached only through Bastion, keeping the SQL Server host off the internet.
 resource nic 'Microsoft.Network/networkInterfaces@2025-01-01' = {
   name: nicName
   location: location
@@ -265,6 +287,9 @@ resource nic 'Microsoft.Network/networkInterfaces@2025-01-01' = {
           subnet: {
             id: vnet.properties.subnets[0].id
           }
+          publicIPAddress: allowPublicSqlAccess ? {
+            id: sqlPublicIp.id
+          } : null
         }
       }
     ]
@@ -421,14 +446,12 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     // This subscription's policy baseline requires purge protection on every Key Vault, so it
-    // can't be turned off for easier redeploys. The name below folds in the deployment name (which
-    // the deploy script makes unique per run) specifically so a repeat deploy never collides with a
-    // soft-deleted vault from a prior run; the trade-off is that torn-down vaults linger, purgeable
-    // only after the default 90-day retention or by an operator with Key Vault purge permission.
+    // can't be turned off for easier redeploys, so the environment keeps one stable vault across
+    // deployments. A deleted vault remains
+    // recoverable during the default 90-day retention period and may require purge permission
+    // before the same name can be recreated.
     enablePurgeProtection: true
-    // This subscription's policy baseline forces Disabled regardless of what's requested here;
-    // the Web App reaches the vault only through the private endpoint/DNS zone set up above.
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
   }
 }
 
@@ -437,6 +460,22 @@ resource sqlAppLoginSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   name: 'sql-app-login-password'
   properties: {
     value: sqlAppLoginPassword
+  }
+}
+
+resource vmAdminUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'vm-admin-username'
+  properties: {
+    value: adminUsername
+  }
+}
+
+resource vmAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'vm-admin-password'
+  properties: {
+    value: adminPassword
   }
 }
 
@@ -562,5 +601,6 @@ output bastionName string = deployBastion ? bastion.name : ''
 output vnetId string = vnet.id
 output principalId string = vm.identity.principalId
 output keyVaultName string = keyVaultResourceName
+output sqlPublicIpAddress string = allowPublicSqlAccess ? (sqlPublicIp.?properties.?ipAddress ?? '') : ''
 output webAppName string = deployWebApp ? webApp!.name : ''
 output webAppHostName string = deployWebApp ? webApp!.properties.defaultHostName : ''

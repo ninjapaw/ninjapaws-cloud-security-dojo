@@ -26,6 +26,7 @@ VM_NAME=""
 WEB_APP_NAME=""
 WEB_APP_HOSTNAME=""
 KEY_VAULT_NAME=""
+SQL_PUBLIC_IP=""
 ADMIN_USERNAME="${SQL_VM_ADMIN_USERNAME:-ninjapawsadmin}"
 ASSUME_YES=false
 OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/output}"
@@ -134,6 +135,7 @@ LOCATION="$(config_setting location "$LOCATION")"
 VM_SIZE="$(config_setting vmSize Standard_D4s_v4)"
 SQL_IMAGE_SKU="$(config_setting sqlImageSku sqldev-gen2)"
 DEPLOY_BASTION="$(config_setting deployBastion true)"
+ALLOW_PUBLIC_SQL_ACCESS="$(config_setting allowPublicSqlAccess false)"
 DEFENDER_SERVERS_PLAN="$(config_lookup sqlScenario.defender.serversPlan)"
 DEFENDER_SERVERS_PLAN="${DEFENDER_SERVERS_PLAN:-VirtualMachines}"
 DEFENDER_SERVERS_SUBPLAN="$(config_lookup sqlScenario.defender.serversSubPlan)"
@@ -486,12 +488,13 @@ ${BLUE}Location:${NC} $LOCATION
 ${BLUE}VM name:${NC} $VM_NAME
 ${BLUE}VM size:${NC} $VM_SIZE
 ${BLUE}SQL image SKU:${NC} $SQL_IMAGE_SKU (MicrosoftSQLServer:sql2022-ws2022)
-${BLUE}Azure Bastion:${NC} $DEPLOY_BASTION (no public IP is attached to the VM)
+${BLUE}Azure Bastion:${NC} $DEPLOY_BASTION
+${BLUE}Public SQL endpoint:${NC} $ALLOW_PUBLIC_SQL_ACCESS (TCP 1433 from public networks)
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
 ${BLUE}Defender for SQL:${NC} $DEFENDER_SQL_PLAN (Standard tier)
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
 ${BLUE}Pawton Manufacturing Web App:${NC} $WEB_APP_NAME ($WEB_APP_PLAN_SKU, deployWebApp=$DEPLOY_WEB_APP)
-${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet; no public database endpoint
+${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet
 
 EOF
 }
@@ -575,15 +578,15 @@ run_deployment() {
         --template-file "$BICEP_FILE" \
         --parameters vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
-                     deployBastion="$DEPLOY_BASTION" deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
+                     deployBastion="$DEPLOY_BASTION" allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
+                     deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
 
-    # The generated admin password is otherwise unrecoverable, and this VM has no public IP,
-    # so the only way to sign in over Bastion afterward is to persist it to the gitignored
-    # local output/ directory. Never print it to stdout, which CI systems capture in logs.
+    # Persist the generated admin password to the gitignored local output/ directory for Bastion
+    # and other SQL VM access. Never print it to stdout, which CI systems capture in logs.
     creds_dir="$OUTPUT_ROOT/$ENVIRONMENT"
     mkdir -p "$creds_dir"
     creds_file="$creds_dir/sql-vm-credentials.txt"
@@ -592,7 +595,7 @@ run_deployment() {
         printf 'Admin username: %s\n' "$ADMIN_USERNAME"
         printf 'Admin password: %s\n' "$admin_password"
         printf 'Generated:      %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf 'Connect through Azure Bastion in the portal; this VM has no public IP.\n'
+        printf 'Connect through Azure Bastion in the portal, or use the public SQL endpoint shown in the report.\n'
     } > "$creds_file"
     chmod 600 "$creds_file" 2>/dev/null || true
     unset admin_password
@@ -601,9 +604,11 @@ run_deployment() {
 
     KEY_VAULT_NAME="$(read_output "$output_json" keyVaultName)"
     WEB_APP_HOSTNAME="$(read_output "$output_json" webAppHostName)"
+    SQL_PUBLIC_IP="$(read_output "$output_json" sqlPublicIpAddress)"
     unset sql_app_login_password
     if [[ -n "$KEY_VAULT_NAME" ]]; then
         record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
+        record_check "VM admin credentials stored in Key Vault" pass "Secrets 'vm-admin-username' and 'vm-admin-password' in $KEY_VAULT_NAME; retrieve them with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name <secret-name>'."
     fi
 
     vm_principal_id="$(read_output "$output_json" principalId)"
@@ -713,10 +718,10 @@ run_verification() {
     fi
 
     nic_public_ip="$(az network nic show --resource-group "$RESOURCE_GROUP" --name "${VM_NAME}-nic" --query "ipConfigurations[0].publicIPAddress" -o tsv 2>/dev/null || true)"
-    if [[ -z "$nic_public_ip" ]]; then
-        record_check "SQL Server VM has no public IP" pass "The VM NIC has no public IP address; management traffic goes through Azure Bastion only."
+    if [[ -n "$nic_public_ip" ]]; then
+        record_check "SQL Server VM public SQL endpoint" pass "The VM NIC has public IP resource $nic_public_ip; inbound TCP 1433 is enabled by the Scenario 2 NSG."
     else
-        record_check "SQL Server VM has no public IP" fail "A public IP is attached to the VM NIC: $nic_public_ip."
+        record_check "SQL Server VM public SQL endpoint" not_applicable "No public IP is attached; use the private endpoint or Bastion path."
     fi
 
     if [[ "$DEPLOY_BASTION" == true ]]; then
@@ -947,7 +952,8 @@ $(render_check_rows_html)
         <div class="grid">
             <div class="item"><div class="label">Live demo site</div><div class="value">$demo_site_html</div></div>
             <div class="item"><div class="label">Resource group (portal)</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/overview" target="_blank" rel="noopener">$(html_escape "$RESOURCE_GROUP")</a></div></div>
-            <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $(html_escape "$VM_NAME") &gt; Connect &gt; Bastion. No public IP is exposed on this VM.</div></div>
+            <div class="item"><div class="label">Connect (Azure Bastion)</div><div class="value">Portal &gt; $(html_escape "$VM_NAME") &gt; Connect &gt; Bastion.</div></div>
+            <div class="item"><div class="label">SQL public endpoint</div><div class="value">$(html_escape "${SQL_PUBLIC_IP:-not deployed}"):1433</div></div>
             <div class="item"><div class="label">VM admin credentials</div><div class="value"><code>$(html_escape "$OUTPUT_ROOT/$ENVIRONMENT/sql-vm-credentials.txt")</code><br>Local file only, not committed. Delete it once you finish the exercise.</div></div>
             <div class="item"><div class="label">SQL app login password</div><div class="value">Key Vault <code>$(html_escape "${KEY_VAULT_NAME:-not deployed}")</code>, secret <code>sql-app-login-password</code></div></div>
             <div class="item"><div class="label">Defender recommendations</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>

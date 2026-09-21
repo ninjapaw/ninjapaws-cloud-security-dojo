@@ -91,6 +91,7 @@
     "vmSize": "Standard_D4s_v4",
     "sqlImageSku": "sqldev-gen2",
     "deployBastion": "true",
+    "allowPublicSqlAccess": "false",
     "deployWebApp": "true",
     "webAppPlanSku": "B1",
     "workspaceRetentionDays": "30",
@@ -114,6 +115,7 @@
       "npmNetworkMode": "online",
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Dev-CentralUS",
       "sqlVmName": "ninjapaws-sql-vm-dev",
+      "allowPublicSqlAccess": "true",
       "webAppName": "ninjapaws-pawton-dev"
     },
     "prod": {
@@ -129,6 +131,7 @@
       "npmNetworkMode": "online",
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Prod-CentralUS",
       "sqlVmName": "ninjapaws-sql-vm-prod",
+      "allowPublicSqlAccess": "false",
       "webAppName": "ninjapaws-pawton-prod"
     }
   }

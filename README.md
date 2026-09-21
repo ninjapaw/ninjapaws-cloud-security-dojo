@@ -22,7 +22,7 @@ Because this scenario provisions a fundamentally different Azure architecture th
 
 Security posture baked into the infrastructure:
 
-- No public IP address on the SQL Server VM; management access is exclusively through Azure Bastion.
+- The SQL Server VM has a public endpoint for training clients on TCP 1433, protected by the VM NSG; Azure Bastion remains available for browser-based RDP.
 - The VM is registered with the SQL IaaS Agent extension (`Microsoft.SqlVirtualMachine/sqlVirtualMachines`), so Azure manages automated patching and best-practice assessment. Automated backups are off by default because they require a storage account destination this training scenario doesn't provision; add one and enable `autoBackupSettings` in `infra/sql-defender-scenario/main.bicep` if you need them.
 - Trusted Launch (Secure Boot + vTPM) and encryption-at-host are enabled on the VM.
 - The bootstrap script (`scripts/sql/Setup-FutonManufacturing.ps1`) enables Transparent Data Encryption (TDE) on the restored database, creates a SQL Server Audit that writes login and permission-change events to the Windows Application log, provisions a least-privilege application login (`db_datareader`/`db_datawriter` only) instead of using `sa`, disables the `sa` login and the legacy SQL Server Browser service, and forces encrypted client connections.
@@ -32,7 +32,7 @@ Security posture baked into the infrastructure:
 Scenario 2 also deploys **Pawton Manufacturing** ("paw" + "futon" — the fictional futon manufacturer behind the sample data), a small Astro/Node.js dashboard at `apps/pawton-manufacturing/` that reads the restored Futon Manufacturing data live: item/warehouse/customer counts, inventory valuation, sales by channel, and production order status. It exists to make Scenario 2 tangible with a real, running application instead of only infrastructure evidence, and it extends the story to a workload type Scenario 1 doesn't cover on its own:
 
 - It runs on its own Azure App Service for Linux (Node 20), which **Microsoft Defender for App Service already protects** the moment that plan is Standard at subscription scope — the same plan Scenario 1 requests. No extra Defender activation is needed for this Web App; the deployment report includes a check that confirms the subscription-wide plan already covers it.
-- It reaches SQL Server only through **regional VNet integration** into the same VNet as the SQL VM; the NSG allows port 1433 solely from the Web App's delegated subnet. There is still no public database endpoint anywhere in this scenario.
+- It reaches SQL Server through **regional VNet integration** into the same VNet as the SQL VM; the NSG allows the Web App subnet and the configured public TCP 1433 endpoint.
 - It authenticates with the same least-privilege `futon_app` SQL login the bootstrap script creates, using a password shared through an **Azure Key Vault** secret (an App Service Key Vault reference), never a plaintext app setting.
 - Together with Scenario 1, this now demonstrates Defender for App Service, Defender for Containers, Defender CSPM, Defender for Servers Plan 2, and Defender for SQL side by side, backed by running (not simulated) workloads.
 
@@ -45,11 +45,17 @@ bash scripts/deploy-sql-scenario.sh doctor --environment dev
 bash scripts/deploy-sql-scenario.sh deploy --environment dev
 ```
 
-Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, no public IP, Bastion availability, the Futon Manufacturing bootstrap result, and the Pawton Manufacturing dashboard's reachability and database connectivity), then connect through **Azure Bastion** in the portal to explore the restored database and Defender findings, or open the dashboard URL printed at the end of the run. The generated Windows administrator password is written once to `output/dev/sql-vm-credentials.txt` (gitignored, never printed to the console or captured in CI logs) because it is otherwise unrecoverable and is required to sign in over Bastion; treat that file as a secret and delete it once you finish the exercise. The `futon_app` SQL login password lives only in Azure Key Vault (`az keyvault secret show --vault-name <name> --name sql-app-login-password`), not in any local file. When finished, tear the environment down to avoid ongoing VM charges:
+Review the generated report at `output/dev/sql-deployment-dev.html` for the verification matrix (VM running state, SQL IaaS Agent registration, Defender for Servers Plan 2 tier/sub-plan, Defender for SQL tier, public SQL endpoint, Bastion availability, the Futon Manufacturing bootstrap result, and the Pawton Manufacturing dashboard's reachability and database connectivity), then connect through **Azure Bastion** in the portal or use the public SQL endpoint to explore the restored database and Defender findings, or open the dashboard URL printed at the end of the run. The generated Windows administrator password is written once to `output/dev/sql-vm-credentials.txt` (gitignored, never printed to the console or captured in CI logs) and stored in Key Vault as `vm-admin-password`; treat both locations as secrets and delete the local file once you finish the exercise. The `futon_app` SQL login password lives in Azure Key Vault (`az keyvault secret show --vault-name <name> --name sql-app-login-password`), not in any local file. When finished, tear the environment down to avoid ongoing VM charges:
 
 ```bash
 bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes
 ```
+
+The VM Bastion credentials are also stored in the Scenario 2 Key Vault as `vm-admin-username` and `vm-admin-password`. Retrieve them with `az keyvault secret show --vault-name <name> --name <secret-name>` using an identity authorized to read secrets.
+
+Scenario 2 uses one stable Key Vault per environment. Redeployments update the existing `sql-app-login-password`, `vm-admin-username`, and `vm-admin-password` secrets instead of creating another vault. Public SQL access is configured per environment with `allowPublicSqlAccess`; it is disabled by default, enabled for the isolated `dev` training environment, and disabled for `prod`.
+
+The generated deployment report includes the public SQL endpoint and port (`<public-ip>:1433`) for SQL clients. This broad inbound access is intended for the isolated training environment; restrict the NSG source to a known CIDR before using this pattern elsewhere.
 
 This scenario provisions a billable Azure VM, managed disk, App Service plan, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.
 
