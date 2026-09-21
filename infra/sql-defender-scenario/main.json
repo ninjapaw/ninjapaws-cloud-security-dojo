@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7197844975672813812"
+      "templateHash": "17227602662657515840"
     }
   },
   "parameters": {
@@ -84,6 +84,13 @@
       "defaultValue": false,
       "metadata": {
         "description": "Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access."
+      }
+    },
+    "allowPublicKeyVaultAccess": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Allow the Key Vault public endpoint to be reached from the internet. The vault still requires RBAC authorization; set false to require private endpoint access."
       }
     },
     "deployWebApp": {
@@ -450,7 +457,7 @@
         "enableRbacAuthorization": true,
         "enableSoftDelete": true,
         "enablePurgeProtection": true,
-        "publicNetworkAccess": "Enabled"
+        "publicNetworkAccess": "[if(parameters('allowPublicKeyVaultAccess'), 'Enabled', 'Disabled')]"
       }
     },
     {

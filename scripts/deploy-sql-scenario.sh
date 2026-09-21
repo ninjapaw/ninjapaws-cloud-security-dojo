@@ -136,6 +136,7 @@ VM_SIZE="$(config_setting vmSize Standard_D4s_v4)"
 SQL_IMAGE_SKU="$(config_setting sqlImageSku sqldev-gen2)"
 DEPLOY_BASTION="$(config_setting deployBastion true)"
 ALLOW_PUBLIC_SQL_ACCESS="$(config_setting allowPublicSqlAccess false)"
+ALLOW_PUBLIC_KEY_VAULT_ACCESS="$(config_setting allowPublicKeyVaultAccess true)"
 DEFENDER_SERVERS_PLAN="$(config_lookup sqlScenario.defender.serversPlan)"
 DEFENDER_SERVERS_PLAN="${DEFENDER_SERVERS_PLAN:-VirtualMachines}"
 DEFENDER_SERVERS_SUBPLAN="$(config_lookup sqlScenario.defender.serversSubPlan)"
@@ -490,6 +491,7 @@ ${BLUE}VM size:${NC} $VM_SIZE
 ${BLUE}SQL image SKU:${NC} $SQL_IMAGE_SKU (MicrosoftSQLServer:sql2022-ws2022)
 ${BLUE}Azure Bastion:${NC} $DEPLOY_BASTION
 ${BLUE}Public SQL endpoint:${NC} $ALLOW_PUBLIC_SQL_ACCESS (TCP 1433 from public networks)
+${BLUE}Public Key Vault endpoint:${NC} $ALLOW_PUBLIC_KEY_VAULT_ACCESS
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
 ${BLUE}Defender for SQL:${NC} $DEFENDER_SQL_PLAN (Standard tier)
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
@@ -579,6 +581,7 @@ run_deployment() {
         --parameters vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
                      deployBastion="$DEPLOY_BASTION" allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
+                     allowPublicKeyVaultAccess="$ALLOW_PUBLIC_KEY_VAULT_ACCESS" \
                      deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."

@@ -55,6 +55,8 @@ The VM Bastion credentials are also stored in the Scenario 2 Key Vault as `vm-ad
 
 Scenario 2 uses one stable Key Vault per environment. Redeployments update the existing `sql-app-login-password`, `vm-admin-username`, and `vm-admin-password` secrets instead of creating another vault. Public SQL access is configured per environment with `allowPublicSqlAccess`; it is disabled by default, enabled for the isolated `dev` training environment, and disabled for `prod`.
 
+Key Vault internet access is configured with `allowPublicKeyVaultAccess`, defaulting to `true`; it is enabled for `dev` and disabled for `prod`. Azure subscription policy can still override the requested setting, so verify the effective `publicNetworkAccess` value after deployment.
+
 The generated deployment report includes the public SQL endpoint and port (`<public-ip>:1433`) for SQL clients. This broad inbound access is intended for the isolated training environment; restrict the NSG source to a known CIDR before using this pattern elsewhere.
 
 This scenario provisions a billable Azure VM, managed disk, App Service plan, and Log Analytics workspace; use an isolated subscription and delete the resource group when the exercise ends.

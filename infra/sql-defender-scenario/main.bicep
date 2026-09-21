@@ -39,6 +39,9 @@ param deployBastion bool = true
 @description('Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access.')
 param allowPublicSqlAccess bool = false
 
+@description('Allow the Key Vault public endpoint to be reached from the internet. The vault still requires RBAC authorization; set false to require private endpoint access.')
+param allowPublicKeyVaultAccess bool = true
+
 @description('Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection.')
 param deployWebApp bool = true
 
@@ -451,7 +454,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     // recoverable during the default 90-day retention period and may require purge permission
     // before the same name can be recreated.
     enablePurgeProtection: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: allowPublicKeyVaultAccess ? 'Enabled' : 'Disabled'
   }
 }
 

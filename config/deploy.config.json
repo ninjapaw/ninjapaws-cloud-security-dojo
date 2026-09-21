@@ -92,6 +92,7 @@
     "sqlImageSku": "sqldev-gen2",
     "deployBastion": "true",
     "allowPublicSqlAccess": "false",
+    "allowPublicKeyVaultAccess": "true",
     "deployWebApp": "true",
     "webAppPlanSku": "B1",
     "workspaceRetentionDays": "30",
@@ -116,6 +117,7 @@
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Dev-CentralUS",
       "sqlVmName": "ninjapaws-sql-vm-dev",
       "allowPublicSqlAccess": "true",
+      "allowPublicKeyVaultAccess": "true",
       "webAppName": "ninjapaws-pawton-dev"
     },
     "prod": {
@@ -132,6 +134,7 @@
       "sqlResourceGroup": "NP-ninjapaws-dojo-sql-Prod-CentralUS",
       "sqlVmName": "ninjapaws-sql-vm-prod",
       "allowPublicSqlAccess": "false",
+      "allowPublicKeyVaultAccess": "false",
       "webAppName": "ninjapaws-pawton-prod"
     }
   }
