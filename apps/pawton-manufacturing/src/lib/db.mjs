@@ -2,6 +2,13 @@ import sql from "mssql";
 
 let poolPromise;
 
+const DEFAULT_SQL_TIMEOUT_MS = 5000;
+
+function readTimeout(name) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SQL_TIMEOUT_MS;
+}
+
 function readConfig() {
   const {
     SQL_SERVER_HOST,
@@ -26,6 +33,8 @@ function readConfig() {
       encrypt: true,
       trustServerCertificate: true,
     },
+    connectionTimeout: readTimeout("SQL_CONNECT_TIMEOUT_MS"),
+    requestTimeout: readTimeout("SQL_REQUEST_TIMEOUT_MS"),
     pool: { max: 5, min: 0, idleTimeoutMillis: 30000 },
   };
 }
@@ -42,7 +51,10 @@ export async function getPool() {
         "SQL_SERVER_HOST and SQL_APP_LOGIN_PASSWORD must be set.",
       );
     }
-    poolPromise = sql.connect(config);
+    poolPromise = sql.connect(config).catch((err) => {
+      poolPromise = undefined;
+      throw err;
+    });
   }
   return poolPromise;
 }

@@ -16,7 +16,7 @@ export async function GET() {
   }
 
   return new Response(JSON.stringify(body), {
-    status: body.database === "unreachable" ? 503 : 200,
+    status: 200,
     headers: { "Content-Type": "application/json" },
   });
 }

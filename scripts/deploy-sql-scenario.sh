@@ -666,6 +666,9 @@ deploy_web_app_code() {
     update_status "Deploying dashboard" "Zip-deploying the Pawton Manufacturing dashboard; App Service/Oryx will build it remotely." 82
     if deploy_error="$(az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --src-path "$zip_path" --type zip --async false --output none 2>&1)"; then
         ok "Pawton Manufacturing dashboard code deployed."
+        az webapp config set --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --startup-file "node ./dist/server/entry.mjs" --output none
+        az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" \
+            --settings HOST=0.0.0.0 SQL_CONNECT_TIMEOUT_MS=5000 SQL_REQUEST_TIMEOUT_MS=5000 --output none
         record_check "Pawton Manufacturing dashboard deployed" pass "Zip-deployed $app_dir to $WEB_APP_NAME; Oryx runs the Astro build remotely."
     else
         warn "Web app code deployment failed: ${deploy_error:-no error detail returned}"

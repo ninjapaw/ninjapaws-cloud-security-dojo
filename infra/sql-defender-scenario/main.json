@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7515643065886266594"
+      "templateHash": "7173088690762563271"
     }
   },
   "parameters": {
@@ -472,6 +472,7 @@
         "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'webapp-integration-subnet')]",
         "siteConfig": {
           "linuxFxVersion": "NODE|22-lts",
+          "appCommandLine": "node ./dist/server/entry.mjs",
           "alwaysOn": true,
           "http20Enabled": true,
           "minTlsVersion": "1.2",
@@ -500,6 +501,18 @@
             {
               "name": "PORT",
               "value": "8080"
+            },
+            {
+              "name": "HOST",
+              "value": "0.0.0.0"
+            },
+            {
+              "name": "SQL_CONNECT_TIMEOUT_MS",
+              "value": "5000"
+            },
+            {
+              "name": "SQL_REQUEST_TIMEOUT_MS",
+              "value": "5000"
             },
             {
               "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",

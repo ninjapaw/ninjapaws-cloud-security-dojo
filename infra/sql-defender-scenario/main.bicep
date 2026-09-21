@@ -470,6 +470,7 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
       // NODE|20-lts intermittently hung during container startup (cert-sync/registry pull
       // stalls indefinitely on this platform build); 22-lts starts reliably in a few seconds.
       linuxFxVersion: 'NODE|22-lts'
+      appCommandLine: 'node ./dist/server/entry.mjs'
       alwaysOn: true
       http20Enabled: true
       minTlsVersion: '1.2'
@@ -502,6 +503,20 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
         {
           name: 'PORT'
           value: '8080'
+        }
+        {
+          // Astro's Node adapter defaults to localhost. App Service probes the container
+          // externally, so the standalone server must bind all interfaces.
+          name: 'HOST'
+          value: '0.0.0.0'
+        }
+        {
+          name: 'SQL_CONNECT_TIMEOUT_MS'
+          value: '5000'
+        }
+        {
+          name: 'SQL_REQUEST_TIMEOUT_MS'
+          value: '5000'
         }
         {
           name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
