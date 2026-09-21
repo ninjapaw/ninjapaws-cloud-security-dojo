@@ -34,53 +34,55 @@ concurrency:
 jobs:
   sql-scenario:
     name: SQL Server VM scenario (${{ inputs.stage }})
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    env:
-      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
-      # Matches config/deploy.config.json's environments.<env>.sqlResourceGroup default; this
-      # workflow never overrides --resource-group, so the script always resolves to this name.
-      SQL_RESOURCE_GROUP: ${{ inputs.environment == 'prod' && 'NP-ninjapaws-dojo-sql-Prod-CentralUS' || 'NP-ninjapaws-dojo-sql-Dev-CentralUS' }}
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/scenario-lifecycle.yml
+    with:
+      scenario_name: SQL Server VM scenario
+      summary_heading: 🛡️ SQL Scenario Summary
+      script_path: scripts/deploy-sql-scenario.sh
+      stage: ${{ inputs.stage }}
+      environment: ${{ inputs.environment }}
+      # Matches config/deploy.config.json's environments.<env>.sqlResourceGroup default.
+      resource_group: ${{ inputs.environment == 'prod' && 'NP-ninjapaws-dojo-sql-Prod-CentralUS' || 'NP-ninjapaws-dojo-sql-Dev-CentralUS' }}
+      location: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      require_uninstall_confirmation: true
+      confirm_resource_group: ${{ inputs.confirm_resource_group }}
 
-    steps:
-      - name: 🥷 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🧭 Verify required environment variables
-        run: |
-          : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
-          : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
-          : "${SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID as an Environment variable in the $DEPLOY_ENVIRONMENT Environment}"
-      - name: 🛑 Validate deletion confirmation
-        if: inputs.stage == 'uninstall'
-        run: |
-          if [[ "${{ inputs.confirm_resource_group }}" != "$SQL_RESOURCE_GROUP" ]]; then
-            echo "::error title=Confirmation mismatch::Type '$SQL_RESOURCE_GROUP' exactly in confirm_resource_group to delete it. No deletion was attempted."
-            exit 1
-          fi
-      - name: 🔐 Azure Login
-        if: inputs.stage != 'plan'
-        uses: azure/login@v2
-        with:
-          auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.SUBSCRIPTION_ID }}
-
-      - name: 🧭 Run SQL scenario lifecycle
-        run: |
-          scripts/deploy-sql-scenario.sh "${{ inputs.stage }}" \
-            --environment "$DEPLOY_ENVIRONMENT" \
-            --subscription "$SUBSCRIPTION_ID" \
-            --yes
-
-      - name: 📊 Summary
-        if: always()
-        run: |
-          echo "## 🛡️ SQL Scenario Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Stage:** ${{ inputs.stage }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Environment:** $DEPLOY_ENVIRONMENT" >> "$GITHUB_STEP_SUMMARY"
+  defender-posture:
+    name: Defender posture audit
+    if: inputs.stage != 'plan' && inputs.stage != 'uninstall'
+    needs: sql-scenario
+    permissions:
+      contents: read
+      id-token: write
+    uses: ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6
+    with:
+      environment: ${{ inputs.environment }}
+      resource-group: ${{ inputs.environment == 'prod' && 'NP-ninjapaws-dojo-sql-Prod-CentralUS' || 'NP-ninjapaws-dojo-sql-Dev-CentralUS' }}
+      location: ${{ vars.AZURE_LOCATION || 'centralus' }}
+      apply: ${{ vars.DEFENDER_MANAGE_PLANS != 'false' && vars.DEFENDER_MANAGE_EXTENSIONS != 'false' }}
+      defender-appservices-tier: ${{ vars.DEFENDER_APPSERVICES_TIER || 'Standard' }}
+      defender-containers-tier: disabled
+      defender-cspm-tier: ${{ vars.DEFENDER_CSPM_TIER || 'Standard' }}
+      defender-arm-tier: ${{ vars.DEFENDER_ARM_TIER || 'Standard' }}
+      defender-servers-tier: ${{ vars.DEFENDER_SERVERS_TIER || 'Standard' }}
+      defender-servers-subplan: ${{ vars.DEFENDER_SERVERS_SUBPLAN || 'P2' }}
+      defender-sql-tier: ${{ vars.DEFENDER_SQL_TIER || 'Standard' }}
+      defender-cspm-agentless-serverless-posture: ${{ vars.DEFENDER_CSPM_SERVERLESS_PROTECTION || 'true' }}
+      defender-cspm-serverless-containers: ${{ vars.DEFENDER_CSPM_SERVERLESS_CONTAINERS || 'true' }}
+      defender-cspm-registry-assessment: disabled
+      defender-cspm-kubernetes-discovery: disabled
+      defender-cspm-vm-scanning: ${{ vars.DEFENDER_CSPM_VM_SCANNING || 'false' }}
+      defender-cspm-sensitive-data: ${{ vars.DEFENDER_CSPM_SENSITIVE_DATA || 'false' }}
+      defender-cspm-permissions-management: ${{ vars.DEFENDER_CSPM_PERMISSIONS_MANAGEMENT || 'false' }}
+      defender-cspm-api-posture: ${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}
+      defender-containers-registry-assessment: disabled
+      defender-containers-kubernetes-discovery: disabled
+      defender-containers-vm-scanning: disabled
+      defender-containers-sensor: disabled
+      defender-devops-connector-enabled: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_ENABLED || 'true' }}
+      defender-devops-connector-name: ${{ vars.DEFENDER_DEVOPS_CONNECTOR_NAME || 'ninjapaws-github' }}
+      defender-devops-github-owner: ${{ vars.DEFENDER_DEVOPS_GITHUB_OWNER || github.repository_owner }}
+      github-advanced-security-expected: ${{ vars.ADVANCED_SECURITY_EXPECTED || 'true' }}

@@ -205,6 +205,12 @@ file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6'
+file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'workflow_call:'
+file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'SCENARIO_SCRIPT'
+file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'confirm_resource_group'
+file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'uses: ./.github/workflows/scenario-lifecycle.yml'
+file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6'
+file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'defender-containers-tier: disabled'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-servers-tier:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-sql-tier:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-cspm-api-posture:'
