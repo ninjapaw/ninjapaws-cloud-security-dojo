@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "astro": "^5.1.1",
-    "@astrojs/node": "^9.0.0",
+    "@astrojs/node": "^11.0.2",
     "mssql": "^11.0.1",
     "piccolore": "^0.1.3"
   },
