@@ -31,6 +31,30 @@ ASSUME_YES=false
 OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/output}"
 RUN_STARTED_AT="$(date +%s)"
 RUN_STARTED_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_ENDED_ISO=""
+RUN_ID=""
+RUN_INVOCATION="${*:-$COMMAND}"
+RUN_OPERATOR="${GITHUB_ACTOR:-${USER:-${USERNAME:-unknown}}}"
+RUN_HOST="$(hostname 2>/dev/null || printf 'unknown')"
+RUN_ORIGIN="Local workstation"
+RUN_ORIGIN_DETAIL="interactive shell on $RUN_HOST"
+APP_VERSION="unknown"
+CONFIG_VERSION="unknown"
+GIT_COMMIT="unknown"
+GIT_DIRTY="unknown"
+AZURE_TENANT_ID="${AZURE_TENANT_ID:-}"
+AZURE_ACCOUNT_NAME=""
+SUBSCRIPTION_NAME=""
+STATUS_HTML=""
+FINAL_REPORT_FILE=""
+STATUS_OPEN_MARKER=""
+OPEN_STATUS_HTML=true
+NO_STATUS_HTML=false
+REPORT_LINK_PRINTED=false
+STATUS_BROWSER_OPENED=false
+CURRENT_STATUS_PHASE="Starting"
+CURRENT_STATUS_DETAIL="Preparing Scenario 2 lifecycle command."
+CURRENT_STATUS_PERCENT=5
 
 # config_lookup and config_scenario_ids come from lib/common.sh.
 config_setting() {
@@ -40,7 +64,15 @@ config_setting() {
     printf '%s' "${value:-$fallback}"
 }
 
-fail() { echo -e "${RED}ERROR:${NC} $1" >&2; exit 1; }
+fail() {
+    echo -e "${RED}ERROR:${NC} $1" >&2
+    RUN_ENDED_ISO="${RUN_ENDED_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    if [[ -n "$STATUS_HTML" ]]; then
+        write_status_report "Failed" "$1" "${CURRENT_STATUS_PERCENT:-100}" true
+        print_report_link_once
+    fi
+    exit 1
+}
 info() { echo -e "${BLUE}==>${NC} $1"; }
 ok()   { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}!${NC} $1"; }
@@ -67,6 +99,8 @@ Options:
                               interactive setting prompts to skip. Use --yes to also skip the
                               deployment confirmation prompt.
   --yes                      Skip confirmation prompts
+    --no-status-html           Disable the auto-refreshing HTML status report
+    --no-open-status           Keep the status report on disk without opening a browser
   --help                     Show this help
 EOF
 }
@@ -83,6 +117,8 @@ while (($# > 0)); do
         --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
         --defaults) shift ;;
         --yes) ASSUME_YES=true; shift ;;
+        --no-status-html) NO_STATUS_HTML=true; OPEN_STATUS_HTML=false; shift ;;
+        --no-open-status) OPEN_STATUS_HTML=false; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "Unknown argument: $1" ;;
     esac
@@ -111,6 +147,306 @@ GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || pri
 BOOTSTRAP_SCRIPT_URL="https://raw.githubusercontent.com/ninjapaw/ninjapaws-cloud-security-dojo/${GIT_BRANCH}/scripts/sql/Setup-FutonManufacturing.ps1"
 BICEP_FILE="$AZURE_REPO_ROOT/infra/sql-defender-scenario/main.bicep"
 
+resolve_audit_context() {
+    RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    APP_VERSION="$(sed -n 's/.*"version"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" 2>/dev/null | head -1)"
+    APP_VERSION="${APP_VERSION:-unknown}"
+    CONFIG_VERSION="$(config_lookup configVersion)"
+    CONFIG_VERSION="${CONFIG_VERSION:-unknown}"
+    GIT_BRANCH="${GITHUB_REF_NAME:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')}"
+    GIT_COMMIT="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')}"
+    if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+        GIT_DIRTY="modified (uncommitted changes present)"
+    else
+        GIT_DIRTY="clean"
+    fi
+    if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+        RUN_ORIGIN="GitHub Actions"
+        RUN_ORIGIN_DETAIL="workflow ${GITHUB_WORKFLOW:-unknown}, run ${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT:-1}, triggered by ${GITHUB_EVENT_NAME:-unknown}"
+    fi
+}
+
+mask_identifier() {
+    local value="${1:-}"
+    if [[ ${#value} -le 8 ]]; then
+        printf '%s' "${value:-not recorded}"
+    else
+        printf '%s...%s' "${value:0:4}" "${value: -4}"
+    fi
+}
+
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    elif command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+report_url() {
+    local native
+    native="$(native_path "$1")"
+    if [[ "$native" == *:\\* ]]; then
+        printf 'file:///%s' "${native//\\//}"
+    else
+        printf 'file://%s' "$native"
+    fi
+}
+
+mark_status_html_opened() {
+    [[ -n "$STATUS_OPEN_MARKER" ]] || return 0
+    printf '%s\n' "$1" > "$STATUS_OPEN_MARKER" 2>/dev/null || true
+}
+
+print_report_link() {
+    [[ -n "$STATUS_HTML" ]] || return 0
+    local url copy_note=""
+    url="$(report_url "$STATUS_HTML")"
+    if command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "$url" | clip.exe 2>/dev/null && copy_note="(copied to clipboard)"
+    fi
+    echo -e "${BLUE}--- LIVE SCENARIO 2 STATUS REPORT (${ENVIRONMENT}) ---${NC}"
+    echo -e "  ${CYAN}${url}${NC} ${copy_note}"
+}
+
+print_report_link_once() {
+    [[ "$REPORT_LINK_PRINTED" == false ]] || return 0
+    print_report_link
+    REPORT_LINK_PRINTED=true
+}
+
+open_status_html() {
+    [[ "$OPEN_STATUS_HTML" == true && -n "$STATUS_HTML" ]] || return 0
+    local native browser browser_name url
+    native="$(native_path "$STATUS_HTML")"
+    url="$(report_url "$STATUS_HTML")"
+    print_report_link_once
+    [[ "$STATUS_BROWSER_OPENED" == false ]] || return 0
+    if [[ -n "$STATUS_OPEN_MARKER" && -f "$STATUS_OPEN_MARKER" ]] && grep -Fxq "$url" "$STATUS_OPEN_MARKER" 2>/dev/null; then
+        STATUS_BROWSER_OPENED=true
+        echo "Report is already marked as open for this workspace; not opening another browser tab."
+        return 0
+    fi
+    browser="${DEPLOY_BROWSER:-${BROWSER:-}}"
+    browser_name="${browser##*/}"
+    case "$browser_name" in
+        edge|msedge|msedge.exe|microsoft-edge|microsoft-edge-dev)
+            browser="${browser:-$browser_name}"
+            if command -v "$browser" >/dev/null 2>&1; then
+                STATUS_BROWSER_OPENED=true
+                "$browser" "$native" >/dev/null 2>&1 &
+                mark_status_html_opened "$url"
+                return 0
+            fi
+            ;;
+    esac
+    for browser in msedge.exe microsoft-edge microsoft-edge-dev edge; do
+        if command -v "$browser" >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
+            "$browser" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
+            return 0
+        fi
+    done
+    if [[ "$native" == *:\\* ]]; then
+        if command -v powershell.exe >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
+            powershell.exe -NoProfile -NonInteractive -Command "Start-Process -FilePath '$native'" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
+        elif command -v cmd.exe >/dev/null 2>&1; then
+            STATUS_BROWSER_OPENED=true
+            MSYS_NO_PATHCONV=1 cmd.exe /c start "" "$native" >/dev/null 2>&1 &
+            mark_status_html_opened "$url"
+        fi
+    elif command -v xdg-open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
+        xdg-open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
+    elif command -v open >/dev/null 2>&1; then
+        STATUS_BROWSER_OPENED=true
+        open "$STATUS_HTML" >/dev/null 2>&1 &
+        mark_status_html_opened "$url"
+    fi
+    return 0
+}
+
+initialize_status_report() {
+    [[ "$NO_STATUS_HTML" == false ]] || return 0
+    local out_dir
+    out_dir="$OUTPUT_ROOT/$ENVIRONMENT"
+    mkdir -p "$out_dir"
+    STATUS_HTML="$out_dir/sql-deployment-$ENVIRONMENT.status.html"
+    FINAL_REPORT_FILE="$out_dir/sql-deployment-$ENVIRONMENT.html"
+    STATUS_OPEN_MARKER="$OUTPUT_ROOT/.sql-deployment-$ENVIRONMENT.browser-opened"
+    update_status "Starting" "Preparing Scenario 2 lifecycle command." 5
+    open_status_html
+}
+
+update_status() {
+    CURRENT_STATUS_PHASE="$1"
+    CURRENT_STATUS_DETAIL="$2"
+    CURRENT_STATUS_PERCENT="$3"
+    write_status_report "$CURRENT_STATUS_PHASE" "$CURRENT_STATUS_DETAIL" "$CURRENT_STATUS_PERCENT" false
+}
+
+complete_status() {
+    local phase="$1" detail="$2" percent="${3:-100}"
+    RUN_ENDED_ISO="${RUN_ENDED_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    write_status_report "$phase" "$detail" "$percent" true
+    print_report_link_once
+}
+
+count_checks() {
+    STATUS_PASS=0; STATUS_FAIL=0; STATUS_UNKNOWN=0; STATUS_NA=0; STATUS_TOTAL=0
+    local result
+    for result in "${CHECK_RESULTS[@]}"; do
+        STATUS_TOTAL=$((STATUS_TOTAL + 1))
+        case "$result" in
+            pass) STATUS_PASS=$((STATUS_PASS + 1)) ;;
+            fail) STATUS_FAIL=$((STATUS_FAIL + 1)) ;;
+            unknown) STATUS_UNKNOWN=$((STATUS_UNKNOWN + 1)) ;;
+            not_applicable) STATUS_NA=$((STATUS_NA + 1)) ;;
+        esac
+    done
+}
+
+render_status_checks() {
+    if ((${#CHECK_LABELS[@]} == 0)); then
+        printf '<tr><td colspan="3">No verification checks have run yet. They will appear here as Azure evidence is collected.</td></tr>\n'
+        return 0
+    fi
+    render_check_rows_html
+}
+
+write_status_report() {
+    local phase="$1" detail="$2" percent="$3" final="${4:-false}"
+    local out_tmp refresh final_link final_label status_class ended
+    [[ -n "$STATUS_HTML" ]] || return 0
+    count_checks
+    ended="${RUN_ENDED_ISO:-in progress}"
+    final_link="Not available yet. It is written after verification completes."
+    if [[ -n "$FINAL_REPORT_FILE" && -f "$FINAL_REPORT_FILE" ]]; then
+        final_link="<a href=\"$(html_escape "$(basename "$FINAL_REPORT_FILE")")\">Open final audit report</a>"
+    fi
+    if [[ "$final" == true ]]; then
+        refresh=""
+        final_label="Complete"
+    else
+        refresh='<meta http-equiv="refresh" content="5">'
+        final_label="Monitoring"
+    fi
+    case "$phase" in
+        *Failed*|*failed*) status_class=bad ;;
+        *Complete*|*complete*|*Succeeded*|*succeeded*) status_class=ok ;;
+        *) status_class=warn ;;
+    esac
+    out_tmp="$STATUS_HTML.tmp"
+    cat > "$out_tmp" <<HTML
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+$refresh
+<title>$(html_escape "$(project_meta name 'Ninja Paws Cloud Security Dojo')") — Scenario 2 live status ($ENVIRONMENT)</title>
+<style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #eef3f8; color: #152238; }
+    body { margin: 0; padding: 28px; background: radial-gradient(circle at 82% 0%, #cde7f2 0, transparent 34%), #eef3f8; }
+    main { max-width: 1080px; margin: auto; }
+    header, section { background: #fff; border: 1px solid #dbe3ee; border-radius: 14px; box-shadow: 0 8px 24px #17203312; }
+    header { padding: 28px; margin-bottom: 18px; border-top: 5px solid #d98932; }
+    .brand { display: flex; align-items: center; gap: 12px; color: #102f4d; letter-spacing: .08em; font-size: 13px; }
+    .brand small { display: block; color: #77869a; font-size: 9px; letter-spacing: .16em; margin-top: 3px; }
+    .mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px 12px 12px 4px; background: #102f4d; color: #f2a24a; font-weight: 800; letter-spacing: 0; }
+    h1 { margin: 22px 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 6px 0; color: #5b6678; }
+    section { padding: 22px; margin: 18px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .item { background: #f7f9fc; border-radius: 10px; padding: 14px; }
+    .label { color: #68758a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .value { margin-top: 5px; font-weight: 650; overflow-wrap: anywhere; }
+    .bar { height: 14px; border-radius: 999px; background: #e7edf5; overflow: hidden; margin-top: 14px; }
+    .fill { height: 100%; width: ${percent}%; background: linear-gradient(90deg, #1769aa, #d98932); }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; background: #eef2f8; padding: 1px 5px; border-radius: 5px; }
+    a { color: #1769aa; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 99px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; white-space: nowrap; }
+    .pill.ok { background: #e7f5ee; color: #176b43; }
+    .pill.bad { background: #fdeaea; color: #a02020; }
+    .pill.warn { background: #fdf3e0; color: #8a5a10; }
+    .pill.na { background: #f0eef6; color: #5b4f80; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e7edf5; vertical-align: top; overflow-wrap: anywhere; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #68758a; }
+    .banner { padding: 14px 16px; border-radius: 10px; background: #fdeaea; border: 1px solid #f3c9c9; color: #7d1f1f; margin-top: 14px; }
+    @media (max-width: 600px) { body { padding: 14px; } h1 { font-size: 23px; } }
+</style>
+</head>
+<body>
+<main>
+    <header>
+        <div class="brand"><span class="mark">NP</span><span><strong>NINJA PAWS</strong><small> CLOUD SECURITY DOJO</small></span></div>
+        <h1>Scenario 2 live status: $(html_escape "$ENVIRONMENT")</h1>
+        <p><span class="pill $status_class">$(html_escape "$final_label")</span> $(html_escape "$phase")</p>
+        <p>$(html_escape "$detail")</p>
+        <div class="bar" aria-label="Deployment progress"><div class="fill"></div></div>
+    </header>
+
+    <section>
+        <h2>Status summary</h2>
+        <div class="grid">
+            <div class="item"><div class="label">Scenario</div><div class="value">$(html_escape "$SCENARIO_NAME")<br><code>$(html_escape "$SCENARIO_ID")</code></div></div>
+            <div class="item"><div class="label">Command</div><div class="value"><code>deploy-sql-scenario.sh $(html_escape "$RUN_INVOCATION")</code></div></div>
+            <div class="item"><div class="label">Resource group</div><div class="value">$(html_escape "$RESOURCE_GROUP")</div></div>
+            <div class="item"><div class="label">SQL VM</div><div class="value">$(html_escape "$VM_NAME") / $(html_escape "$VM_SIZE")</div></div>
+            <div class="item"><div class="label">Dashboard</div><div class="value">$(html_escape "$WEB_APP_NAME")<br>$([[ -n "$WEB_APP_HOSTNAME" ]] && printf '<a href="https://%s/" target="_blank" rel="noopener">https://%s/</a>' "$(html_escape "$WEB_APP_HOSTNAME")" "$(html_escape "$WEB_APP_HOSTNAME")" || printf 'Waiting for deployment output')</div></div>
+            <div class="item"><div class="label">Checks</div><div class="value">Pass $STATUS_PASS / Fail $STATUS_FAIL / Not sure $STATUS_UNKNOWN / Total $STATUS_TOTAL</div></div>
+            <div class="item"><div class="label">Started / Ended UTC</div><div class="value">$(html_escape "$RUN_STARTED_ISO")<br>$(html_escape "$ended")</div></div>
+            <div class="item"><div class="label">Final audit report</div><div class="value">$final_link</div></div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Monitoring links</h2>
+        <div class="grid">
+            <div class="item"><div class="label">Resource group</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/overview" target="_blank" rel="noopener">$(html_escape "$RESOURCE_GROUP")</a></div></div>
+            <div class="item"><div class="label">SQL VM</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/providers/Microsoft.Compute/virtualMachines/$(html_escape "$VM_NAME")/overview" target="_blank" rel="noopener">VM overview</a> &middot; <a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/providers/Microsoft.Compute/virtualMachines/$(html_escape "$VM_NAME")/metrics" target="_blank" rel="noopener">metrics</a></div></div>
+            <div class="item"><div class="label">Pawton Web App</div><div class="value"><a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/providers/Microsoft.Web/sites/$(html_escape "$WEB_APP_NAME")/overview" target="_blank" rel="noopener">App Service overview</a> &middot; <a href="https://portal.azure.com/#@/resource/subscriptions/$(html_escape "$SUBSCRIPTION_ID")/resourceGroups/$(html_escape "$RESOURCE_GROUP")/providers/Microsoft.Web/sites/$(html_escape "$WEB_APP_NAME")/metrics" target="_blank" rel="noopener">metrics</a></div></div>
+            <div class="item"><div class="label">Defender for Cloud</div><div class="value"><a href="https://portal.azure.com/#view/Microsoft_Azure_Security/RecommendationsBlade" target="_blank" rel="noopener">Security recommendations</a></div></div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Verification matrix</h2>
+        <table>
+            <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+            <tbody>
+$(render_status_checks)
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Audit context</h2>
+        <div class="grid">
+            <div class="item"><div class="label">Run ID</div><div class="value"><code>$(html_escape "$RUN_ID")</code></div></div>
+            <div class="item"><div class="label">Operator / Origin</div><div class="value">$(html_escape "$RUN_OPERATOR")<br>$(html_escape "$RUN_ORIGIN_DETAIL")</div></div>
+            <div class="item"><div class="label">Git</div><div class="value">$(html_escape "$GIT_BRANCH")<br><code>$(html_escape "${GIT_COMMIT:0:12}")</code> &middot; $(html_escape "$GIT_DIRTY")</div></div>
+            <div class="item"><div class="label">Azure identity</div><div class="value">$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")<br>$(html_escape "${SUBSCRIPTION_NAME:-unknown}") / <code>$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")</code></div></div>
+            <div class="item"><div class="label">Tool version</div><div class="value">v$(html_escape "$APP_VERSION") / config v$(html_escape "$CONFIG_VERSION")</div></div>
+            <div class="item"><div class="label">Updated UTC</div><div class="value">$(date -u +%Y-%m-%dT%H:%M:%SZ)</div></div>
+        </div>
+        <div class="banner"><strong>USE AT YOUR OWN RISK.</strong> This is a deliberately vulnerable, billable training environment. Keep it isolated and uninstall it when the exercise ends.</div>
+    </section>
+</main>
+</body>
+</html>
+HTML
+    mv -f "$out_tmp" "$STATUS_HTML" 2>/dev/null || cp -f "$out_tmp" "$STATUS_HTML"
+}
+
 CHECK_LABELS=()
 CHECK_RESULTS=()
 CHECK_DETAILS=()
@@ -131,6 +467,9 @@ require_login() {
     IFS=$'\t' read -r acct_sub acct_tenant acct_name acct_user <<<"$account_info"
     SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$acct_sub}"
     [[ "$SUBSCRIPTION_ID" == "$acct_sub" ]] || az account set --subscription "$SUBSCRIPTION_ID" >/dev/null
+    AZURE_TENANT_ID="$acct_tenant"
+    SUBSCRIPTION_NAME="$acct_name"
+    AZURE_ACCOUNT_NAME="$acct_user"
     ok "Signed in as $acct_user against subscription $acct_name ($SUBSCRIPTION_ID)"
 }
 
@@ -158,12 +497,16 @@ EOF
 }
 
 cmd_plan() {
+    initialize_status_report
     info "Dry run — no Azure calls will be made."
     print_plan
+    complete_status "Complete" "Dry run completed. No Azure resources were changed." 100
 }
 
 cmd_doctor() {
     require_login
+    initialize_status_report
+    update_status "Preflight" "Running read-only Azure preflight checks." 25
     print_plan
     info "Checking VM size quota for $VM_SIZE in $LOCATION..."
     local family usage
@@ -184,6 +527,7 @@ cmd_doctor() {
         state="$(az provider show --namespace "$provider" --query registrationState -o tsv 2>/dev/null || true)"
         [[ "$state" == Registered ]] && ok "$provider: Registered" || warn "$provider: ${state:-unknown} (deploy will attempt to register it)"
     done
+    complete_status "Complete" "Doctor checks completed. Review warnings before deploying." 100
 }
 
 ensure_resource_group() {
@@ -224,6 +568,7 @@ run_deployment() {
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
     info "Deploying infrastructure ($deployment_name)..."
+    update_status "Deploying infrastructure" "Creating or updating the SQL VM, network, Key Vault, and optional dashboard resources." 25
     output_json="$(az deployment group create \
         --resource-group "$RESOURCE_GROUP" \
         --name "$deployment_name" \
@@ -234,6 +579,7 @@ run_deployment() {
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
+    update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
 
     # The generated admin password is otherwise unrecoverable, and this VM has no public IP,
     # so the only way to sign in over Bastion afterward is to persist it to the gitignored
@@ -268,6 +614,7 @@ run_deployment() {
     fi
 
     info "Activating Defender for Servers ($DEFENDER_SERVERS_SUBPLAN) — includes Defender for Endpoint onboarding..."
+    update_status "Activating Defender" "Enabling Defender for Servers Plan 2 and Defender for SQL coverage." 52
     if az security pricing create --name "$DEFENDER_SERVERS_PLAN" --tier Standard --sub-plan "$DEFENDER_SERVERS_SUBPLAN" --output none 2>/dev/null; then
         ok "Defender for Servers Plan 2 activated at subscription scope."
     else
@@ -282,12 +629,14 @@ run_deployment() {
     fi
 
     info "Waiting for the futon-manufacturing bootstrap extension to finish (this restores the sample database)..."
+    update_status "Waiting for SQL bootstrap" "The VM Custom Script Extension is restoring the Futon Manufacturing sample database." 62
     local attempt=0 ext_state=""
     while ((attempt < 60)); do
         ext_state="$(az vm extension show --resource-group "$RESOURCE_GROUP" --vm-name "$VM_NAME" --name futon-manufacturing-bootstrap --query provisioningState -o tsv 2>/dev/null || true)"
         [[ "$ext_state" == Succeeded || "$ext_state" == Failed ]] && break
         sleep 15
         attempt=$((attempt + 1))
+        update_status "Waiting for SQL bootstrap" "Bootstrap extension state: ${ext_state:-unknown}; attempt $attempt of 60." "$((62 + attempt / 2))"
     done
     [[ "$ext_state" == Succeeded ]] && ok "Bootstrap extension finished: $ext_state" || warn "Bootstrap extension state: ${ext_state:-unknown} — check the VM's C:\\NinjaPawsDojo\\bootstrap.log over Bastion."
 
@@ -306,6 +655,7 @@ deploy_web_app_code() {
     zip_path="$(mktemp -u).zip"
 
     info "Packaging the Pawton Manufacturing dashboard from $app_dir..."
+    update_status "Packaging dashboard" "Preparing the Pawton Manufacturing App Service deployment package." 75
     if ! command -v zip >/dev/null 2>&1; then
         record_check "Pawton Manufacturing dashboard deployed" unknown "The 'zip' command is not available here; deploy manually with 'az webapp deploy --resource-group $RESOURCE_GROUP --name $WEB_APP_NAME --src-path <app.zip> --type zip'."
         return 0
@@ -313,6 +663,7 @@ deploy_web_app_code() {
     (cd "$app_dir" && zip -rq "$zip_path" . -x 'node_modules/*' -x 'dist/*' -x '.astro/*')
 
     info "Deploying to $WEB_APP_NAME (remote build via Oryx)..."
+    update_status "Deploying dashboard" "Zip-deploying the Pawton Manufacturing dashboard; App Service/Oryx will build it remotely." 82
     if deploy_error="$(az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$WEB_APP_NAME" --src-path "$zip_path" --type zip --async false --output none 2>&1)"; then
         ok "Pawton Manufacturing dashboard code deployed."
         record_check "Pawton Manufacturing dashboard deployed" pass "Zip-deployed $app_dir to $WEB_APP_NAME; Oryx runs the Astro build remotely."
@@ -325,6 +676,7 @@ deploy_web_app_code() {
 
 run_verification() {
     info "Running verification checks..."
+    update_status "Running verification" "Collecting Azure evidence for VM state, Defender coverage, networking, Key Vault, and dashboard health." 88
     local vm_state defender_servers_tier defender_servers_subplan defender_sql_tier nic_public_ip bastion_state sqlvm_state ext_state
     local web_app_state web_app_subnet defender_appservices_tier health_body root_http_code health_http_code
 
@@ -446,6 +798,8 @@ write_report() {
     out_dir="$OUTPUT_ROOT/$ENVIRONMENT"
     mkdir -p "$out_dir"
     out_file="$out_dir/sql-deployment-$ENVIRONMENT.html"
+    FINAL_REPORT_FILE="$out_file"
+    RUN_ENDED_ISO="${RUN_ENDED_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
     pass_count=0; fail_count=0; unknown_count=0
     for r in "${CHECK_RESULTS[@]}"; do
         case "$r" in
@@ -556,6 +910,25 @@ write_report() {
     </section>
 
     <section>
+        <h2>Run audit</h2>
+        <p>Who ran this lifecycle command, from which repo state, against which Azure identity.</p>
+        <div class="grid">
+            <div class="item"><div class="label">Run ID</div><div class="value"><code>$(html_escape "$RUN_ID")</code></div></div>
+            <div class="item"><div class="label">Command</div><div class="value"><code>deploy-sql-scenario.sh $(html_escape "$RUN_INVOCATION")</code></div></div>
+            <div class="item"><div class="label">Started / Ended UTC</div><div class="value">$(html_escape "$RUN_STARTED_ISO")<br>$(html_escape "$RUN_ENDED_ISO")</div></div>
+            <div class="item"><div class="label">Duration</div><div class="value">$(( $(date +%s) - RUN_STARTED_AT )) seconds</div></div>
+            <div class="item"><div class="label">Operator</div><div class="value">$(html_escape "$RUN_OPERATOR")</div></div>
+            <div class="item"><div class="label">Origin</div><div class="value">$(html_escape "$RUN_ORIGIN")<br><span class="label">$(html_escape "$RUN_ORIGIN_DETAIL")</span></div></div>
+            <div class="item"><div class="label">Git branch</div><div class="value">$(html_escape "$GIT_BRANCH")</div></div>
+            <div class="item"><div class="label">Git commit</div><div class="value"><code>$(html_escape "$GIT_COMMIT")</code></div></div>
+            <div class="item"><div class="label">Working tree</div><div class="value">$(html_escape "$GIT_DIRTY")</div></div>
+            <div class="item"><div class="label">Tool version</div><div class="value">v$(html_escape "$APP_VERSION") / config v$(html_escape "$CONFIG_VERSION")</div></div>
+            <div class="item"><div class="label">Azure identity</div><div class="value">$(html_escape "${AZURE_ACCOUNT_NAME:-not recorded}")</div></div>
+            <div class="item"><div class="label">Tenant / Subscription</div><div class="value"><code>$(html_escape "$(mask_identifier "$AZURE_TENANT_ID")")</code><br>$(html_escape "${SUBSCRIPTION_NAME:-unknown}") / <code>$(html_escape "$(mask_identifier "$SUBSCRIPTION_ID")")</code></div></div>
+        </div>
+    </section>
+
+    <section>
         <h2>Verification matrix</h2>
         <p>Every automated check run against the live Azure environment after deployment.</p>
         <table>
@@ -592,15 +965,20 @@ HTML
 
 cmd_deploy() {
     require_login
+    initialize_status_report
+    update_status "Reviewing plan" "Resolved Scenario 2 settings and waiting for deployment confirmation." 12
     print_plan
     if [[ "$ASSUME_YES" != true ]]; then
         read -r -p "Proceed with deployment? [y/N] " reply
         [[ "$reply" =~ ^[Yy]$ ]] || fail "Aborted."
     fi
+    update_status "Preparing resource group" "Ensuring the Scenario 2 resource group exists." 18
     ensure_resource_group
     run_deployment
     run_verification
+    update_status "Writing audit report" "Writing the final Scenario 2 audit and verification report." 96
     write_report
+    complete_status "Complete" "Scenario 2 deployment completed. The final audit report is linked from this page." 100
     echo
     ok "Scenario 2 deployment complete. See the report above for verification results."
     [[ -n "$WEB_APP_HOSTNAME" ]] && echo -e "${GREEN}Pawton Manufacturing dashboard:${NC} https://$WEB_APP_HOSTNAME/ (Oryx build can take a couple of minutes after this script finishes)"
@@ -609,18 +987,25 @@ cmd_deploy() {
 
 cmd_uninstall() {
     require_login
+    initialize_status_report
+    update_status "Confirming uninstall" "Preparing to delete the Scenario 2 resource group." 20
     if [[ "$ASSUME_YES" != true ]]; then
         read -r -p "Delete resource group '$RESOURCE_GROUP' and everything in it? [y/N] " reply
         [[ "$reply" =~ ^[Yy]$ ]] || fail "Aborted."
     fi
     if az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
         info "Deleting resource group '$RESOURCE_GROUP'..."
+        update_status "Deleting resource group" "Azure accepted teardown for $RESOURCE_GROUP; deletion continues asynchronously." 70
         az group delete --name "$RESOURCE_GROUP" --yes --no-wait --output none
         ok "Deletion requested. It will finish asynchronously in Azure."
+        complete_status "Complete" "Deletion was requested. Monitor the resource group in Azure until it disappears." 100
     else
         warn "Resource group '$RESOURCE_GROUP' does not exist; nothing to delete."
+        complete_status "Complete" "Resource group $RESOURCE_GROUP did not exist; nothing was deleted." 100
     fi
 }
+
+resolve_audit_context
 
 case "$COMMAND" in
     plan) cmd_plan ;;

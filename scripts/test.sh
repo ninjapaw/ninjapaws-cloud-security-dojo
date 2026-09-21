@@ -293,6 +293,12 @@ if [[ "$SKIP_REPORT" == false ]]; then
     file_contains "$status_html" 'Resolved deployment settings'
     file_contains "$test_output/dev/deployment-dev.state.js" 'currentTask'
     file_contains "$status_html" 'deployment-dev.log'
+    sql_status_html="$test_output/dev/sql-deployment-dev.status.html"
+    OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults --no-open-status >/dev/null
+    file_contains "$sql_status_html" 'Scenario 2 live status'
+    file_contains "$sql_status_html" 'Monitoring links'
+    file_contains "$sql_status_html" 'Audit context'
+    file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'Run audit'
     test ! -e "$REPO_ROOT/deployment-output.json"
     test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
     fake_browser_dir="$test_output/bin"
@@ -307,6 +313,11 @@ SH
     BROWSER_CALLS="$browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-open-two >/dev/null
     test "$(wc -l < "$browser_calls" | tr -d ' ')" -eq 1
     file_contains "$test_output/.deployment-dev.browser-opened" 'file://'
+    sql_browser_calls="$test_output/sql-browser-calls"
+    BROWSER_CALLS="$sql_browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults >/dev/null
+    BROWSER_CALLS="$sql_browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults >/dev/null
+    test "$(wc -l < "$sql_browser_calls" | tr -d ' ')" -eq 1
+    file_contains "$test_output/.sql-deployment-dev.browser-opened" 'file://'
 fi
 # The guard must refuse whichever environment does not belong to the current branch.
 case "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" in
