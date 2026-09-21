@@ -506,9 +506,7 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
     httpsOnly: true
     virtualNetworkSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'webapp-integration-subnet')
     siteConfig: {
-      // NODE|20-lts intermittently hung during container startup (cert-sync/registry pull
-      // stalls indefinitely on this platform build); 22-lts starts reliably in a few seconds.
-      linuxFxVersion: 'NODE|22-lts'
+      linuxFxVersion: 'NODE|24-lts'
       appCommandLine: 'node ./dist/server/entry.mjs'
       alwaysOn: true
       http20Enabled: true

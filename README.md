@@ -232,7 +232,7 @@ Branch isolation is explicit: `dev` deploys to `NP-ninjapaws-dojo-Dev-CentralUS`
 | `BASE_OS_IMAGE`        |                     `ubuntu` | Base OS image repository                                                                                    |
 | `BASE_OS_VERSION`      |                      `24.04` | Ubuntu image version                                                                                        |
 | `NGINX_VERSION`        |                     `1.30.3` | Pinned NGINX package                                                                                        |
-| `NODE_MAJOR_VERSION`   |                         `20` | NodeSource major version                                                                                    |
+| `NODE_MAJOR_VERSION`   |                         `24` | NodeSource major version                                                                                    |
 | `VULNERABILITY_STATUS` |                 `vulnerable` | Scenario configuration intent; the app derives the authoritative vulnerability result from runtime evidence |
 | `PORT`                 |                       `3000` | Internal Node.js port behind NGINX                                                                          |
 | `WEBSITES_PORT`        |                         `80` | Port exposed by the container to Azure App Service                                                          |

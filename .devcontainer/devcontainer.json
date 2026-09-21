@@ -9,7 +9,7 @@
       "dockerDashComposeVersion": "v2"
     },
     "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
+      "version": "24.19.0"
     },
     "ghcr.io/devcontainers/features/azure-cli:1": {
       "version": "latest",

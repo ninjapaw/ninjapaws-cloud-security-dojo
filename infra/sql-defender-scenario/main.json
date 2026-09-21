@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "4591535032728561827"
+      "templateHash": "7197844975672813812"
     }
   },
   "parameters": {
@@ -515,7 +515,7 @@
         "httpsOnly": true,
         "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'webapp-integration-subnet')]",
         "siteConfig": {
-          "linuxFxVersion": "NODE|22-lts",
+          "linuxFxVersion": "NODE|24-lts",
           "appCommandLine": "node ./dist/server/entry.mjs",
           "alwaysOn": true,
           "http20Enabled": true,
