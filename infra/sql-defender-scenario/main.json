@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "5365280620055327542"
+      "templateHash": "18084851181075722225"
     }
   },
   "parameters": {
@@ -479,6 +479,81 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.SqlVirtualMachine/sqlVirtualMachines', variables('sqlVmResourceName'))]",
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', parameters('vmName'), 'AzureMonitorWindowsAgent')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publisher": "Microsoft.Azure.Monitor",
+        "type": "AzureMonitorWindowsAgent",
+        "typeHandlerVersion": "1.24",
+        "autoUpgradeMinorVersion": true,
+        "enableAutomaticUpgrade": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines/extensions', parameters('vmName'), 'futon-manufacturing-bootstrap')]",
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2024-03-11",
+      "name": "[format('{0}-dcr', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "dataSources": {
+          "windowsEventLogs": [
+            {
+              "name": "securityEvents",
+              "streams": [
+                "Microsoft-Event"
+              ],
+              "xPathQueries": [
+                "Security!*",
+                "System!*",
+                "Application!*"
+              ]
+            }
+          ]
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "name": "centralWorkspace",
+              "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "Microsoft-Event"
+            ],
+            "destinations": [
+              "centralWorkspace"
+            ]
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+      "apiVersion": "2024-03-11",
+      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+      "name": "[format('{0}-dcra', parameters('vmName'))]",
+      "properties": {
+        "dataCollectionRuleId": "[resourceId('Microsoft.Insights/dataCollectionRules', format('{0}-dcr', parameters('vmName')))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines/extensions', parameters('vmName'), 'AzureMonitorWindowsAgent')]",
+        "[resourceId('Microsoft.Insights/dataCollectionRules', format('{0}-dcr', parameters('vmName')))]",
         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
       ]
     },

@@ -480,6 +480,80 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
   ]
 }
 
+// Defender for Servers/SQL evaluates Windows Security and SQL audit telemetry through the Azure Monitor
+// Agent now that the legacy Log Analytics (MMA) agent path is retired. Without this extension and an
+// associated Data Collection Rule, the "SQL Servers on Azure Virtual Machines" Defender for Cloud blade
+// reports AMA Extension Installation Status: Not Installed and Extensions Installation Status stays
+// stuck In Progress indefinitely.
+resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = {
+  parent: vm
+  name: 'AzureMonitorWindowsAgent'
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.Monitor'
+    type: 'AzureMonitorWindowsAgent'
+    typeHandlerVersion: '1.24'
+    autoUpgradeMinorVersion: true
+    enableAutomaticUpgrade: true
+  }
+  dependsOn: [
+    bootstrapExtension
+  ]
+}
+
+// Routes the Windows event streams Defender for Servers/SQL evaluates into the same workspace already
+// backing Defender for Servers Plan 2 and SQL auditing.
+resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
+  name: '${vmName}-dcr'
+  location: location
+  properties: {
+    dataSources: {
+      windowsEventLogs: [
+        {
+          name: 'securityEvents'
+          streams: [
+            'Microsoft-Event'
+          ]
+          xPathQueries: [
+            'Security!*'
+            'System!*'
+            'Application!*'
+          ]
+        }
+      ]
+    }
+    destinations: {
+      logAnalytics: [
+        {
+          name: 'centralWorkspace'
+          workspaceResourceId: workspace.id
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: [
+          'Microsoft-Event'
+        ]
+        destinations: [
+          'centralWorkspace'
+        ]
+      }
+    ]
+  }
+}
+
+resource dataCollectionRuleAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2024-03-11' = {
+  name: '${vmName}-dcra'
+  scope: vm
+  properties: {
+    dataCollectionRuleId: dataCollectionRule.id
+  }
+  dependsOn: [
+    amaExtension
+  ]
+}
+
 // Holds the futon_app SQL login password so both the VM bootstrap script and the dashboard Web
 // App use the same credential, without ever putting it in an ARM output or app-visible setting.
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
@@ -638,8 +712,8 @@ resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022
   }
 }
 
-// SQL Server audit and Windows Security events reach this workspace through the Microsoft
-// Defender for Endpoint sensor and the SQL IaaS agent extension, not a diagnosticSettings
+// SQL Server audit and Windows Security events reach this workspace through the Azure Monitor
+// Agent/Data Collection Rule pair above and the SQL IaaS agent extension, not a diagnosticSettings
 // resource; classic VM diagnosticSettings only forwards host metrics, not those event streams.
 output vmName string = vm.name
 output vmResourceId string = vm.id
