@@ -181,6 +181,44 @@ BEGIN
         ADD (AUDIT_CHANGE_GROUP)
         WITH (STATE = ON);
 END
+ELSE
+BEGIN
+    -- The spec already exists from an earlier run of this script (this VM was redeployed rather
+    -- than recreated). CREATE above only runs once per VM, so a later addition to the group list
+    -- would otherwise never reach an existing VM; add whichever of the required groups are still
+    -- missing without disturbing ones already present.
+    DECLARE @missingAuditGroups TABLE (audit_action_name sysname);
+    INSERT INTO @missingAuditGroups (audit_action_name)
+    SELECT required.audit_action_name
+    FROM (VALUES ('FAILED_LOGIN_GROUP'), ('SUCCESSFUL_LOGIN_GROUP'), ('LOGIN_CHANGE_PASSWORD_GROUP'),
+                 ('SERVER_PRINCIPAL_CHANGE_GROUP'), ('SERVER_PERMISSION_CHANGE_GROUP'),
+                 ('SERVER_ROLE_MEMBER_CHANGE_GROUP'), ('AUDIT_CHANGE_GROUP')) AS required(audit_action_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM sys.server_audit_specifications sas
+        JOIN sys.server_audit_specification_details sad ON sas.server_specification_id = sad.server_specification_id
+        WHERE sas.name = 'FutonManufacturingServerAuditSpec' AND sad.audit_action_name = required.audit_action_name
+    );
+    IF EXISTS (SELECT 1 FROM @missingAuditGroups)
+    BEGIN
+        ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec WITH (STATE = OFF);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'FAILED_LOGIN_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (FAILED_LOGIN_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'SUCCESSFUL_LOGIN_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (SUCCESSFUL_LOGIN_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'LOGIN_CHANGE_PASSWORD_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (LOGIN_CHANGE_PASSWORD_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'SERVER_PRINCIPAL_CHANGE_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (SERVER_PRINCIPAL_CHANGE_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'SERVER_PERMISSION_CHANGE_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (SERVER_PERMISSION_CHANGE_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'SERVER_ROLE_MEMBER_CHANGE_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (SERVER_ROLE_MEMBER_CHANGE_GROUP);
+        IF EXISTS (SELECT 1 FROM @missingAuditGroups WHERE audit_action_name = 'AUDIT_CHANGE_GROUP')
+            ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec ADD (AUDIT_CHANGE_GROUP);
+        ALTER SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec WITH (STATE = ON);
+    END
+END
 USE $DatabaseName;
 IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = 'FutonManufacturingDbAuditSpec')
 BEGIN
