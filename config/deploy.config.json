@@ -96,6 +96,7 @@
     "allowPublicKeyVaultAccess": "true",
     "deployWebApp": "true",
     "webAppPlanSku": "B1",
+    "adminPortalUsername": "dojo-admin",
     "workspaceRetentionDays": "30",
     "centralWorkspaceResourceGroup": "NP-Sentinel-CentralUS",
     "centralWorkspaceName": "log-np-sentinel-centralus",

@@ -27,10 +27,14 @@ param(
     # Base64-encoded so the raw password (which can contain cmd.exe metacharacters like & % ^ !)
     # never has to survive the CustomScriptExtension's cmd.exe command line intact.
     [Parameter(Mandatory = $true)]
-    [string]$AppLoginPasswordBase64
+    [string]$AppLoginPasswordBase64,
+    [string]$AdminOpsLoginName = 'dojo_admin_portal_svc',
+    [Parameter(Mandatory = $true)]
+    [string]$AdminOpsLoginPasswordBase64
 )
 
 $AppLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AppLoginPasswordBase64))
+$AdminOpsLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AdminOpsLoginPasswordBase64))
 
 $ErrorActionPreference = 'Stop'
 $logPath = 'C:\NinjaPawsDojo\bootstrap.log'
@@ -279,6 +283,32 @@ ALTER LOGIN [sa] DISABLE;
 "@
 Invoke-SqlText -Query $loginSql
 Write-Host "Application login '$AppLoginName' created; its password matches the Key Vault secret the dashboard Web App reads."
+
+# 3b. Admin portal service login: SQL Server rejects ALTER LOGIN against 'sa' from any principal
+#     that only holds ALTER ANY LOGIN -- altering sa specifically requires CONTROL SERVER, which is
+#     functionally equivalent to sysadmin. This login exists solely so the Pawton Manufacturing
+#     admin portal (/admin) can enable/disable/rotate sa; handing a public-facing Web App this
+#     credential is itself the anti-pattern the scenario demonstrates. Never grant this login
+#     anything narrower is possible -- CONTROL SERVER is the minimum SQL Server accepts for this
+#     operation, verified against a live instance before choosing this design.
+$adminOpsPassword = $AdminOpsLoginPassword
+$adminOpsSql = @"
+USE master;
+IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$AdminOpsLoginName')
+BEGIN
+    CREATE LOGIN [$AdminOpsLoginName] WITH PASSWORD = N'$adminOpsPassword', CHECK_POLICY = ON, CHECK_EXPIRATION = ON;
+END
+ELSE
+BEGIN
+    ALTER LOGIN [$AdminOpsLoginName] WITH PASSWORD = N'$adminOpsPassword';
+END
+IF NOT EXISTS (SELECT 1 FROM sys.server_permissions perm JOIN sys.server_principals prin ON perm.grantee_principal_id = prin.principal_id WHERE prin.name = '$AdminOpsLoginName' AND perm.permission_name = 'CONTROL SERVER')
+BEGIN
+    GRANT CONTROL SERVER TO [$AdminOpsLoginName];
+END
+"@
+Invoke-SqlText -Query $adminOpsSql
+Write-Host "Admin portal service login '$AdminOpsLoginName' created/updated (CONTROL SERVER); its password matches the Key Vault secret the dashboard Web App reads."
 
 # 4. Turn off the SQL Server Browser service; the dojo uses a fixed static port (1433) and does
 #    not need named-instance discovery, which is an unnecessary attack surface on the network.

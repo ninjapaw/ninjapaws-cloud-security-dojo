@@ -21,15 +21,22 @@ the database is not configured, instead of failing to build.
 
 ## Environment variables
 
-| Variable                 | Default              | Purpose                                       |
-| ------------------------ | -------------------- | --------------------------------------------- |
-| `SQL_SERVER_HOST`        | _(required)_         | Private IP of the Scenario 2 SQL Server VM    |
-| `SQL_DATABASE`           | `FutonManufacturing` | Database name                                 |
-| `SQL_APP_LOGIN`          | `futon_app`          | Least-privilege SQL login                     |
-| `SQL_APP_LOGIN_PASSWORD` | _(required)_         | Matches the Key Vault secret the VM also uses |
+| Variable                    | Default                   | Purpose                                            |
+| --------------------------- | -------------------------- | --------------------------------------------------- |
+| `SQL_SERVER_HOST`           | _(required)_               | Private IP of the Scenario 2 SQL Server VM           |
+| `SQL_DATABASE`              | `FutonManufacturing`       | Database name                                        |
+| `SQL_APP_LOGIN`             | `futon_app`                | Least-privilege SQL login                            |
+| `SQL_APP_LOGIN_PASSWORD`    | _(required)_               | Matches the Key Vault secret the VM also uses        |
+| `ADMIN_PORTAL_USERNAME`     | _(required for `/admin`)_  | Username accepted at `/admin/login`                  |
+| `ADMIN_PORTAL_PASSWORD`     | _(required for `/admin`)_  | Password accepted at `/admin/login`                  |
+| `ADMIN_SESSION_SECRET`      | _(required for `/admin`)_  | HMAC key signing the admin session cookie            |
+| `SQL_ADMIN_LOGIN`           | `dojo_admin_portal_svc`    | SQL login the admin portal uses to manage `sa`       |
+| `SQL_ADMIN_LOGIN_PASSWORD`  | _(required for `/admin`)_  | Matches the Key Vault secret the VM also uses        |
 
 In Azure, these are set by `infra/sql-defender-scenario/main.bicep`; the password app setting is a
-Key Vault reference, never a plaintext value.
+Key Vault reference, never a plaintext value. Without the four `ADMIN_*`/`SQL_ADMIN_*` variables
+set, `/admin` still renders but every sign-in attempt fails and the sa status card reports "not
+configured", instead of the app failing to build or start.
 
 ## Routes
 
@@ -37,3 +44,6 @@ Key Vault reference, never a plaintext value.
 - `/inventory`, `/sales`, `/production` — live report views
 - `/health` — JSON health probe used as the Web App's health check path
 - `/api/status` — JSON evidence endpoint, consistent with Scenario 1's `/api/status`
+- `/admin` — **high-privilege**: sign in, then enable/disable/rotate the SQL Server `sa` login.
+  See "Admin portal" in the repository root `README.md` before enabling this in any environment
+  you care about.

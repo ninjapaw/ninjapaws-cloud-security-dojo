@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "5968400487503354903"
+      "templateHash": "7317388646183880440"
     }
   },
   "parameters": {
@@ -139,6 +139,31 @@
       "type": "securestring",
       "metadata": {
         "description": "Password for the least-privilege futon_app SQL login, shared between the Key Vault secret the Web App reads and the VM bootstrap script that creates the login. No default; the deploy script generates a random value per run."
+      }
+    },
+    "adminPortalUsername": {
+      "type": "string",
+      "defaultValue": "dojo-admin",
+      "metadata": {
+        "description": "Username the Pawton Manufacturing admin portal (/admin) accepts to authenticate an operator before allowing sa login management. No default; the deploy script generates/reads this per run."
+      }
+    },
+    "adminPortalPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password the admin portal (/admin) accepts alongside adminPortalUsername. Stored only in Key Vault and as a Web App setting -- never checked into source. No default; the deploy script generates a random value per run."
+      }
+    },
+    "adminSessionSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "HMAC signing key for the admin portal session cookie. No default; the deploy script generates a random value per run."
+      }
+    },
+    "sqlAdminOpsPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password for the dojo_admin_portal_svc SQL login the admin portal uses to enable/disable/rotate the sa login. This login is granted CONTROL SERVER (the only permission SQL Server accepts for altering sa) -- functionally equivalent to sysadmin. Handing a public-facing Web App this credential is itself the anti-pattern this scenario demonstrates; see README.md. No default; the deploy script generates a random value per run."
       }
     }
   },
@@ -469,7 +494,7 @@
           ]
         },
         "protectedSettings": {
-          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 {0}', base64(parameters('sqlAppLoginPassword')))]"
+          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 {0} -AdminOpsLoginPasswordBase64 {1}', base64(parameters('sqlAppLoginPassword')), base64(parameters('sqlAdminOpsPassword')))]"
         }
       },
       "dependsOn": [
@@ -601,6 +626,50 @@
       ]
     },
     {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'admin-portal-username')]",
+      "properties": {
+        "value": "[parameters('adminPortalUsername')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'admin-portal-password')]",
+      "properties": {
+        "value": "[parameters('adminPortalPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'admin-session-secret')]",
+      "properties": {
+        "value": "[parameters('adminSessionSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'sql-admin-ops-password')]",
+      "properties": {
+        "value": "[parameters('sqlAdminOpsPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
       "condition": "[parameters('deployWebApp')]",
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2025-03-01",
@@ -651,6 +720,26 @@
             {
               "name": "SQL_APP_LOGIN_PASSWORD",
               "value": "[parameters('sqlAppLoginPassword')]"
+            },
+            {
+              "name": "ADMIN_PORTAL_USERNAME",
+              "value": "[parameters('adminPortalUsername')]"
+            },
+            {
+              "name": "ADMIN_PORTAL_PASSWORD",
+              "value": "[parameters('adminPortalPassword')]"
+            },
+            {
+              "name": "ADMIN_SESSION_SECRET",
+              "value": "[parameters('adminSessionSecret')]"
+            },
+            {
+              "name": "SQL_ADMIN_LOGIN",
+              "value": "dojo_admin_portal_svc"
+            },
+            {
+              "name": "SQL_ADMIN_LOGIN_PASSWORD",
+              "value": "[parameters('sqlAdminOpsPassword')]"
             },
             {
               "name": "WEBSITES_PORT",

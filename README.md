@@ -48,6 +48,17 @@ Scenario 2 also deploys **Pawton Manufacturing** ("paw" + "futon" — the fictio
 
 Deployment code is zip-deployed from `apps/pawton-manufacturing/` after the Bicep infrastructure finishes; Azure's Oryx build service runs `npm install`/`npm run build` remotely, so no local Node toolchain is required to deploy it. See `apps/pawton-manufacturing/README.md` for local development.
 
+### Admin portal: a deliberate anti-pattern, not a template
+
+Pawton Manufacturing also ships an `/admin` portal, gated behind a login form, that lets an authenticated operator **enable, disable, and rotate the password of the SQL Server `sa` login** directly from the Web App. Read this section fully before enabling it anywhere you care about.
+
+- **Why this needs sysadmin-equivalent access.** SQL Server rejects `ALTER LOGIN [sa] ...` from any principal holding only `ALTER ANY LOGIN` — verified live against this scenario's own VM (`Msg 15151: Cannot alter the login 'sa'...`). Managing `sa` specifically requires `CONTROL SERVER`, which is functionally equivalent to sysadmin. The admin portal's SQL login, `dojo_admin_portal_svc`, is granted exactly that.
+- **This is the point.** A public-facing Web App holding a sysadmin-equivalent database credential is a textbook Defender for Cloud/Sentinel "attack path" finding: compromise the app (or its admin credentials, or its Key Vault-sourced app settings) and you compromise the entire SQL Server instance. This scenario ships the feature specifically so it exists to be *found* — by Defender for Cloud's attack path analysis, by Defender for SQL's behavioral detections, and by anyone reviewing this repo's Key Vault secrets or Web App configuration. **Do not copy this pattern into a production application.**
+- **What's protected regardless.** Sign-in requires a random, per-deployment `ADMIN_PORTAL_USERNAME`/`ADMIN_PORTAL_PASSWORD` (Key Vault secrets `admin-portal-username`/`admin-portal-password`, generated fresh by `scripts/deploy-sql-scenario.sh` on every deploy). The session cookie is HMAC-signed (`ADMIN_SESSION_SECRET`), `HttpOnly`, `Secure`, `SameSite=Strict`, and expires after 15 minutes. Login attempts are rate-limited per client. A rotated `sa` password is shown exactly once and never written anywhere else.
+- **Every action is audited.** `ALTER LOGIN [sa] ENABLE`/`DISABLE`/`WITH PASSWORD` all fire `SERVER_PRINCIPAL_CHANGE_GROUP` audit events (`LGEA`/`LGDA` action IDs, verified live) that reach the standardized `log-np-sentinel-centralus` Log Analytics workspace via the same AMA/DCR pipeline documented above — an admin portal action is never invisible.
+- **Credentials.** After a deploy, the admin portal URL and generated credentials are written to `output/<environment>/admin-portal-credentials.txt` (gitignored, `chmod 600`) alongside the existing `sql-vm-credentials.txt`. Delete it when you finish the exercise.
+- **Turning it off.** There is no separate toggle; the feature is inert without `ADMIN_PORTAL_USERNAME`/`ADMIN_PORTAL_PASSWORD`/`ADMIN_SESSION_SECRET`/`SQL_ADMIN_LOGIN_PASSWORD` set. Remove those four Web App settings (and stop passing the corresponding Bicep parameters) to disable sign-in entirely; `/admin` will then report every attempt as invalid.
+
 Quick start:
 
 ```bash

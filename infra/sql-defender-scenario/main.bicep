@@ -64,6 +64,21 @@ param webAppPlanSku string = 'B1'
 @description('Password for the least-privilege futon_app SQL login, shared between the Key Vault secret the Web App reads and the VM bootstrap script that creates the login. No default; the deploy script generates a random value per run.')
 param sqlAppLoginPassword string
 
+@description('Username the Pawton Manufacturing admin portal (/admin) accepts to authenticate an operator before allowing sa login management. No default; the deploy script generates/reads this per run.')
+param adminPortalUsername string = 'dojo-admin'
+
+@secure()
+@description('Password the admin portal (/admin) accepts alongside adminPortalUsername. Stored only in Key Vault and as a Web App setting -- never checked into source. No default; the deploy script generates a random value per run.')
+param adminPortalPassword string
+
+@secure()
+@description('HMAC signing key for the admin portal session cookie. No default; the deploy script generates a random value per run.')
+param adminSessionSecret string
+
+@secure()
+@description('Password for the dojo_admin_portal_svc SQL login the admin portal uses to enable/disable/rotate the sa login. This login is granted CONTROL SERVER (the only permission SQL Server accepts for altering sa) -- functionally equivalent to sysadmin. Handing a public-facing Web App this credential is itself the anti-pattern this scenario demonstrates; see README.md. No default; the deploy script generates a random value per run.')
+param sqlAdminOpsPassword string
+
 var nsgName = '${vmName}-nsg'
 var vnetName = '${vmName}-vnet'
 var nicName = '${vmName}-nic'
@@ -471,7 +486,7 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
       // neither cmd.exe nor Win32 argv parsing (which powershell.exe uses) treats a single quote
       // as a quote character, so wrapping the value in '...' would pass the literal quote
       // characters through as part of the argument instead of stripping them.
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)}'
+      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)} -AdminOpsLoginPasswordBase64 ${base64(sqlAdminOpsPassword)}'
     }
   }
   dependsOn: [
@@ -606,6 +621,43 @@ resource vmAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = 
   }
 }
 
+// Credentials for the Pawton Manufacturing admin portal (/admin), which lets an authenticated
+// operator enable/disable/rotate the sa login from the dashboard Web App. These three secrets
+// together grant a public-facing app effectively sysadmin-equivalent database control -- see the
+// "Admin portal" section of README.md for why that's the deliberate anti-pattern this scenario
+// demonstrates, not an example to copy into a production app.
+resource adminPortalUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'admin-portal-username'
+  properties: {
+    value: adminPortalUsername
+  }
+}
+
+resource adminPortalPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'admin-portal-password'
+  properties: {
+    value: adminPortalPassword
+  }
+}
+
+resource adminSessionSecretSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'admin-session-secret'
+  properties: {
+    value: adminSessionSecret
+  }
+}
+
+resource sqlAdminOpsPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'sql-admin-ops-password'
+  properties: {
+    value: sqlAdminOpsPassword
+  }
+}
+
 // Pawton Manufacturing dashboard: Astro/Node.js Web App reading the restored sample data. It
 // never touches the internet path to SQL Server -- regional VNet integration routes its traffic
 // to the private IP on the sql-vm-subnet, and the NSG only allows that one subnet on port 1433.
@@ -659,6 +711,26 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           // (see sqlAppLoginSecret below) for anyone auditing the credential out-of-band.
           name: 'SQL_APP_LOGIN_PASSWORD'
           value: sqlAppLoginPassword
+        }
+        {
+          name: 'ADMIN_PORTAL_USERNAME'
+          value: adminPortalUsername
+        }
+        {
+          name: 'ADMIN_PORTAL_PASSWORD'
+          value: adminPortalPassword
+        }
+        {
+          name: 'ADMIN_SESSION_SECRET'
+          value: adminSessionSecret
+        }
+        {
+          name: 'SQL_ADMIN_LOGIN'
+          value: 'dojo_admin_portal_svc'
+        }
+        {
+          name: 'SQL_ADMIN_LOGIN_PASSWORD'
+          value: sqlAdminOpsPassword
         }
         {
           name: 'WEBSITES_PORT'

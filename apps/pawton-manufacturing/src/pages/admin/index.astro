@@ -1,0 +1,86 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../../lib/adminAuth.mjs';
+import { isAdminDbConfigured, getSaStatus } from '../../lib/adminDb.mjs';
+
+if (!isAuthenticated(Astro.cookies)) {
+  return Astro.redirect('/admin/login');
+}
+
+const msg = Astro.url.searchParams.get('msg');
+const error = Astro.url.searchParams.get('error');
+
+// Shown exactly once: read the just-rotated password (if present) and delete the cookie
+// immediately, so refreshing this page or a later visit never reveals it again.
+const rotatedPassword = Astro.cookies.get(ROTATED_SECRET_COOKIE_NAME)?.value ?? null;
+if (rotatedPassword) {
+  Astro.cookies.delete(ROTATED_SECRET_COOKIE_NAME, { path: '/' });
+}
+
+let saStatus = null;
+let saError = null;
+if (isAdminDbConfigured()) {
+  try {
+    saStatus = await getSaStatus();
+  } catch (err) {
+    saError = err.message;
+  }
+} else {
+  saError = 'SQL_ADMIN_LOGIN / SQL_ADMIN_LOGIN_PASSWORD are not configured on this Web App yet.';
+}
+
+const messages = {
+  sa_enabled: { text: 'sa login enabled.', kind: 'warn' },
+  sa_disabled: { text: 'sa login disabled.', kind: 'ok' },
+  sa_rotated: { text: 'sa password rotated. Copy it now -- it will not be shown again.', kind: 'warn' },
+};
+const statusMessage = msg ? messages[msg] : null;
+---
+<Layout title="Admin">
+  <div class="banner">
+    <strong>High-privilege area.</strong> The actions below run as <code>dojo_admin_portal_svc</code>,
+    a SQL login granted <code>CONTROL SERVER</code> so it can manage the <code>sa</code> login --
+    SQL Server does not accept any narrower permission for that operation. Every action here is
+    recorded by <code>FutonManufacturingServerAuditSpec</code> (Server Audit) and forwarded to the
+    <code>log-np-sentinel-centralus</code> Log Analytics workspace. See the repository README for
+    why this is a deliberate anti-pattern this scenario demonstrates, not a production example.
+  </div>
+
+  {statusMessage && <div class={statusMessage.kind}>{statusMessage.text}</div>}
+  {error && <div class="danger">Action failed: {error}</div>}
+  {rotatedPassword && (
+    <div class="danger">
+      <strong>New sa password (shown once):</strong> <code>{rotatedPassword}</code>
+    </div>
+  )}
+
+  <h2>sa login status</h2>
+  {saError && <div class="warn">Could not read sa status: {saError}</div>}
+  {saStatus && (
+    <div class="grid">
+      <div class="card">
+        <div class="label">Status</div>
+        <div class="value">{saStatus.enabled ? 'Enabled' : 'Disabled'}</div>
+      </div>
+      <div class="card">
+        <div class="label">Password last set</div>
+        <div class="value" style="font-size: 15px;">{saStatus.passwordLastSetTime ?? 'unknown'}</div>
+      </div>
+    </div>
+  )}
+
+  <div class="actions">
+    <form method="post" action="/api/admin/sa/enable">
+      <button type="submit">Enable sa</button>
+    </form>
+    <form method="post" action="/api/admin/sa/disable">
+      <button type="submit" class="secondary">Disable sa</button>
+    </form>
+    <form method="post" action="/api/admin/sa/rotate">
+      <button type="submit" class="destructive">Rotate sa password</button>
+    </form>
+    <form method="post" action="/api/admin/logout">
+      <button type="submit" class="secondary">Sign out</button>
+    </form>
+  </div>
+</Layout>

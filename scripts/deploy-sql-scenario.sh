@@ -147,6 +147,7 @@ DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
 DEPLOY_WEB_APP="$(config_setting deployWebApp true)"
 WEB_APP_NAME="${WEB_APP_NAME:-$(config_setting webAppName "ninjapaws-pawton-${ENVIRONMENT}")}"
 WEB_APP_PLAN_SKU="$(config_setting webAppPlanSku B1)"
+ADMIN_PORTAL_USERNAME="$(config_setting adminPortalUsername "dojo-admin")"
 CENTRAL_WORKSPACE_RESOURCE_GROUP="$(config_setting centralWorkspaceResourceGroup "NP-Sentinel-CentralUS")"
 CENTRAL_WORKSPACE_NAME="$(config_setting centralWorkspaceName "log-np-sentinel-centralus")"
 CENTRAL_WORKSPACE_RETENTION_DAYS="$(config_setting workspaceRetentionDays 30)"
@@ -603,9 +604,13 @@ read_output() {
 }
 
 run_deployment() {
-    local admin_password sql_app_login_password deployment_name output_json vm_principal_id creds_dir creds_file
+    local admin_password sql_app_login_password admin_portal_password admin_session_secret sql_admin_ops_password
+    local deployment_name output_json vm_principal_id creds_dir creds_file
     admin_password="$(generate_password)"
     sql_app_login_password="$(generate_password)"
+    admin_portal_password="$(generate_password)"
+    sql_admin_ops_password="$(generate_password)"
+    admin_session_secret="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
     info "Deploying infrastructure ($deployment_name)..."
@@ -623,6 +628,8 @@ run_deployment() {
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
                      centralWorkspaceResourceGroup="$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
                      centralWorkspaceName="$CENTRAL_WORKSPACE_NAME" \
+                     adminPortalUsername="$ADMIN_PORTAL_USERNAME" adminPortalPassword="$admin_portal_password" \
+                     adminSessionSecret="$admin_session_secret" sqlAdminOpsPassword="$sql_admin_ops_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
@@ -659,6 +666,22 @@ run_deployment() {
     WEB_APP_HOSTNAME="$(read_output "$output_json" webAppHostName)"
     SQL_PUBLIC_IP="$(read_output "$output_json" sqlPublicIpAddress)"
     unset sql_app_login_password
+
+    # The admin portal password is regenerated every deploy (like the VM admin password above), so
+    # the previous value silently stops working; persist it locally the same way so /admin sign-in
+    # matches what's actually configured on this run.
+    admin_portal_creds_file="$creds_dir/admin-portal-credentials.txt"
+    {
+        printf 'Admin portal URL:      https://%s/admin\n' "$WEB_APP_HOSTNAME"
+        printf 'Admin portal username: %s\n' "$ADMIN_PORTAL_USERNAME"
+        printf 'Admin portal password: %s\n' "$admin_portal_password"
+        printf 'Generated:             %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$admin_portal_creds_file"
+    chmod 600 "$admin_portal_creds_file" 2>/dev/null || true
+    unset admin_portal_password sql_admin_ops_password admin_session_secret
+    warn "Admin portal credentials saved to $admin_portal_creds_file — treat it as a secret and delete it once you finish the exercise."
+    record_check "Admin portal credentials saved locally" pass "Written to $admin_portal_creds_file (not committed; output/ is gitignored). This account can enable/disable/rotate the sa login from the dashboard -- delete this file when the exercise ends."
+
     if [[ -n "$KEY_VAULT_NAME" ]]; then
         record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
         record_check "VM admin credentials stored in Key Vault" pass "Secrets 'vm-admin-username' and 'vm-admin-password' in $KEY_VAULT_NAME; retrieve them with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name <secret-name>'."
