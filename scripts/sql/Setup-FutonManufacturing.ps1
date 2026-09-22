@@ -174,8 +174,11 @@ BEGIN
         FOR SERVER AUDIT FutonManufacturingAudit
         ADD (FAILED_LOGIN_GROUP),
         ADD (SUCCESSFUL_LOGIN_GROUP),
+        ADD (LOGIN_CHANGE_PASSWORD_GROUP),
+        ADD (SERVER_PRINCIPAL_CHANGE_GROUP),
+        ADD (SERVER_PERMISSION_CHANGE_GROUP),
         ADD (SERVER_ROLE_MEMBER_CHANGE_GROUP),
-        ADD (SERVER_PERMISSION_CHANGE_GROUP)
+        ADD (AUDIT_CHANGE_GROUP)
         WITH (STATE = ON);
 END
 USE $DatabaseName;
@@ -199,12 +202,21 @@ Invoke-SqlText -Query $auditSql
 #    generic "Login failed for user" error -- indistinguishable from a wrong password without
 #    checking SERVERPROPERTY('IsIntegratedSecurityOnly'). Enable mixed mode before creating the
 #    login and restart the service so the change takes effect immediately.
+#
+#    The same registry key also controls instance-level "Login auditing" (SSMS Server Properties >
+#    Security): AuditLevel 3 records both failed and successful logins to the SQL Server error log,
+#    complementing the FAILED_LOGIN_GROUP/SUCCESSFUL_LOGIN_GROUP entries in the Server Audit above
+#    with the connection attempts SQL Server itself makes before a session reaches the audit engine.
+#    See https://learn.microsoft.com/en-us/ssms/configure-login-auditing-sql-server-management-studio
 $loginModePath = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQLServer'
-if ((Get-ItemProperty -Path $loginModePath -Name LoginMode -ErrorAction SilentlyContinue).LoginMode -ne 2) {
+$loginModeCurrent = (Get-ItemProperty -Path $loginModePath -Name LoginMode -ErrorAction SilentlyContinue).LoginMode
+$auditLevelCurrent = (Get-ItemProperty -Path $loginModePath -Name AuditLevel -ErrorAction SilentlyContinue).AuditLevel
+if ($loginModeCurrent -ne 2 -or $auditLevelCurrent -ne 3) {
     Set-ItemProperty -Path $loginModePath -Name LoginMode -Value 2
+    Set-ItemProperty -Path $loginModePath -Name AuditLevel -Value 3
     Restart-Service -Name MSSQLSERVER -Force
     Start-Sleep -Seconds 10
-    Write-Host "Enabled SQL Server + Windows Authentication mode (was Windows-only) and restarted the service."
+    Write-Host "Enabled SQL Server + Windows Authentication mode and 'both failed and successful logins' auditing, and restarted the service."
 }
 $appPassword = $AppLoginPassword
 $loginSql = @"
