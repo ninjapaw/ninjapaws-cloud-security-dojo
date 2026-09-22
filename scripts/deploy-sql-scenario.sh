@@ -675,11 +675,32 @@ deploy_web_app_code() {
 
     info "Packaging the Pawton Manufacturing dashboard from $app_dir..."
     update_status "Packaging dashboard" "Preparing the Pawton Manufacturing App Service deployment package." 75
-    if ! command -v zip >/dev/null 2>&1; then
-        record_check "Pawton Manufacturing dashboard deployed" unknown "The 'zip' command is not available here; deploy manually with 'az webapp deploy --resource-group $RESOURCE_GROUP --name $WEB_APP_NAME --src-path <app.zip> --type zip'."
-        return 0
+    if command -v zip >/dev/null 2>&1; then
+        (cd "$app_dir" && zip -rq "$zip_path" . -x 'node_modules/*' -x 'dist/*' -x '.astro/*')
+    else
+        # Git Bash on Windows has no 'zip' binary; fall back to PowerShell's Compress-Archive,
+        # which is always present, instead of skipping the deployment step entirely.
+        local ps_bin="" win_app_dir win_zip_path
+        for candidate in pwsh.exe powershell.exe; do
+            if command -v "$candidate" >/dev/null 2>&1; then ps_bin="$candidate"; break; fi
+        done
+        if [[ -z "$ps_bin" ]]; then
+            record_check "Pawton Manufacturing dashboard deployed" unknown "Neither 'zip' nor PowerShell is available here; deploy manually with 'az webapp deploy --resource-group $RESOURCE_GROUP --name $WEB_APP_NAME --src-path <app.zip> --type zip'."
+            return 0
+        fi
+        if command -v wslpath >/dev/null 2>&1; then
+            win_app_dir="$(wslpath -w "$app_dir")"
+            win_zip_path="$(wslpath -w "$zip_path")"
+        elif command -v cygpath >/dev/null 2>&1; then
+            win_app_dir="$(cygpath -w "$app_dir")"
+            win_zip_path="$(cygpath -w "$zip_path")"
+        else
+            win_app_dir="$app_dir"
+            win_zip_path="$zip_path"
+        fi
+        "$ps_bin" -NoProfile -Command "Get-ChildItem -LiteralPath '$win_app_dir' -Force | Where-Object { \$_.Name -notin @('node_modules','dist','.astro') } | Compress-Archive -DestinationPath '$win_zip_path' -CompressionLevel Optimal -Force" \
+            || { record_check "Pawton Manufacturing dashboard deployed" fail "PowerShell Compress-Archive failed while packaging $app_dir."; return 0; }
     fi
-    (cd "$app_dir" && zip -rq "$zip_path" . -x 'node_modules/*' -x 'dist/*' -x '.astro/*')
 
     info "Deploying to $WEB_APP_NAME (remote build via Oryx)..."
     update_status "Deploying dashboard" "Zip-deploying the Pawton Manufacturing dashboard; App Service/Oryx will build it remotely." 82
