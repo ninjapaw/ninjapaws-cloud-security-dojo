@@ -502,7 +502,10 @@ resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' 
 }
 
 // Routes the Windows event streams Defender for Servers/SQL evaluates into the same workspace already
-// backing Defender for Servers Plan 2 and SQL auditing.
+// backing Defender for Servers Plan 2 and SQL auditing. SQL Server Audit records (APPLICATION_LOG
+// target, event ID 33205) and instance-level login auditing entries (event ID 18453/18456) both land
+// in the Windows Application log, so the Application!* xpath query below is what actually delivers
+// the SQL Server security telemetry to the workspace -- no SQL-specific data source is needed.
 resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
   name: '${vmName}-dcr'
   location: location

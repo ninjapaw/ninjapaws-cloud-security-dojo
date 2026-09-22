@@ -27,6 +27,15 @@ Security posture baked into the infrastructure:
 - The VM is registered with the SQL IaaS Agent extension (`Microsoft.SqlVirtualMachine/sqlVirtualMachines`), so Azure manages automated patching and best-practice assessment. Automated backups are off by default because they require a storage account destination this training scenario doesn't provision; add one and enable `autoBackupSettings` in `infra/sql-defender-scenario/main.bicep` if you need them.
 - Trusted Launch (Secure Boot + vTPM) and encryption-at-host are enabled on the VM.
 - The bootstrap script (`scripts/sql/Setup-FutonManufacturing.ps1`) enables Transparent Data Encryption (TDE) on the restored database, creates a SQL Server Audit (`FutonManufacturingServerAuditSpec`) covering failed logins, successful logins, login password changes, server principal changes, server permission changes, server role membership changes, and audit configuration changes, and writes those events to the Windows Application log. It also enables the instance-level "both failed and successful logins" [login auditing](https://learn.microsoft.com/en-us/ssms/configure-login-auditing-sql-server-management-studio) setting (SSMS Server Properties > Security), provisions a least-privilege application login (`db_datareader`/`db_datawriter` only) instead of using `sa`, disables the `sa` login and the legacy SQL Server Browser service, and forces encrypted client connections.
+- **SQL logs reach the `${vmName}-law` Log Analytics workspace** (`ninjapaws-sql-vm-dev-law` by default) that Defender for Servers/SQL already uses, via `infra/sql-defender-scenario/main.bicep`'s `amaExtension` + `dataCollectionRule` pair: the `AzureMonitorWindowsAgent` extension on the VM collects the Windows `Application`, `System`, and `Security` event logs and the associated Data Collection Rule (`${vmName}-dcr`) forwards them to that workspace over the `Microsoft-Event` stream. Both the SQL Server Audit records above (Event ID 33205, `MSSQLSERVER` source) and the login-auditing entries (Event ID 18453/18456) land in the Windows Application log, so no separate SQL-specific diagnostic setting is needed — query them in the workspace with:
+
+  ```kql
+  Event
+  | where Source == "MSSQLSERVER"
+  | order by TimeGenerated desc
+  ```
+
+  Adding a database audit target beyond `APPLICATION_LOG` (for example `FILE` or a dedicated Log Analytics table via the SQL Server extended events pipeline) would need its own `dataCollectionRule` data source and is out of scope for this training scenario; the Application-log path above is sufficient to demonstrate Defender for SQL's log-based detections.
 
 ### Pawton Manufacturing: the live demo site
 
