@@ -18,7 +18,7 @@ resource logAnalyticsReader 'Microsoft.Authorization/roleAssignments@2022-04-01'
   scope: workspace
   name: guid(workspace.id, roleAssignmentNameSuffix, 'logAnalyticsReader')
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a8f5')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
     principalId: principalId
     principalType: 'ServicePrincipal'
   }

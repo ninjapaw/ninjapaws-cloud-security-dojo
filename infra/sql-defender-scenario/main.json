@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7592534049745455406"
+      "templateHash": "16111919129899442685"
     }
   },
   "parameters": {
@@ -831,7 +831,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "8624180294467913877"
+              "templateHash": "15908715972857772588"
             }
           },
           "parameters": {
@@ -861,7 +861,7 @@
               "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
               "name": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), parameters('roleAssignmentNameSuffix'), 'logAnalyticsReader')]",
               "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a8f5')]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')]",
                 "principalId": "[parameters('principalId')]",
                 "principalType": "ServicePrincipal"
               }
