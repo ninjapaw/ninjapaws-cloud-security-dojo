@@ -2,6 +2,7 @@
 import Layout from '../../layouts/Layout.astro';
 import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../../lib/adminAuth.mjs';
 import { isAdminDbConfigured, getSaStatus } from '../../lib/adminDb.mjs';
+import { isAuditLogConfigured, getRecentSaAuditEvents } from '../../lib/auditLog.mjs';
 
 if (!isAuthenticated(Astro.cookies)) {
   return Astro.redirect('/admin/login');
@@ -35,6 +36,21 @@ const messages = {
   sa_rotated: { text: 'sa password rotated. Copy it now -- it will not be shown again.', kind: 'warn' },
 };
 const statusMessage = msg ? messages[msg] : null;
+
+// Independent confirmation, separate from the SQL connection the actions above used: did the
+// action actually reach the Windows Application log and get forwarded to Log Analytics? Ingestion
+// typically takes a few minutes, so a just-performed action may not appear yet on this page load.
+let auditEvents = [];
+let auditError = null;
+let auditConfigured = isAuditLogConfigured();
+if (auditConfigured) {
+  try {
+    const auditResult = await getRecentSaAuditEvents(30);
+    auditEvents = auditResult.events;
+  } catch (err) {
+    auditError = err.message;
+  }
+}
 ---
 <Layout title="Admin">
   <div class="banner">
@@ -83,4 +99,35 @@ const statusMessage = msg ? messages[msg] : null;
       <button type="submit" class="secondary">Sign out</button>
     </form>
   </div>
+
+  <h2>Windows Event confirmation</h2>
+  <p>
+    Independent confirmation that admin portal actions actually reached the Windows Application
+    log and were forwarded to <code>log-np-sentinel-centralus</code>, queried live with this Web
+    App's own read-only managed identity (no stored credential). Ingestion can take a few minutes,
+    so a just-performed action may not appear on this page load yet -- refresh to check again.
+  </p>
+  {!auditConfigured && (
+    <div class="warn">LOG_ANALYTICS_WORKSPACE_ID is not configured on this Web App yet.</div>
+  )}
+  {auditError && <div class="warn">Could not query Log Analytics: {auditError}</div>}
+  {auditConfigured && !auditError && auditEvents.length === 0 && (
+    <div class="warn">No matching Windows events in the last 30 minutes yet.</div>
+  )}
+  {auditEvents.length > 0 && (
+    <table>
+      <thead>
+        <tr><th>Time</th><th>Event ID</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        {auditEvents.map((event) => (
+          <tr>
+            <td>{new Date(event.TimeGenerated).toISOString()}</td>
+            <td>{event.EventID}</td>
+            <td>{String(event.RenderedDescription ?? '').slice(0, 200)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )}
 </Layout>

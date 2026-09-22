@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "7317388646183880440"
+      "templateHash": "7592534049745455406"
     }
   },
   "parameters": {
@@ -742,6 +742,10 @@
               "value": "[parameters('sqlAdminOpsPassword')]"
             },
             {
+              "name": "LOG_ANALYTICS_WORKSPACE_ID",
+              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('centralWorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('centralWorkspaceName')), '2025-02-01').customerId]"
+            },
+            {
               "name": "WEBSITES_PORT",
               "value": "8080"
             },
@@ -795,6 +799,77 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('{0}-law-reader', deployment().name)]",
+      "resourceGroup": "[parameters('centralWorkspaceResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "workspaceName": {
+            "value": "[parameters('centralWorkspaceName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2025-03-01', 'full').identity.principalId]"
+          },
+          "roleAssignmentNameSuffix": {
+            "value": "[parameters('webAppName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "8624180294467913877"
+            }
+          },
+          "parameters": {
+            "workspaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the standardized Log Analytics workspace to grant read access to."
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the Web App system-assigned managed identity to grant Log Analytics Reader."
+              }
+            },
+            "roleAssignmentNameSuffix": {
+              "type": "string",
+              "metadata": {
+                "description": "A stable, unique suffix for the role assignment name (e.g. the Web App name)."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+              "name": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), parameters('roleAssignmentNameSuffix'), 'logAnalyticsReader')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a8f5')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
         "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
       ]
     }

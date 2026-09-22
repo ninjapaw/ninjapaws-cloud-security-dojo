@@ -32,11 +32,13 @@ the database is not configured, instead of failing to build.
 | `ADMIN_SESSION_SECRET`      | _(required for `/admin`)_  | HMAC key signing the admin session cookie            |
 | `SQL_ADMIN_LOGIN`           | `dojo_admin_portal_svc`    | SQL login the admin portal uses to manage `sa`       |
 | `SQL_ADMIN_LOGIN_PASSWORD`  | _(required for `/admin`)_  | Matches the Key Vault secret the VM also uses        |
+| `LOG_ANALYTICS_WORKSPACE_ID`| _(optional)_               | Workspace ID (GUID) of `log-np-sentinel-centralus`, queried with the Web App's own managed identity to confirm sa actions reached the Windows Application log |
 
 In Azure, these are set by `infra/sql-defender-scenario/main.bicep`; the password app setting is a
 Key Vault reference, never a plaintext value. Without the four `ADMIN_*`/`SQL_ADMIN_*` variables
 set, `/admin` still renders but every sign-in attempt fails and the sa status card reports "not
-configured", instead of the app failing to build or start.
+configured", instead of the app failing to build or start. Without `LOG_ANALYTICS_WORKSPACE_ID`,
+the "Windows Event confirmation" section reports itself as unconfigured instead of failing.
 
 ## Routes
 

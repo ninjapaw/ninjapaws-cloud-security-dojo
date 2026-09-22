@@ -733,6 +733,13 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           value: sqlAdminOpsPassword
         }
         {
+          // Workspace ID (a GUID, distinct from the ARM resource ID) that the Azure Monitor Logs
+          // Query SDK needs to run KQL against log-np-sentinel-centralus with the Web App's own
+          // managed identity (see webAppLogAnalyticsReader below) -- no credential to manage.
+          name: 'LOG_ANALYTICS_WORKSPACE_ID'
+          value: workspace.properties.customerId
+        }
+        {
           name: 'WEBSITES_PORT'
           value: '8080'
         }
@@ -783,6 +790,20 @@ resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
     principalId: webApp!.identity.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Lets the admin portal confirm each sa enable/disable/rotate actually reached the Windows
+// Application log and was forwarded to Log Analytics -- read-only, and a much lower-risk grant
+// than the CONTROL SERVER SQL credential the same portal already holds. A module because the
+// workspace lives in a different resource group (NP-Sentinel-CentralUS by default) than this one.
+module webAppLogAnalyticsReader 'modules/log-analytics-reader.bicep' = if (deployWebApp) {
+  name: '${deployment().name}-law-reader'
+  scope: resourceGroup(centralWorkspaceResourceGroup)
+  params: {
+    workspaceName: centralWorkspaceName
+    principalId: webApp!.identity.principalId
+    roleAssignmentNameSuffix: webAppName
   }
 }
 
