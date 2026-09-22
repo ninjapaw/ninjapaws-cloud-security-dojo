@@ -26,6 +26,14 @@ function tableToObjects(table) {
   );
 }
 
+// The audit action ID (e.g. LGEA/LGDA for sa enable/disable) is embedded inside
+// RenderedDescription's free-text dump rather than its own column; pull it out so the UI can show
+// it as a first-class field instead of making an operator search the raw description for it.
+function extractActionId(renderedDescription) {
+  const match = /action_id:(\S+)/.exec(renderedDescription ?? "");
+  return match ? match[1] : null;
+}
+
 // Server Audit records (event ID 33205, action_id LGEA/LGDA for sa enable/disable, among others)
 // and instance-level login-audit entries (18453/18456) both land under Source "MSSQLSERVER" in
 // the Windows Application log; that's the full set relevant to confirming an admin portal action.
@@ -38,7 +46,7 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     Event
     | where TimeGenerated > ago(${minutesAgo}m)
     | where Source == "MSSQLSERVER"
-    | project TimeGenerated, EventID, RenderedDescription
+    | project TimeGenerated, EventID, EventLevelName, Computer, RenderedDescription
     | order by TimeGenerated desc
     | take ${take}
   `;
@@ -47,7 +55,11 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
   });
   if (result.status === LogsQueryResultStatus.Success) {
     const table = result.tables[0];
-    return { configured: true, events: table ? tableToObjects(table) : [] };
+    const events = table ? tableToObjects(table) : [];
+    for (const event of events) {
+      event.ActionId = extractActionId(event.RenderedDescription);
+    }
+    return { configured: true, events };
   }
   throw new Error(result.partialError?.message ?? "Log Analytics query failed.");
 }

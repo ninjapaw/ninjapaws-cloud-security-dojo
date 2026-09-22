@@ -117,14 +117,22 @@ if (auditConfigured) {
   {auditEvents.length > 0 && (
     <table>
       <thead>
-        <tr><th>Time</th><th>Event ID</th><th>Description</th></tr>
+        <tr><th>Time</th><th>Event ID</th><th>Action ID</th><th>Level</th><th>Computer</th><th>Description</th></tr>
       </thead>
       <tbody>
         {auditEvents.map((event) => (
           <tr>
             <td>{new Date(event.TimeGenerated).toISOString()}</td>
             <td>{event.EventID}</td>
-            <td>{String(event.RenderedDescription ?? '').slice(0, 200)}</td>
+            <td>{event.ActionId ?? 'n/a'}</td>
+            <td>{event.EventLevelName ?? 'n/a'}</td>
+            <td>{event.Computer ?? 'n/a'}</td>
+            <td>
+              <details>
+                <summary>{String(event.RenderedDescription ?? '').slice(0, 120)}</summary>
+                <pre style="white-space: pre-wrap; word-break: break-word;">{event.RenderedDescription}</pre>
+              </details>
+            </td>
           </tr>
         ))}
       </tbody>
