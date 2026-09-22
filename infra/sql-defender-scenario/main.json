@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "9168535571680062830"
+      "templateHash": "5365280620055327542"
     }
   },
   "parameters": {
@@ -86,6 +86,13 @@
         "description": "Allow Just-in-Time RDP access requests from any source IP instead of only the Bastion subnet. Defaults to Any; set false to restrict JIT RDP requests to the Bastion subnet CIDR."
       }
     },
+    "autoAllowBastionRdp": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Add a standing NSG rule allowing RDP from the Bastion subnet so Bastion connections work immediately, without an operator first approving a Defender for Cloud Just-in-Time access request. The JIT policy and its NSG deny rule remain in place for the Defender for Servers demonstration; this allow rule simply takes precedence over it. Set false to require JIT approval before every RDP session."
+      }
+    },
     "allowPublicSqlAccess": {
       "type": "bool",
       "defaultValue": false,
@@ -159,7 +166,7 @@
       "name": "[variables('nsgName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "securityRules": "[concat(if(parameters('allowPublicSqlAccess'), createArray(createObject('name', 'AllowPublicSql', 'properties', createObject('priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', '*', 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'AllowWebAppToSql', 'properties', createObject('priority', 110, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', variables('webAppSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()))]"
+        "securityRules": "[concat(if(parameters('allowPublicSqlAccess'), createArray(createObject('name', 'AllowPublicSql', 'properties', createObject('priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', '*', 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()), if(parameters('deployWebApp'), createArray(createObject('name', 'AllowWebAppToSql', 'properties', createObject('priority', 110, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '1433', 'sourceAddressPrefix', variables('webAppSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()), if(and(parameters('deployBastion'), parameters('autoAllowBastionRdp')), createArray(createObject('name', 'AllowBastionRdp', 'properties', createObject('priority', 120, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourcePortRange', '*', 'destinationPortRange', '3389', 'sourceAddressPrefix', variables('bastionSubnetPrefix'), 'destinationAddressPrefix', variables('vmSubnetPrefix')))), createArray()))]"
       }
     },
     {

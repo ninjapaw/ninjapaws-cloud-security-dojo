@@ -135,6 +135,7 @@ LOCATION="$(config_setting location "$LOCATION")"
 VM_SIZE="$(config_setting vmSize Standard_D4s_v4)"
 SQL_IMAGE_SKU="$(config_setting sqlImageSku sqldev-gen2)"
 DEPLOY_BASTION="$(config_setting deployBastion true)"
+AUTO_ALLOW_BASTION_RDP="$(config_setting autoAllowBastionRdp true)"
 ALLOW_PUBLIC_SQL_ACCESS="$(config_setting allowPublicSqlAccess false)"
 ALLOW_PUBLIC_KEY_VAULT_ACCESS="$(config_setting allowPublicKeyVaultAccess true)"
 DEFENDER_SERVERS_PLAN="$(config_lookup sqlScenario.defender.serversPlan)"
@@ -490,6 +491,7 @@ ${BLUE}VM name:${NC} $VM_NAME
 ${BLUE}VM size:${NC} $VM_SIZE
 ${BLUE}SQL image SKU:${NC} $SQL_IMAGE_SKU (MicrosoftSQLServer:sql2022-ws2022)
 ${BLUE}Azure Bastion:${NC} $DEPLOY_BASTION
+${BLUE}Bastion RDP auto-allowed (no JIT request):${NC} $AUTO_ALLOW_BASTION_RDP
 ${BLUE}Public SQL endpoint:${NC} $ALLOW_PUBLIC_SQL_ACCESS (TCP 1433 from public networks)
 ${BLUE}Public Key Vault endpoint:${NC} $ALLOW_PUBLIC_KEY_VAULT_ACCESS
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
@@ -580,7 +582,8 @@ run_deployment() {
         --template-file "$BICEP_FILE" \
         --parameters vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
-                     deployBastion="$DEPLOY_BASTION" allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
+                     deployBastion="$DEPLOY_BASTION" autoAllowBastionRdp="$AUTO_ALLOW_BASTION_RDP" \
+                     allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
                      allowPublicKeyVaultAccess="$ALLOW_PUBLIC_KEY_VAULT_ACCESS" \
                      deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
@@ -720,7 +723,7 @@ deploy_web_app_code() {
 run_verification() {
     info "Running verification checks..."
     update_status "Running verification" "Collecting Azure evidence for VM state, Defender coverage, networking, Key Vault, and dashboard health." 88
-    local vm_state defender_servers_tier defender_servers_subplan defender_sql_tier nic_public_ip bastion_state sqlvm_state ext_state
+    local vm_state defender_servers_tier defender_servers_subplan defender_sql_tier nic_public_ip bastion_state bastion_rdp_rule sqlvm_state ext_state
     local web_app_state web_app_subnet defender_appservices_tier health_body root_http_code health_http_code
 
     vm_state="$(az vm get-instance-view --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" -o tsv 2>/dev/null || true)"
@@ -763,6 +766,14 @@ run_verification() {
         bastion_state="$(az network bastion show --resource-group "$RESOURCE_GROUP" --name "${VM_NAME}-bastion" --query provisioningState -o tsv 2>/dev/null || true)"
         [[ "$bastion_state" == Succeeded ]] && record_check "Azure Bastion provisioned" pass "Bastion is available for browser-based RDP." \
             || record_check "Azure Bastion provisioned" unknown "Provisioning state: ${bastion_state:-unavailable}."
+
+        if [[ "$AUTO_ALLOW_BASTION_RDP" == true ]]; then
+            bastion_rdp_rule="$(az network nsg rule show --resource-group "$RESOURCE_GROUP" --nsg-name "${VM_NAME}-nsg" --name AllowBastionRdp --query provisioningState -o tsv 2>/dev/null || true)"
+            [[ "$bastion_rdp_rule" == Succeeded ]] && record_check "Bastion RDP auto-allowed" pass "NSG rule AllowBastionRdp permits RDP from the Bastion subnet without a Just-in-Time request." \
+                || record_check "Bastion RDP auto-allowed" unknown "AllowBastionRdp rule not found; Bastion connections may require a JIT request."
+        else
+            record_check "Bastion RDP auto-allowed" not_applicable "Auto-allow was disabled by configuration; approve a Just-in-Time request before each RDP session."
+        fi
     else
         record_check "Azure Bastion provisioned" not_applicable "Bastion was disabled by configuration."
     fi

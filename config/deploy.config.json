@@ -91,6 +91,7 @@
     "vmSize": "Standard_D4s_v4",
     "sqlImageSku": "sqldev-gen2",
     "deployBastion": "true",
+    "autoAllowBastionRdp": "true",
     "allowPublicSqlAccess": "false",
     "allowPublicKeyVaultAccess": "true",
     "deployWebApp": "true",

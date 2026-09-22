@@ -39,6 +39,9 @@ param deployBastion bool = true
 @description('Allow Just-in-Time RDP access requests from any source IP instead of only the Bastion subnet. Defaults to Any; set false to restrict JIT RDP requests to the Bastion subnet CIDR.')
 param allowAnyBastionSourceIp bool = true
 
+@description('Add a standing NSG rule allowing RDP from the Bastion subnet so Bastion connections work immediately, without an operator first approving a Defender for Cloud Just-in-Time access request. The JIT policy and its NSG deny rule remain in place for the Defender for Servers demonstration; this allow rule simply takes precedence over it. Set false to require JIT approval before every RDP session.')
+param autoAllowBastionRdp bool = true
+
 @description('Expose SQL Server on a public IP and allow inbound TCP 1433 from public networks. Keep disabled unless this isolated training environment needs public SQL access.')
 param allowPublicSqlAccess bool = false
 
@@ -116,6 +119,23 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2025-01-01' = {
           sourcePortRange: '*'
           destinationPortRange: '1433'
           sourceAddressPrefix: webAppSubnetPrefix
+          destinationAddressPrefix: vmSubnetPrefix
+        }
+      }
+      ] : [],
+      (deployBastion && autoAllowBastionRdp) ? [
+      {
+        // Takes precedence (lower priority number) over the JIT-managed deny rule Defender for
+        // Cloud inserts at priority 4096, so Bastion RDP works without a JIT request every time.
+        name: 'AllowBastionRdp'
+        properties: {
+          priority: 120
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '3389'
+          sourceAddressPrefix: bastionSubnetPrefix
           destinationAddressPrefix: vmSubnetPrefix
         }
       }
