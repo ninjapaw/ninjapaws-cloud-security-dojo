@@ -147,6 +147,9 @@ DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
 DEPLOY_WEB_APP="$(config_setting deployWebApp true)"
 WEB_APP_NAME="${WEB_APP_NAME:-$(config_setting webAppName "ninjapaws-pawton-${ENVIRONMENT}")}"
 WEB_APP_PLAN_SKU="$(config_setting webAppPlanSku B1)"
+CENTRAL_WORKSPACE_RESOURCE_GROUP="$(config_setting centralWorkspaceResourceGroup "NP-Sentinel-CentralUS")"
+CENTRAL_WORKSPACE_NAME="$(config_setting centralWorkspaceName "log-np-sentinel-centralus")"
+CENTRAL_WORKSPACE_RETENTION_DAYS="$(config_setting workspaceRetentionDays 30)"
 GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'dev')"
 BOOTSTRAP_SCRIPT_URL="https://raw.githubusercontent.com/ninjapaw/ninjapaws-cloud-security-dojo/${GIT_BRANCH}/scripts/sql/Setup-FutonManufacturing.ps1"
 BICEP_FILE="$AZURE_REPO_ROOT/infra/sql-defender-scenario/main.bicep"
@@ -496,6 +499,7 @@ ${BLUE}Public SQL endpoint:${NC} $ALLOW_PUBLIC_SQL_ACCESS (TCP 1433 from public 
 ${BLUE}Public Key Vault endpoint:${NC} $ALLOW_PUBLIC_KEY_VAULT_ACCESS
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
 ${BLUE}Defender for SQL:${NC} $DEFENDER_SQL_PLAN (Standard tier)
+${BLUE}Central Log Analytics workspace:${NC} $CENTRAL_WORKSPACE_NAME (resource group $CENTRAL_WORKSPACE_RESOURCE_GROUP) — standardized across every scenario in this repo
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
 ${BLUE}Pawton Manufacturing Web App:${NC} $WEB_APP_NAME ($WEB_APP_PLAN_SKU, deployWebApp=$DEPLOY_WEB_APP)
 ${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet
@@ -534,6 +538,13 @@ cmd_doctor() {
         state="$(az provider show --namespace "$provider" --query registrationState -o tsv 2>/dev/null || true)"
         [[ "$state" == Registered ]] && ok "$provider: Registered" || warn "$provider: ${state:-unknown} (deploy will attempt to register it)"
     done
+    info "Checking central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME'..."
+    if az monitor log-analytics workspace show --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
+        --workspace-name "$CENTRAL_WORKSPACE_NAME" --output none 2>/dev/null; then
+        ok "Central workspace '$CENTRAL_WORKSPACE_NAME' already exists in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
+    else
+        warn "Central workspace '$CENTRAL_WORKSPACE_NAME' does not exist yet; 'deploy' will create it in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
+    fi
     complete_status "Complete" "Doctor checks completed. Review warnings before deploying." 100
 }
 
@@ -544,6 +555,29 @@ ensure_resource_group() {
         info "Creating resource group '$RESOURCE_GROUP' in $LOCATION..."
         az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --output none
         ok "Resource group created."
+    fi
+}
+
+# Every scenario in this repo forwards Defender/SQL telemetry into one standardized workspace
+# instead of provisioning a workspace per scenario/VM, so training exercises share a single place
+# to query and correlate signal. Idempotent: leaves an existing workspace untouched.
+ensure_central_workspace() {
+    if az group show --name "$CENTRAL_WORKSPACE_RESOURCE_GROUP" --output none 2>/dev/null; then
+        ok "Central workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' already exists."
+    else
+        info "Creating central workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' in $LOCATION..."
+        az group create --name "$CENTRAL_WORKSPACE_RESOURCE_GROUP" --location "$LOCATION" --output none
+        ok "Central workspace resource group created."
+    fi
+    if az monitor log-analytics workspace show --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
+        --workspace-name "$CENTRAL_WORKSPACE_NAME" --output none 2>/dev/null; then
+        ok "Central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME' already exists."
+    else
+        info "Creating central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME'..."
+        az monitor log-analytics workspace create --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
+            --workspace-name "$CENTRAL_WORKSPACE_NAME" --location "$LOCATION" \
+            --sku PerGB2018 --retention-time "$CENTRAL_WORKSPACE_RETENTION_DAYS" --output none
+        ok "Central Log Analytics workspace created."
     fi
 }
 
@@ -587,6 +621,8 @@ run_deployment() {
                      allowPublicKeyVaultAccess="$ALLOW_PUBLIC_KEY_VAULT_ACCESS" \
                      deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
+                     centralWorkspaceResourceGroup="$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
+                     centralWorkspaceName="$CENTRAL_WORKSPACE_NAME" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
@@ -1029,6 +1065,7 @@ cmd_deploy() {
     fi
     update_status "Preparing resource group" "Ensuring the Scenario 2 resource group exists." 18
     ensure_resource_group
+    ensure_central_workspace
     run_deployment
     run_verification
     update_status "Writing audit report" "Writing the final Scenario 2 audit and verification report." 96

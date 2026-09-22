@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "18084851181075722225"
+      "templateHash": "5968400487503354903"
     }
   },
   "parameters": {
@@ -59,11 +59,18 @@
         "description": "SQL Server 2022 on Windows Server 2022 marketplace image SKU. Must be a -gen2 SKU: Trusted Launch (below) requires a generation 2 image, and the publisher no longer offers generation 1 SKUs for this offer. sqldev-gen2 is free for training/dev use."
       }
     },
-    "workspaceName": {
+    "centralWorkspaceResourceGroup": {
       "type": "string",
-      "defaultValue": "[format('{0}-law', parameters('vmName'))]",
+      "defaultValue": "NP-Sentinel-CentralUS",
       "metadata": {
-        "description": "Log Analytics workspace name backing Defender for Servers and SQL auditing."
+        "description": "Resource group holding the standardized, subscription-wide Log Analytics workspace all scenarios in this repo forward Defender/SQL telemetry to. Must already exist -- the deploy script provisions it before this template runs."
+      }
+    },
+    "centralWorkspaceName": {
+      "type": "string",
+      "defaultValue": "log-np-sentinel-centralus",
+      "metadata": {
+        "description": "Name of the standardized Log Analytics workspace inside centralWorkspaceResourceGroup."
       }
     },
     "bootstrapScriptUrl": {
@@ -148,18 +155,6 @@
     "keyVaultResourceName": "[take(toLower(replace(format('{0}kv', parameters('vmName')), '-', '')), 24)]"
   },
   "resources": [
-    {
-      "type": "Microsoft.OperationalInsights/workspaces",
-      "apiVersion": "2025-02-01",
-      "name": "[parameters('workspaceName')]",
-      "location": "[parameters('location')]",
-      "properties": {
-        "sku": {
-          "name": "PerGB2018"
-        },
-        "retentionInDays": 30
-      }
-    },
     {
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2025-01-01",
@@ -524,7 +519,7 @@
           "logAnalytics": [
             {
               "name": "centralWorkspace",
-              "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+              "workspaceResourceId": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('centralWorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('centralWorkspaceName'))]"
             }
           ]
         },
@@ -538,10 +533,7 @@
             ]
           }
         ]
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
-      ]
+      }
     },
     {
       "type": "Microsoft.Insights/dataCollectionRuleAssociations",
@@ -733,11 +725,11 @@
     },
     "workspaceId": {
       "type": "string",
-      "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+      "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('centralWorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('centralWorkspaceName'))]"
     },
     "workspaceCustomerId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), '2025-02-01').customerId]"
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('centralWorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('centralWorkspaceName')), '2025-02-01').customerId]"
     },
     "bastionName": {
       "type": "string",

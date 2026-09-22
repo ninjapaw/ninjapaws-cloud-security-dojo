@@ -97,6 +97,8 @@
     "deployWebApp": "true",
     "webAppPlanSku": "B1",
     "workspaceRetentionDays": "30",
+    "centralWorkspaceResourceGroup": "NP-Sentinel-CentralUS",
+    "centralWorkspaceName": "log-np-sentinel-centralus",
     "defender": {
       "serversPlan": "VirtualMachines",
       "serversSubPlan": "P2",

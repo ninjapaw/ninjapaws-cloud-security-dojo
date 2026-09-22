@@ -27,8 +27,11 @@ param vmSize string = 'Standard_D4s_v4'
 @description('SQL Server 2022 on Windows Server 2022 marketplace image SKU. Must be a -gen2 SKU: Trusted Launch (below) requires a generation 2 image, and the publisher no longer offers generation 1 SKUs for this offer. sqldev-gen2 is free for training/dev use.')
 param sqlImageSku string = 'sqldev-gen2'
 
-@description('Log Analytics workspace name backing Defender for Servers and SQL auditing.')
-param workspaceName string = '${vmName}-law'
+@description('Resource group holding the standardized, subscription-wide Log Analytics workspace all scenarios in this repo forward Defender/SQL telemetry to. Must already exist -- the deploy script provisions it before this template runs.')
+param centralWorkspaceResourceGroup string = 'NP-Sentinel-CentralUS'
+
+@description('Name of the standardized Log Analytics workspace inside centralWorkspaceResourceGroup.')
+param centralWorkspaceName string = 'log-np-sentinel-centralus'
 
 @description('Raw content base URL used to fetch the futon-manufacturing bootstrap script onto the VM.')
 param bootstrapScriptUrl string
@@ -76,16 +79,12 @@ var computerName = take(replace(vmName, '-', ''), 15)
 // environment so redeployments update its secrets instead of creating a new vault each time.
 var keyVaultResourceName = take(toLower(replace('${vmName}kv', '-', '')), 24)
 
-// Log Analytics workspace: required for Defender for Servers Plan 2 (MDE) and SQL Server audit/diagnostic data.
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
-  name: workspaceName
-  location: location
-  properties: {
-    sku: {
-      name: 'PerGB2018'
-    }
-    retentionInDays: 30
-  }
+// Log Analytics workspace: this scenario no longer creates its own -- it forwards into the same
+// standardized NP-Sentinel-CentralUS workspace every scenario in this repo now uses, so Defender/SQL
+// telemetry from every training exercise lands in one place instead of a workspace per VM name.
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+  name: centralWorkspaceName
+  scope: resourceGroup(centralWorkspaceResourceGroup)
 }
 
 resource nsg 'Microsoft.Network/networkSecurityGroups@2025-01-01' = {
@@ -715,9 +714,10 @@ resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022
   }
 }
 
-// SQL Server audit and Windows Security events reach this workspace through the Azure Monitor
-// Agent/Data Collection Rule pair above and the SQL IaaS agent extension, not a diagnosticSettings
-// resource; classic VM diagnosticSettings only forwards host metrics, not those event streams.
+// SQL Server audit and Windows Security events reach the standardized NP-Sentinel-CentralUS workspace
+// through the Azure Monitor Agent/Data Collection Rule pair above and the SQL IaaS agent extension,
+// not a diagnosticSettings resource; classic VM diagnosticSettings only forwards host metrics, not
+// those event streams.
 output vmName string = vm.name
 output vmResourceId string = vm.id
 output sqlVirtualMachineId string = sqlVirtualMachine.id
