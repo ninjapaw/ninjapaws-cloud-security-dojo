@@ -604,12 +604,16 @@ read_output() {
 }
 
 run_deployment() {
-    local admin_password sql_app_login_password admin_portal_password admin_session_secret sql_admin_ops_password
-    local deployment_name output_json vm_principal_id creds_dir creds_file
+    local admin_password sql_app_login_password admin_portal_password admin_session_secret sql_admin_ops_password sql_sa_login_password sql_sa_login_username
+    local deployment_name output_json vm_principal_id creds_dir creds_file expected_key_vault_name
     admin_password="$(generate_password)"
     sql_app_login_password="$(generate_password)"
     admin_portal_password="$(generate_password)"
     sql_admin_ops_password="$(generate_password)"
+    sql_sa_login_password="$(generate_password)"
+    expected_key_vault_name="$(printf '%s' "${VM_NAME}kv" | tr '[:upper:]' '[:lower:]' | tr -d '-' | cut -c1-24)"
+    sql_sa_login_username="$(az keyvault secret show --vault-name "$expected_key_vault_name" --name sql-sa-login-username --query value -o tsv 2>/dev/null || true)"
+    sql_sa_login_username="${sql_sa_login_username:-sa}"
     admin_session_secret="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -630,6 +634,7 @@ run_deployment() {
                      centralWorkspaceName="$CENTRAL_WORKSPACE_NAME" \
                      adminPortalUsername="$ADMIN_PORTAL_USERNAME" adminPortalPassword="$admin_portal_password" \
                      adminSessionSecret="$admin_session_secret" sqlAdminOpsPassword="$sql_admin_ops_password" \
+                     sqlSaLoginUsername="$sql_sa_login_username" sqlSaLoginPassword="$sql_sa_login_password" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
@@ -665,7 +670,7 @@ run_deployment() {
     KEY_VAULT_NAME="$(read_output "$output_json" keyVaultName)"
     WEB_APP_HOSTNAME="$(read_output "$output_json" webAppHostName)"
     SQL_PUBLIC_IP="$(read_output "$output_json" sqlPublicIpAddress)"
-    unset sql_app_login_password
+    unset sql_app_login_password sql_sa_login_password sql_sa_login_username
 
     # The admin portal password is regenerated every deploy (like the VM admin password above), so
     # the previous value silently stops working; persist it locally the same way so /admin sign-in
@@ -685,6 +690,7 @@ run_deployment() {
     if [[ -n "$KEY_VAULT_NAME" ]]; then
         record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
         record_check "VM admin credentials stored in Key Vault" pass "Secrets 'vm-admin-username' and 'vm-admin-password' in $KEY_VAULT_NAME; retrieve them with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name <secret-name>'."
+        record_check "Built-in SQL administrator credentials stored in Key Vault" pass "Secrets 'sql-sa-login-username' and 'sql-sa-login-password' in $KEY_VAULT_NAME; the portal updates them after a rename or password rotation."
     fi
 
     vm_principal_id="$(read_output "$output_json" principalId)"
@@ -861,6 +867,12 @@ run_verification() {
         record_check "SQL app login password retrievable from Key Vault" pass "Secret 'sql-app-login-password' exists in $KEY_VAULT_NAME and is readable with the current identity."
     else
         record_check "SQL app login password retrievable from Key Vault" unknown "Could not confirm the secret in ${KEY_VAULT_NAME:-the Key Vault}; the current identity may lack the Key Vault Secrets Officer/User role."
+    fi
+
+    if [[ -n "$KEY_VAULT_NAME" ]] && az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name sql-sa-login-username --query id -o tsv >/dev/null 2>&1 && az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name sql-sa-login-password --query id -o tsv >/dev/null 2>&1; then
+        record_check "Built-in SQL administrator credentials retrievable from Key Vault" pass "Secrets 'sql-sa-login-username' and 'sql-sa-login-password' exist in $KEY_VAULT_NAME."
+    else
+        record_check "Built-in SQL administrator credentials retrievable from Key Vault" unknown "Could not confirm the built-in SQL administrator secrets in ${KEY_VAULT_NAME:-the Key Vault}."
     fi
 
     # Defender for App Service is a subscription-wide plan, so this Web App is covered by the

@@ -30,17 +30,47 @@ function tableToObjects(table) {
   );
 }
 
-// The audit action ID (e.g. LGEA/LGDA for sa enable/disable) is embedded inside
-// RenderedDescription's free-text dump rather than its own column; pull it out so the UI can show
-// it as a first-class field instead of making an operator search the raw description for it.
-function extractActionId(renderedDescription) {
-  const match = /action_id:(\S+)/.exec(renderedDescription ?? "");
-  return match ? match[1] : null;
+function extractField(renderedDescription, fieldName) {
+  const match = new RegExp(
+    `${fieldName}:(.+?)(?=\\s+[A-Za-z_][A-Za-z0-9_]*:|$)`,
+    "i",
+  ).exec(renderedDescription ?? "");
+  if (!match) {
+    return null;
+  }
+  const raw = match[1].trim();
+  return raw.length > 0 ? raw : null;
 }
 
-// Server Audit records (event ID 33205, action_id LGEA/LGDA for sa enable/disable, among others)
-// and instance-level login-audit entries (18453/18456) both land under Source "MSSQLSERVER" in
-// the Windows Application log; that's the full set relevant to confirming an admin portal action.
+function formatAuditSummary(event) {
+  const actionId =
+    event.ActionId ?? extractField(event.RenderedDescription, "action_id");
+  const loginName =
+    extractField(event.RenderedDescription, "server_principal_name") ||
+    extractField(event.RenderedDescription, "target_server_principal_name") ||
+    extractField(event.RenderedDescription, "session_server_principal_name");
+  const clientIp =
+    extractField(event.RenderedDescription, "client_ip") ||
+    extractField(event.RenderedDescription, "address");
+  const databaseName = extractField(event.RenderedDescription, "database_name");
+  const succeeded = extractField(event.RenderedDescription, "succeeded");
+  const status = succeeded
+    ? `${succeeded.toLowerCase() === "true" ? "success" : "failed"}`
+    : "unknown";
+
+  const summaryParts = [];
+  if (actionId) summaryParts.push(actionId);
+  if (loginName) summaryParts.push(loginName);
+  if (databaseName) summaryParts.push(databaseName);
+  if (clientIp) summaryParts.push(clientIp);
+  summaryParts.push(status);
+  return summaryParts.join(" • ");
+}
+
+// SQL Server audit records that matter for the admin portal are the server-principal change group
+// and the login audit event stream. The generic LGIS entries are useful for noise reduction, but the
+// actions we care about are login enable/disable/password change, so filter to the relevant event
+// IDs and parse the key-value schema into a readable summary rather than dumping the whole XML blob.
 export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
   if (!isAuditLogConfigured()) {
     return { configured: false, events: [] };
@@ -50,7 +80,19 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     Event
     | where TimeGenerated > ago(${minutesAgo}m)
     | where Source == "MSSQLSERVER"
-    | project TimeGenerated, EventID, EventLevelName, Computer, RenderedDescription
+    | where EventID in (33205, 18453, 18454, 18456)
+    | extend ActionId = extract(@"action_id:(\S+)", 1, RenderedDescription)
+    | extend Success = tostring(extract(@"succeeded:(true|false)", 1, RenderedDescription))
+    | extend LoginName = coalesce(
+        extract(@"server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
+        extract(@"target_server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
+        extract(@"session_server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription)
+      )
+    | extend ClientIp = coalesce(
+        extract(@"client_ip:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
+        extract(@"address:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription)
+      )
+    | project TimeGenerated, EventID, EventLevelName, Computer, RenderedDescription, ActionId, Success, LoginName, ClientIp
     | order by TimeGenerated desc
     | take ${take}
   `;
@@ -61,7 +103,22 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     const table = result.tables[0];
     const events = table ? tableToObjects(table) : [];
     for (const event of events) {
-      event.ActionId = extractActionId(event.RenderedDescription);
+      event.ActionId =
+        event.ActionId ?? extractField(event.RenderedDescription, "action_id");
+      event.Success = event.Success
+        ? event.Success.toLowerCase() === "true"
+        : (
+            extractField(event.RenderedDescription, "succeeded") || "unknown"
+          ).toLowerCase() === "true";
+      event.LoginName =
+        event.LoginName ??
+        extractField(event.RenderedDescription, "server_principal_name") ??
+        extractField(event.RenderedDescription, "target_server_principal_name");
+      event.ClientIp =
+        event.ClientIp ??
+        extractField(event.RenderedDescription, "client_ip") ??
+        extractField(event.RenderedDescription, "address");
+      event.Summary = formatAuditSummary(event);
     }
     return { configured: true, events };
   }

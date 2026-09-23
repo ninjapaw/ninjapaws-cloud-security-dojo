@@ -76,6 +76,7 @@ fi
 echo "Checking Bash syntax..."
 bash -n "$REPO_ROOT/scripts/deploy.sh"
 bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
+bash -n "$REPO_ROOT/scripts/deploy-sentinel-sql.sh"
 bash -n "$REPO_ROOT/scripts/lib/common.sh"
 bash -n "$REPO_ROOT/scripts/manage.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
@@ -86,6 +87,7 @@ echo "Checking Node.js runtime syntax..."
 (
     cd "$REPO_ROOT"
     "$NODE_COMMAND" --check src/app.js
+    "$NODE_COMMAND" scripts/test-sentinel-sql.mjs
 )
 
 contains_text() {

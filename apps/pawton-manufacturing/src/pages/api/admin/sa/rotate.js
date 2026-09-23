@@ -4,14 +4,27 @@ import {
   ROTATED_SECRET_COOKIE_NAME,
 } from "../../../../lib/adminAuth.mjs";
 import { rotateSaPassword } from "../../../../lib/adminDb.mjs";
+import {
+  requireAdminSecretsConfigured,
+  storeTargetAdminPassword,
+  verifyTargetAdminPassword,
+} from "../../../../lib/adminSecrets.mjs";
 
 export async function POST({ cookies, redirect }) {
   if (!isAuthenticated(cookies)) {
     return redirect("/admin/login", 303);
   }
   try {
+    requireAdminSecretsConfigured();
     const newPassword = generateSqlPassword();
     await rotateSaPassword(newPassword);
+    await storeTargetAdminPassword(newPassword);
+    const secretMatches = await verifyTargetAdminPassword(newPassword);
+    if (!secretMatches) {
+      throw new Error(
+        "SQL password rotated successfully, but the Key Vault secret did not match the new random password.",
+      );
+    }
     cookies.set(ROTATED_SECRET_COOKIE_NAME, newPassword, {
       httpOnly: true,
       secure: true,

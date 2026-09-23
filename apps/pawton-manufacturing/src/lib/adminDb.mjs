@@ -8,6 +8,7 @@ import sql from "mssql";
 let adminPoolPromise;
 
 const DEFAULT_SQL_TIMEOUT_MS = 5000;
+const BUILT_IN_ADMIN_SID = "0x01";
 
 function readTimeout(name) {
   const value = Number(process.env[name]);
@@ -61,33 +62,101 @@ async function getAdminPool() {
   return adminPoolPromise;
 }
 
-export async function getSaStatus() {
+function quoteIdentifier(identifier) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(identifier)) {
+    throw new Error(
+      "The SQL login name must begin with a letter or underscore and contain only letters, numbers, or underscores.",
+    );
+  }
+  return `[${identifier}]`;
+}
+
+async function getBuiltInAdminLogin() {
   const pool = await getAdminPool();
   const result = await pool
     .request()
     .query(
-      "SELECT is_disabled, LOGINPROPERTY('sa', 'PasswordLastSetTime') AS PasswordLastSetTime FROM sys.server_principals WHERE name = 'sa'",
+      `SELECT name, is_disabled, LOGINPROPERTY(name, 'PasswordLastSetTime') AS PasswordLastSetTime FROM sys.server_principals WHERE sid = ${BUILT_IN_ADMIN_SID};`,
     );
   const row = result.recordset[0];
+  if (!row) {
+    throw new Error("SQL Server's built-in administrator login was not found.");
+  }
+  return row;
+}
+
+export async function getSaStatus() {
+  const row = await getBuiltInAdminLogin();
   return {
-    enabled: row ? row.is_disabled === false : null,
-    passwordLastSetTime: row?.PasswordLastSetTime ?? null,
+    username: row.name,
+    enabled: row.is_disabled === false,
+    passwordLastSetTime: row.PasswordLastSetTime ?? null,
   };
 }
 
 export async function setSaEnabled(enabled) {
   const pool = await getAdminPool();
-  // The login name is a fixed literal ('sa'), never user input, so this does not need
-  // parameterization; only values (like the rotated password below) come from user-adjacent input.
+  const currentLogin = await getBuiltInAdminLogin();
   await pool
     .request()
-    .query(`ALTER LOGIN [sa] ${enabled ? "ENABLE" : "DISABLE"};`);
+    .query(
+      `ALTER LOGIN ${quoteIdentifier(currentLogin.name)} ${enabled ? "ENABLE" : "DISABLE"};`,
+    );
 }
 
 export async function rotateSaPassword(newPassword) {
   const pool = await getAdminPool();
+  const currentLogin = await getBuiltInAdminLogin();
+  const wasDisabled =
+    currentLogin.is_disabled === true || currentLogin.is_disabled === 1;
+
+  try {
+    if (wasDisabled) {
+      await pool
+        .request()
+        .query(`ALTER LOGIN ${quoteIdentifier(currentLogin.name)} ENABLE;`);
+    }
+
+    await pool
+      .request()
+      .input("newPassword", sql.NVarChar, newPassword)
+      .query(
+        `ALTER LOGIN ${quoteIdentifier(currentLogin.name)} WITH PASSWORD = @newPassword;`,
+      );
+
+    const verifyConfig = {
+      ...readAdminConfig(),
+      user: currentLogin.name,
+      password: newPassword,
+      database: "master",
+      connectionTimeout: readTimeout("SQL_CONNECT_TIMEOUT_MS"),
+      requestTimeout: readTimeout("SQL_REQUEST_TIMEOUT_MS"),
+    };
+    const verifyPool = new sql.ConnectionPool(verifyConfig);
+    try {
+      await verifyPool.connect();
+    } finally {
+      await verifyPool.close();
+    }
+
+    return { username: currentLogin.name, wasDisabled };
+  } finally {
+    if (wasDisabled) {
+      await pool
+        .request()
+        .query(`ALTER LOGIN ${quoteIdentifier(currentLogin.name)} DISABLE;`);
+    }
+  }
+}
+
+export async function renameSaLogin(newUsername) {
+  const pool = await getAdminPool();
+  const currentLogin = await getBuiltInAdminLogin();
+  const quotedNewUsername = quoteIdentifier(newUsername);
   await pool
     .request()
-    .input("newPassword", sql.NVarChar, newPassword)
-    .query("ALTER LOGIN [sa] WITH PASSWORD = @newPassword;");
+    .query(
+      `ALTER LOGIN ${quoteIdentifier(currentLogin.name)} WITH NAME = ${quotedNewUsername};`,
+    );
+  return newUsername;
 }

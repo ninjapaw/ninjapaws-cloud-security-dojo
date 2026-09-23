@@ -1,2 +1,4 @@
 *.sh text eol=lf
 *.json text eol=lf
+infra/sentinel-sql-solution/*.bicep text eol=lf
+infra/sentinel-sql-solution/queries/*.kql text eol=lf

@@ -79,6 +79,13 @@ param adminSessionSecret string
 @description('Password for the dojo_admin_portal_svc SQL login the admin portal uses to enable/disable/rotate the sa login. This login is granted CONTROL SERVER (the only permission SQL Server accepts for altering sa) -- functionally equivalent to sysadmin. Handing a public-facing Web App this credential is itself the anti-pattern this scenario demonstrates; see README.md. No default; the deploy script generates a random value per run.')
 param sqlAdminOpsPassword string
 
+@secure()
+@description('Initial password for the SQL Server built-in administrator login. The deploy script generates it, the VM bootstrap applies it, and Key Vault retains the authoritative current value after portal rotations.')
+param sqlSaLoginPassword string
+
+@description('Current name of SQL Server built-in administrator login. The deploy script preserves the existing Key Vault value on redeploy so a portal rename is not reverted.')
+param sqlSaLoginUsername string = 'sa'
+
 var nsgName = '${vmName}-nsg'
 var vnetName = '${vmName}-vnet'
 var nicName = '${vmName}-nic'
@@ -486,7 +493,7 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
       // neither cmd.exe nor Win32 argv parsing (which powershell.exe uses) treats a single quote
       // as a quote character, so wrapping the value in '...' would pass the literal quote
       // characters through as part of the argument instead of stripping them.
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)} -AdminOpsLoginPasswordBase64 ${base64(sqlAdminOpsPassword)}'
+      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)} -AdminOpsLoginPasswordBase64 ${base64(sqlAdminOpsPassword)} -SaLoginPasswordBase64 ${base64(sqlSaLoginPassword)}'
     }
   }
   dependsOn: [
@@ -658,6 +665,22 @@ resource sqlAdminOpsPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01
   }
 }
 
+resource sqlSaLoginUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'sql-sa-login-username'
+  properties: {
+    value: sqlSaLoginUsername
+  }
+}
+
+resource sqlSaLoginPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'sql-sa-login-password'
+  properties: {
+    value: sqlSaLoginPassword
+  }
+}
+
 // Pawton Manufacturing dashboard: Astro/Node.js Web App reading the restored sample data. It
 // never touches the internet path to SQL Server -- regional VNet integration routes its traffic
 // to the private IP on the sql-vm-subnet, and the NSG only allows that one subnet on port 1433.
@@ -733,6 +756,10 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           value: sqlAdminOpsPassword
         }
         {
+          name: 'KEY_VAULT_URI'
+          value: keyVault.properties.vaultUri
+        }
+        {
           // Workspace ID (a GUID, distinct from the ARM resource ID) that the Azure Monitor Logs
           // Query SDK needs to run KQL against log-np-sentinel-centralus with the Web App's own
           // managed identity (see webAppLogAnalyticsReader below) -- no credential to manage.
@@ -788,6 +815,16 @@ resource webAppKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022
   name: guid(keyVault.id, webAppName, 'kvSecretsUser')
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: webApp!.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource webAppKeyVaultSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWebApp) {
+  scope: keyVault
+  name: guid(keyVault.id, webAppName, 'kvSecretsOfficer')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
     principalId: webApp!.identity.principalId
     principalType: 'ServicePrincipal'
   }

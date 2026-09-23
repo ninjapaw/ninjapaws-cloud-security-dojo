@@ -1,0 +1,41 @@
+Event
+| where _ResourceId =~ VmResourceId
+| where EventLog == "Application" and (Source =~ "MSSQLSERVER" or Source startswith "MSSQL$")
+| where EventID in (33205, 18453, 18454, 18456)
+| extend IngestedAt = ingestion_time()
+| extend ActionId = extract(@"(?:^|\s)action_id:\s*(\S+)", 1, RenderedDescription),
+    AuditTime = todatetime(extract(@"(?:^|\s)event_time:([\s\S]*?)\s+sequence_number:", 1, RenderedDescription)),
+    Actor = trim(@"\s+", extract(@"(?:^|\s)server_principal_name:([\s\S]*?)\s+server_principal_sid:", 1, RenderedDescription)),
+    TargetLogin = trim(@"\s+", extract(@"(?:^|\s)target_server_principal_name:([\s\S]*?)\s+target_server_principal_sid:", 1, RenderedDescription)),
+    TargetSid = extract(@"(?:^|\s)target_server_principal_sid:([^\s]*)", 1, RenderedDescription),
+    ActorSid = extract(@"(?:^|\s)server_principal_sid:([^\s]*)", 1, RenderedDescription),
+    ClientAddress = trim(@"\s+", extract(@"(?:^|\s)client_ip:([\s\S]*?)\s+permission_bitmask:", 1, RenderedDescription)),
+    ApplicationName = trim(@"\s+", extract(@"(?:^|\s)application_name:([\s\S]*?)\s+connection_id:", 1, RenderedDescription)),
+    Statement = trim(@"\s+", extract(@"(?:^|\s)statement:([\s\S]*?)\s+additional_information:", 1, RenderedDescription)),
+    Succeeded = tobool(extract(@"(?:^|\s)succeeded:(true|false)", 1, RenderedDescription)),
+    SequenceGroup = extract(@"(?:^|\s)sequence_group_id:([^\s]*)", 1, RenderedDescription),
+    SequenceNumber = toint(extract(@"(?:^|\s)sequence_number:(\d+)", 1, RenderedDescription))
+| extend Actor = iff(EventID == 33205, Actor, extract(@"user '([^']*)'", 1, RenderedDescription)),
+    ClientAddress = iff(EventID == 33205, ClientAddress, extract(@"\[CLIENT: ([^\]]+)\]", 1, RenderedDescription)),
+    Succeeded = case(EventID in (18453, 18454), true, EventID == 18456, false, Succeeded)
+| extend Operation = case(
+    ActionId == "LGEA", "Login enabled",
+    ActionId == "LGDA", "Login disabled",
+    ActionId == "PWR", "Login password changed",
+    ActionId == "AUSC", "Audit configuration changed",
+    Statement matches regex @"(?i)^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+ENABLE\b", "Login enabled",
+    Statement matches regex @"(?i)^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+DISABLE\b", "Login disabled",
+    Statement matches regex @"(?i)^ALTER\s+LOGIN\s+.*?\s+WITH\s+PASSWORD\b", "Login password changed",
+    Statement matches regex @"(?i)^ALTER\s+LOGIN\s+.*?\s+WITH\s+NAME\b", "Login renamed",
+    Statement matches regex @"(?i)^(CREATE|ALTER|DROP)\s+(SERVER|DATABASE)\s+AUDIT\b", "Audit configuration changed",
+    ActionId == "LGIS" or EventID in (18453, 18454), "Login succeeded",
+    ActionId == "LGIF" or EventID == 18456, "Login failed",
+    "Other SQL audit")
+| extend IsBuiltInAdmin = TargetSid in~ ("01", "0x01") or (isempty(TargetSid) and TargetLogin =~ "sa"),
+    IsBuiltInAdminActor = ActorSid in~ ("01", "0x01") or (isempty(ActorSid) and Actor =~ "sa"),
+    Outcome = case(Succeeded == true, "Succeeded", Succeeded == false, "Failed", "Unknown"),
+    EventKey = hash_sha256(strcat(_ResourceId, "|", Source, "|", tostring(EventID), "|", RenderedDescription, "|", tostring(TimeGenerated)))
+| summarize arg_max(IngestedAt, *) by EventKey
+| project TimeGenerated, AuditTime, IngestedAt, Computer, Source, EventID, ActionId, Operation,
+    Actor, TargetLogin, IsBuiltInAdmin, IsBuiltInAdminActor, ClientAddress, ApplicationName,
+    Succeeded, Outcome, SequenceGroup, SequenceNumber, EventKey, _ResourceId

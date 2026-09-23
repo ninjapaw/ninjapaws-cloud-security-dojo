@@ -12,6 +12,7 @@
   "dependencies": {
     "@astrojs/node": "^9.0.0",
     "@azure/identity": "^4.13.3",
+    "@azure/keyvault-secrets": "^4.11.2",
     "@azure/monitor-query-logs": "^1.0.0",
     "astro": "^5.1.1",
     "mssql": "^11.0.1",

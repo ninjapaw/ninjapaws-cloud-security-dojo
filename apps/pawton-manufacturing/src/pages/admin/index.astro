@@ -2,6 +2,7 @@
 import Layout from '../../layouts/Layout.astro';
 import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../../lib/adminAuth.mjs';
 import { isAdminDbConfigured, getSaStatus } from '../../lib/adminDb.mjs';
+import { isAdminSecretsConfigured } from '../../lib/adminSecrets.mjs';
 import { isAuditLogConfigured, getRecentSaAuditEvents } from '../../lib/auditLog.mjs';
 
 if (!isAuthenticated(Astro.cookies)) {
@@ -33,7 +34,8 @@ if (isAdminDbConfigured()) {
 const messages = {
   sa_enabled: { text: 'sa login enabled.', kind: 'warn' },
   sa_disabled: { text: 'sa login disabled.', kind: 'ok' },
-  sa_rotated: { text: 'sa password rotated. Copy it now -- it will not be shown again.', kind: 'warn' },
+  sa_rotated: { text: 'Built-in administrator password rotated and stored in Key Vault. Copy it now -- it will not be shown again.', kind: 'warn' },
+  sa_renamed: { text: 'Built-in administrator login renamed and synchronized to Key Vault.', kind: 'warn' },
 };
 const statusMessage = msg ? messages[msg] : null;
 
@@ -55,7 +57,7 @@ if (auditConfigured) {
 <Layout title="Admin">
   <div class="banner">
     <strong>High-privilege area.</strong> The actions below run as <code>dojo_admin_portal_svc</code>,
-    a SQL login granted <code>CONTROL SERVER</code> so it can manage the <code>sa</code> login --
+    a SQL login granted <code>CONTROL SERVER</code> so it can manage the SQL Server built-in administrator login --
     SQL Server does not accept any narrower permission for that operation. Every action here is
     recorded by <code>FutonManufacturingServerAuditSpec</code> (Server Audit) and forwarded to the
     <code>log-np-sentinel-centralus</code> Log Analytics workspace. See the repository README for
@@ -66,14 +68,18 @@ if (auditConfigured) {
   {error && <div class="danger">Action failed: {error}</div>}
   {rotatedPassword && (
     <div class="danger">
-      <strong>New sa password (shown once):</strong> <code>{rotatedPassword}</code>
+      <strong>New built-in administrator password (shown once):</strong> <code>{rotatedPassword}</code>
     </div>
   )}
 
-  <h2>sa login status</h2>
-  {saError && <div class="warn">Could not read sa status: {saError}</div>}
+  <h2>Built-in administrator login status</h2>
+  {saError && <div class="warn">Could not read the built-in administrator login status: {saError}</div>}
   {saStatus && (
     <div class="grid">
+      <div class="card">
+        <div class="label">Current username</div>
+        <div class="value">{saStatus.username}</div>
+      </div>
       <div class="card">
         <div class="label">Status</div>
         <div class="value">{saStatus.enabled ? 'Enabled' : 'Disabled'}</div>
@@ -86,19 +92,32 @@ if (auditConfigured) {
   )}
 
   <div class="actions">
-    <form method="post" action="/api/admin/sa/enable">
-      <button type="submit">Enable sa</button>
-    </form>
-    <form method="post" action="/api/admin/sa/disable">
-      <button type="submit" class="secondary">Disable sa</button>
-    </form>
+    {saStatus && saStatus.enabled && (
+      <form method="post" action="/api/admin/sa/disable">
+        <button type="submit" class="secondary">Disable {saStatus.username}</button>
+      </form>
+    )}
+    {saStatus && !saStatus.enabled && (
+      <form method="post" action="/api/admin/sa/enable">
+        <button type="submit">Enable {saStatus.username}</button>
+      </form>
+    )}
     <form method="post" action="/api/admin/sa/rotate">
-      <button type="submit" class="destructive">Rotate sa password</button>
+      <button type="submit" class="destructive">Rotate password</button>
+    </form>
+    <form method="post" action="/api/admin/sa/rename" class="stack">
+      <label for="newUsername">New username</label>
+      <input id="newUsername" name="newUsername" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" />
+      <button type="submit" class="destructive">Rename built-in administrator</button>
     </form>
     <form method="post" action="/api/admin/logout">
       <button type="submit" class="secondary">Sign out</button>
     </form>
   </div>
+
+  {!isAdminSecretsConfigured() && (
+    <div class="warn">KEY_VAULT_URI is not configured. Password rotations and username changes cannot synchronize their Key Vault secrets.</div>
+  )}
 
   <h2>Windows Event confirmation</h2>
   <p>
@@ -117,7 +136,7 @@ if (auditConfigured) {
   {auditEvents.length > 0 && (
     <table>
       <thead>
-        <tr><th>Time</th><th>Event ID</th><th>Action ID</th><th>Level</th><th>Computer</th><th>Description</th></tr>
+        <tr><th>Time</th><th>Event ID</th><th>Action ID</th><th>Principal</th><th>Client</th><th>Result</th><th>Summary</th></tr>
       </thead>
       <tbody>
         {auditEvents.map((event) => (
@@ -125,11 +144,12 @@ if (auditConfigured) {
             <td>{new Date(event.TimeGenerated).toISOString()}</td>
             <td>{event.EventID}</td>
             <td>{event.ActionId ?? 'n/a'}</td>
-            <td>{event.EventLevelName ?? 'n/a'}</td>
-            <td>{event.Computer ?? 'n/a'}</td>
+            <td>{event.LoginName ?? 'n/a'}</td>
+            <td>{event.ClientIp ?? 'n/a'}</td>
+            <td>{event.Success === true ? 'success' : event.Success === false ? 'failed' : 'unknown'}</td>
             <td>
               <details>
-                <summary>{String(event.RenderedDescription ?? '').slice(0, 120)}</summary>
+                <summary>{event.Summary ?? String(event.RenderedDescription ?? '').slice(0, 140)}</summary>
                 <pre style="white-space: pre-wrap; word-break: break-word;">{event.RenderedDescription}</pre>
               </details>
             </td>

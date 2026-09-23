@@ -24,6 +24,12 @@
     "deploy:dev": "bash scripts/deploy.sh deploy --environment dev --defaults --yes",
     "deploy:sql:plan": "bash scripts/deploy-sql-scenario.sh plan --environment dev",
     "deploy:sql:doctor": "bash scripts/deploy-sql-scenario.sh doctor --environment dev",
+    "sentinel:plan": "bash scripts/deploy-sentinel-sql.sh plan --environment dev",
+    "sentinel:doctor": "bash scripts/deploy-sentinel-sql.sh doctor --environment dev",
+    "sentinel:what-if": "bash scripts/deploy-sentinel-sql.sh what-if --environment dev",
+    "sentinel:deploy": "bash scripts/deploy-sentinel-sql.sh deploy --environment dev",
+    "sentinel:verify": "bash scripts/deploy-sentinel-sql.sh verify --environment dev",
+    "test:sentinel": "node scripts/test-sentinel-sql.mjs",
     "deploy:sql:dev": "bash scripts/deploy-sql-scenario.sh deploy --environment dev --yes",
     "deploy:sql:uninstall": "bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes"
   },

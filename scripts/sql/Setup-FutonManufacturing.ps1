@@ -30,11 +30,14 @@ param(
     [string]$AppLoginPasswordBase64,
     [string]$AdminOpsLoginName = 'dojo_admin_portal_svc',
     [Parameter(Mandatory = $true)]
-    [string]$AdminOpsLoginPasswordBase64
+    [string]$AdminOpsLoginPasswordBase64,
+    [Parameter(Mandatory = $true)]
+    [string]$SaLoginPasswordBase64
 )
 
 $AppLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AppLoginPasswordBase64))
 $AdminOpsLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AdminOpsLoginPasswordBase64))
+$SaLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($SaLoginPasswordBase64))
 
 $ErrorActionPreference = 'Stop'
 $logPath = 'C:\NinjaPawsDojo\bootstrap.log'
@@ -279,7 +282,11 @@ BEGIN
     ALTER ROLE db_datawriter ADD MEMBER [$AppLoginName];
 END
 -- Disable the shared sa login; the dojo never uses it after bootstrap.
-ALTER LOGIN [sa] DISABLE;
+DECLARE @builtInAdminLogin sysname = (SELECT name FROM sys.server_principals WHERE sid = 0x01);
+IF @builtInAdminLogin IS NULL
+    THROW 50000, 'SQL Server built-in administrator login was not found.', 1;
+DECLARE @builtInAdminSql nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@builtInAdminLogin) + N' WITH PASSWORD = N''$SaLoginPassword''; ALTER LOGIN ' + QUOTENAME(@builtInAdminLogin) + N' DISABLE;';
+EXEC (@builtInAdminSql);
 "@
 Invoke-SqlText -Query $loginSql
 Write-Host "Application login '$AppLoginName' created; its password matches the Key Vault secret the dashboard Web App reads."
