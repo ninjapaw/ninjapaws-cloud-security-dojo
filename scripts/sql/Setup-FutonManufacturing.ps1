@@ -234,6 +234,36 @@ BEGIN
         ADD (SELECT, INSERT, UPDATE, DELETE ON DATABASE::$DatabaseName BY public)
         WITH (STATE = ON);
 END
+ELSE
+BEGIN
+    -- Repair an existing specification after a redeploy so data-change coverage cannot silently
+    -- drift if an operator removed one of the four database-level audit actions.
+    DECLARE @missingDatabaseActions TABLE (audit_action_name sysname);
+    INSERT INTO @missingDatabaseActions (audit_action_name)
+    SELECT required.audit_action_name
+    FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS required(audit_action_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM sys.database_audit_specifications das
+        JOIN sys.database_audit_specification_details dad
+            ON das.database_specification_id = dad.database_specification_id
+        WHERE das.name = 'FutonManufacturingDbAuditSpec'
+          AND dad.audit_action_name = required.audit_action_name
+    );
+    IF EXISTS (SELECT 1 FROM @missingDatabaseActions)
+    BEGIN
+        ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec WITH (STATE = OFF);
+        IF EXISTS (SELECT 1 FROM @missingDatabaseActions WHERE audit_action_name = 'SELECT')
+            ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec ADD (SELECT ON DATABASE::$DatabaseName BY public);
+        IF EXISTS (SELECT 1 FROM @missingDatabaseActions WHERE audit_action_name = 'INSERT')
+            ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec ADD (INSERT ON DATABASE::$DatabaseName BY public);
+        IF EXISTS (SELECT 1 FROM @missingDatabaseActions WHERE audit_action_name = 'UPDATE')
+            ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec ADD (UPDATE ON DATABASE::$DatabaseName BY public);
+        IF EXISTS (SELECT 1 FROM @missingDatabaseActions WHERE audit_action_name = 'DELETE')
+            ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec ADD (DELETE ON DATABASE::$DatabaseName BY public);
+        ALTER DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec WITH (STATE = ON);
+    END
+END
 "@
 Invoke-SqlText -Query $auditSql
 

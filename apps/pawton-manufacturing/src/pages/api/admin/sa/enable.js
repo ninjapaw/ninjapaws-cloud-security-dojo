@@ -1,14 +1,15 @@
-import { isAuthenticated } from "../../../../lib/adminAuth.mjs";
+import { authorizeAdminMutation } from "../../../../lib/adminAuth.mjs";
 import { setSaEnabled } from "../../../../lib/adminDb.mjs";
 
-export async function POST({ cookies, redirect }) {
-  if (!isAuthenticated(cookies)) {
-    return redirect("/admin/login", 303);
-  }
+export async function POST({ cookies, redirect, request }) {
+  const denied = authorizeAdminMutation(request, cookies);
+  if (denied) return denied;
+  if ((await request.formData()).get("confirm") !== "yes")
+    return new Response("Confirmation required.", { status: 400 });
   try {
     await setSaEnabled(true);
-    return redirect("/admin?msg=sa_enabled", 303);
+    return redirect("/users?msg=sa_enabled", 303);
   } catch (err) {
-    return redirect(`/admin?error=${encodeURIComponent(err.message)}`, 303);
+    return redirect("/users?error=operation_failed", 303);
   }
 }

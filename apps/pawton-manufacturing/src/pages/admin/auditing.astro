@@ -1,0 +1,107 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { isAuthenticated } from '../../lib/adminAuth.mjs';
+
+if (!isAuthenticated(Astro.cookies)) {
+  return Astro.redirect('/admin/login');
+}
+---
+<Layout title="SQL auditing">
+  <header class="page-header">
+    <p class="eyebrow">Security controls</p>
+    <h1>SQL auditing configuration</h1>
+    <p>Documented controls for tracking authentication, administrator changes, audit configuration, and data changes in the Futon Manufacturing database.</p>
+  </header>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>What this scenario enables</h2>
+      <p>Applied by the VM bootstrap</p>
+    </div>
+    <div class="grid">
+      <div class="card"><div class="label">Audit target</div><div class="value">Windows Application log</div><p>SQL Server Audit writes to <code>APPLICATION_LOG</code>, which AMA forwards through the <code>Event</code> table.</p></div>
+      <div class="card"><div class="label">Data changes</div><div class="value">SELECT · INSERT · UPDATE · DELETE</div><p><code>FutonManufacturingDbAuditSpec</code> tracks database-level activity by <code>public</code>.</p></div>
+      <div class="card"><div class="label">Server activity</div><div class="value">Logins and security changes</div><p>Login success/failure, password changes, principal changes, permission changes, role membership, and audit changes.</p></div>
+      <div class="card"><div class="label">Forwarding</div><div class="value">AMA + DCR</div><p>The VM's Windows Application log is forwarded to the configured Sentinel workspace for queries and detections.</p></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>Reproduce on another SQL Server</h2>
+      <p>Run as a controlled sysadmin operation</p>
+    </div>
+    <p>The scenario implementation is in <code>scripts/sql/Setup-FutonManufacturing.ps1</code>. Do not run the full bootstrap on an existing business server: it restores sample data and changes credentials. The following SQL is a first-time audit-only example; replace the database name and check existing audit definitions first.</p>
+    <pre><code>USE master;
+CREATE SERVER AUDIT FutonManufacturingAudit
+  TO APPLICATION_LOG
+  WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE);
+ALTER SERVER AUDIT FutonManufacturingAudit WITH (STATE = ON);
+
+CREATE SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec
+  FOR SERVER AUDIT FutonManufacturingAudit
+  ADD (FAILED_LOGIN_GROUP),
+  ADD (SUCCESSFUL_LOGIN_GROUP),
+  ADD (LOGIN_CHANGE_PASSWORD_GROUP),
+  ADD (SERVER_PRINCIPAL_CHANGE_GROUP),
+  ADD (SERVER_PERMISSION_CHANGE_GROUP),
+  ADD (SERVER_ROLE_MEMBER_CHANGE_GROUP),
+  ADD (AUDIT_CHANGE_GROUP)
+  WITH (STATE = ON);
+
+USE FutonManufacturing;
+CREATE DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec
+  FOR SERVER AUDIT FutonManufacturingAudit
+  ADD (SELECT, INSERT, UPDATE, DELETE ON DATABASE::FutonManufacturing BY public)
+  WITH (STATE = ON);</code></pre>
+    <p class="warn">For production, narrow the database principals and objects instead of auditing every public database action. Review retention, event volume, privacy, and the audit failure policy for your workload.</p>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>Verify the controls</h2>
+      <p>Run on the SQL VM</p>
+    </div>
+    <pre><code>-- Server audit state and destination
+SELECT name, is_state_enabled, type_desc, on_failure_desc
+FROM sys.server_audits
+WHERE name = 'FutonManufacturingAudit';
+
+-- Server-level action groups
+SELECT sas.name, sad.audit_action_name
+FROM sys.server_audit_specifications AS sas
+JOIN sys.server_audit_specification_details AS sad
+  ON sas.server_specification_id = sad.server_specification_id
+WHERE sas.name = 'FutonManufacturingServerAuditSpec';
+
+-- Database-level data actions
+SELECT das.name, dad.audit_action_name
+FROM FutonManufacturing.sys.database_audit_specifications AS das
+JOIN FutonManufacturing.sys.database_audit_specification_details AS dad
+  ON das.database_specification_id = dad.database_specification_id
+WHERE das.name = 'FutonManufacturingDbAuditSpec';</code></pre>
+  <h3>Log Analytics verification (KQL, not T-SQL)</h3>
+  <pre><code>Event
+| where TimeGenerated &gt; ago(30m)
+| where EventLog == 'Application' and Source == 'MSSQLSERVER'
+| where EventID == 33205
+| project TimeGenerated, Computer, EventID, RenderedDescription
+| order by TimeGenerated desc
+| take 50</code></pre>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>Coverage and limits</h2>
+    </div>
+    <ul>
+      <li>Event ID 33205 contains SQL Server Audit action details, including data-change operations.</li>
+      <li>Event IDs 18453, 18454, and 18456 supplement successful and failed login visibility.</li>
+      <li>The admin page independently confirms operator actions through the forwarded Windows event stream.</li>
+      <li>Audit success does not prove Key Vault synchronization; those are separate checks.</li>
+      <li>SQL Audit records statements and principals, not a full row before/after history or proof of transaction commit. Use temporal tables or change data capture when row history is required.</li>
+      <li>QUEUE_DELAY = 1000 queues delivery for up to roughly one second. ON_FAILURE = CONTINUE favors availability and can permit operations without an audit record during a target failure.</li>
+      <li>Application-log collection is suitable for this training scenario; production workloads may need a dedicated audit file target, retention policy, and narrower object scope.</li>
+    </ul>
+  </section>
+</Layout>

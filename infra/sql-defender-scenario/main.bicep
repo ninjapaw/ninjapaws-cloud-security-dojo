@@ -720,6 +720,14 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           value: nic.properties.ipConfigurations[0].properties.privateIPAddress
         }
         {
+          name: 'SQL_VM_RESOURCE_ID'
+          value: resourceId('Microsoft.Compute/virtualMachines', vmName)
+        }
+        {
+          name: 'AZURE_SUBSCRIPTION_ID'
+          value: subscription().subscriptionId
+        }
+        {
           name: 'SQL_DATABASE'
           value: 'FutonManufacturing'
         }

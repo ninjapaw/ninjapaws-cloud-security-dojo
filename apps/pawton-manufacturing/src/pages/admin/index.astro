@@ -1,48 +1,22 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../../lib/adminAuth.mjs';
-import { isAdminDbConfigured, getSaStatus } from '../../lib/adminDb.mjs';
-import { isAdminSecretsConfigured } from '../../lib/adminSecrets.mjs';
+import { isAuthenticated } from '../../lib/adminAuth.mjs';
+import { getDefenderStatus } from '../../lib/defenderStatus.mjs';
+import { probes, simulations, alertSimulationDocs, alertReferenceDocs } from '../../lib/securityLab.mjs';
 import { isAuditLogConfigured, getRecentSaAuditEvents } from '../../lib/auditLog.mjs';
 
 if (!isAuthenticated(Astro.cookies)) {
   return Astro.redirect('/admin/login');
 }
 
-const msg = Astro.url.searchParams.get('msg');
-const error = Astro.url.searchParams.get('error');
-
-// Shown exactly once: read the just-rotated password (if present) and delete the cookie
-// immediately, so refreshing this page or a later visit never reveals it again.
-const rotatedPassword = Astro.cookies.get(ROTATED_SECRET_COOKIE_NAME)?.value ?? null;
-if (rotatedPassword) {
-  Astro.cookies.delete(ROTATED_SECRET_COOKIE_NAME, { path: '/' });
-}
-
-let saStatus = null;
-let saError = null;
-if (isAdminDbConfigured()) {
-  try {
-    saStatus = await getSaStatus();
-  } catch (err) {
-    saError = err.message;
-  }
-} else {
-  saError = 'SQL_ADMIN_LOGIN / SQL_ADMIN_LOGIN_PASSWORD are not configured on this Web App yet.';
-}
-
-const messages = {
-  sa_enabled: { text: 'sa login enabled.', kind: 'warn' },
-  sa_disabled: { text: 'sa login disabled.', kind: 'ok' },
-  sa_rotated: { text: 'Built-in administrator password rotated and stored in Key Vault. Copy it now -- it will not be shown again.', kind: 'warn' },
-  sa_renamed: { text: 'Built-in administrator login renamed and synchronized to Key Vault.', kind: 'warn' },
-};
-const statusMessage = msg ? messages[msg] : null;
+Astro.response.headers.set('Cache-Control', 'no-store');
+const defender = await getDefenderStatus();
+const demosEnabled = process.env.ENABLE_SQL_DEMO_ACTIONS === 'true';
 
 // Independent confirmation, separate from the SQL connection the actions above used: did the
 // action actually reach the Windows Application log and get forwarded to Log Analytics? Ingestion
 // typically takes a few minutes, so a just-performed action may not appear yet on this page load.
-let auditEvents = [];
+let auditEvents: Array<{ TimeGenerated: string; EventID: number; ActionId: string | null; LoginName: string | null; ClientIp: string | null; Success: boolean | null; Summary: string; RenderedDescription: string; Computer: string; EventLog: string; Source: string; EventLevelName: string }> = [];
 let auditError = null;
 let auditConfigured = isAuditLogConfigured();
 if (auditConfigured) {
@@ -50,79 +24,46 @@ if (auditConfigured) {
     const auditResult = await getRecentSaAuditEvents(30);
     auditEvents = auditResult.events;
   } catch (err) {
-    auditError = err.message;
+    auditError = err instanceof Error ? err.message : 'Audit query unavailable.';
   }
 }
 ---
-<Layout title="Admin">
-  <div class="banner">
-    <strong>High-privilege area.</strong> The actions below run as <code>dojo_admin_portal_svc</code>,
-    a SQL login granted <code>CONTROL SERVER</code> so it can manage the SQL Server built-in administrator login --
-    SQL Server does not accept any narrower permission for that operation. Every action here is
-    recorded by <code>FutonManufacturingServerAuditSpec</code> (Server Audit) and forwarded to the
-    <code>log-np-sentinel-centralus</code> Log Analytics workspace. See the repository README for
-    why this is a deliberate anti-pattern this scenario demonstrates, not a production example.
-  </div>
-
-  {statusMessage && <div class={statusMessage.kind}>{statusMessage.text}</div>}
-  {error && <div class="danger">Action failed: {error}</div>}
-  {rotatedPassword && (
-    <div class="danger">
-      <strong>New built-in administrator password (shown once):</strong> <code>{rotatedPassword}</code>
-    </div>
-  )}
-
-  <h2>Built-in administrator login status</h2>
-  {saError && <div class="warn">Could not read the built-in administrator login status: {saError}</div>}
-  {saStatus && (
-    <div class="grid">
-      <div class="card">
-        <div class="label">Current username</div>
-        <div class="value">{saStatus.username}</div>
-      </div>
-      <div class="card">
-        <div class="label">Status</div>
-        <div class="value">{saStatus.enabled ? 'Enabled' : 'Disabled'}</div>
-      </div>
-      <div class="card">
-        <div class="label">Password last set</div>
-        <div class="value" style="font-size: 15px;">{saStatus.passwordLastSetTime ?? 'unknown'}</div>
-      </div>
-    </div>
-  )}
-
-  <div class="actions">
-    {saStatus && saStatus.enabled && (
-      <form method="post" action="/api/admin/sa/disable">
-        <button type="submit" class="secondary">Disable {saStatus.username}</button>
-      </form>
-    )}
-    {saStatus && !saStatus.enabled && (
-      <form method="post" action="/api/admin/sa/enable">
-        <button type="submit">Enable {saStatus.username}</button>
-      </form>
-    )}
-    <form method="post" action="/api/admin/sa/rotate">
-      <button type="submit" class="destructive">Rotate password</button>
-    </form>
-    <form method="post" action="/api/admin/sa/rename" class="stack">
-      <label for="newUsername">New username</label>
-      <input id="newUsername" name="newUsername" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" />
-      <button type="submit" class="destructive">Rename built-in administrator</button>
-    </form>
-    <form method="post" action="/api/admin/logout">
-      <button type="submit" class="secondary">Sign out</button>
-    </form>
-  </div>
-
-  {!isAdminSecretsConfigured() && (
-    <div class="warn">KEY_VAULT_URI is not configured. Password rotations and username changes cannot synchronize their Key Vault secrets.</div>
-  )}
+<Layout title="Security lab">
+  <header class="page-header"><p class="eyebrow">Scenario 2 / SQL Server protection</p><h1>Security lab</h1>
+    <p>Inspect protection, exercise SQL auditing, and validate security response in an isolated training environment. Manage sign-in identities in <a href="/users">Users</a> and inspect tables and roles in <a href="/admin/schema">Schema</a>.</p>
+  </header>
+  <div class="banner"><strong>Deliberately privileged demo.</strong> This portal holds a SQL administration credential. Do not expose it to untrusted users or treat it as a production administration pattern.</div>
+  <section class="section"><div class="section-header"><h2>Live protection observations</h2><a href="/admin">Refresh status</a></div>
+    <p>Checked <time datetime={defender.checkedAt}>{defender.checkedAt}</time>. Azure reads use the app identity when deployed; no cloud write permission is requested.</p>
+    <div class="grid">{defender.observations.map((observation) => <article class="card"><h3>{observation.label}</h3><span class="badge">{observation.state}</span><p>{observation.detail}</p></article>)}</div>
+    <p><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open target in Azure</a></p>
+    <p>Unavailable means unverified, not disabled. Subscription pricing and extension provisioning alone do not prove end-to-end detection health.</p>
+  </section>
+  <section class="section"><h2>Local audit exercises</h2><p>Fixed SQL probes against this configured instance. They generate database activity, not guaranteed Defender alerts. Each run has an evidence marker and a 60-second cooldown.</p>
+    {!demosEnabled && <div class="warn">Local exercises are disabled. An operator must set ENABLE_SQL_DEMO_ACTIONS=true on the server to opt in.</div>}
+    <div class="grid">{probes.map((probe) => <article class="card"><h3>{probe.name}</h3><p>{probe.description}</p><form class="probe-form" method="post" action="/api/admin/probe">
+      <input type="hidden" name="probe" value={probe.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!demosEnabled} />I authorize this demo</label>
+      <button type="submit" disabled={!demosEnabled}>Run exercise</button><p class="probe-result" role="status" aria-live="polite"></p>
+    </form></article>)}</div>
+  </section>
+  <section class="section"><div class="section-header"><h2>Defender alert simulations</h2><a href={alertSimulationDocs} target="_blank" rel="noopener noreferrer">Microsoft simulation guide</a></div>
+    <p>Microsoft's simulator injects test telemetry using the Sql-SimulateAlert VM extension, without executing malicious payloads. Launch Azure, open the SQL VM's Security &gt; Microsoft Defender for Cloud &gt; Security Alerts &gt; Simulate Alerts, then select a scenario. These links do not trigger an attack from this portal.</p>
+    <div class="grid">{simulations.map((scenario) => <article class="card"><h3>{scenario.name}</h3><p>{scenario.description}</p><p class="muted">{scenario.evidence}</p><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open Azure for this simulation</a></article>)}</div>
+    <p>Requires the SQL on Machines plan, a protected machine, and Azure permissions to deploy VM extensions. Use test credentials only. Allow several minutes, then verify the alert on the target resource. <a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">Documented SQL alerts</a>.</p>
+  </section>
+  <section class="section"><h2>Compare protection states</h2><p>Defender for SQL detects suspicious activity and assesses vulnerabilities. It is not a general-purpose query-blocking firewall. SQL permissions, password policy, encryption, and SQL Audit remain separate controls.</p>
+    <p>Plan changes can affect other SQL machines and billing. Disable or re-enable protection only through Azure's authenticated environment settings after confirming scope, recording the baseline, and arranging restoration. This portal deliberately has no subscription-wide off switch.</p>
+    <p>For a single SQL VM, Microsoft's resource-level procedure removes the Defender for SQL extension. Automatic provisioning or policy may restore it. Review the <a href="https://learn.microsoft.com/azure/defender-for-cloud/disable-sql-on-machines" target="_blank" rel="noopener noreferrer">disable procedure</a> and <a href="https://learn.microsoft.com/azure/defender-for-cloud/defender-for-sql-usage" target="_blank" rel="noopener noreferrer">enable/restore procedure</a> before an approved comparison. SQL Audit continues independently.</p>
+    <ol><li>Record current plan and sensor health on the isolated test machine.</li><li>Run the supported simulation while protected and retain its alert evidence.</li><li>Use Azure to make the approved, scoped comparison; keep SQL Audit enabled.</li><li>Restore protection, recheck health, and repeat the supported simulation.</li></ol>
+    <a href="https://portal.azure.com/#view/Microsoft_Azure_Security/SecurityMenuBlade/~/environmentSettings" target="_blank" rel="noopener noreferrer">Review Defender environment settings</a>
+  </section>
 
   <h2>Windows Event confirmation</h2>
+  {!defender.target.vmId && <div class="warn">No VM scope is configured. These are workspace-wide SQL events and may belong to other machines.</div>}
+  <p><a class="pill" href="/admin/auditing">View SQL auditing configuration</a></p>
   <p>
     Independent confirmation that admin portal actions actually reached the Windows Application
-    log and were forwarded to <code>log-np-sentinel-centralus</code>, queried live with this Web
+    log and were forwarded to the configured Log Analytics workspace, queried live with this Web
     App's own read-only managed identity (no stored credential). Ingestion can take a few minutes,
     so a just-performed action may not appear on this page load yet -- refresh to check again.
   </p>
@@ -135,7 +76,7 @@ if (auditConfigured) {
   )}
   {/* Keep a separate Event Viewer-style view so operators can inspect the forwarded Windows record itself. */}
   {auditEvents.length > 0 && (
-    <table>
+    <div class="table-shell" tabindex="0" role="region" aria-label="Forwarded audit events"><table>
       <thead>
         <tr><th>Time</th><th>Event ID</th><th>Action ID</th><th>Principal</th><th>Client</th><th>Result</th><th>Summary</th></tr>
       </thead>
@@ -157,12 +98,12 @@ if (auditConfigured) {
           </tr>
         ))}
       </tbody>
-    </table>
+    </table></div>
   )}
 
   {auditEvents.length > 0 && (
     <section>
-      <h3>Local Event Viewer record</h3>
+      <h3>Forwarded Windows event records</h3>
       <p>
         These fields mirror the Windows Event Viewer record collected from the SQL VM's Application
         log before forwarding. The raw description is preserved for independent review.
@@ -186,3 +127,24 @@ if (auditConfigured) {
     </section>
   )}
 </Layout>
+
+<script>
+  document.querySelectorAll<HTMLFormElement>('.probe-form').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector<HTMLButtonElement>('button')!;
+      const output = form.querySelector<HTMLElement>('.probe-result')!;
+      button.disabled = true;
+      output.textContent = 'Running...';
+      try {
+        const response = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+        if (response.status === 401) throw new Error('Session expired. Sign in again.');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Exercise failed.');
+        output.textContent = `${result.outcome} Run ID: ${result.runId}`;
+      } catch (error) {
+        output.textContent = error instanceof Error ? error.message : 'Exercise failed.';
+      } finally { button.disabled = false; }
+    });
+  });
+</script>

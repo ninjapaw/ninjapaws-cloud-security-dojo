@@ -7,7 +7,7 @@ if (isAuthenticated(Astro.cookies)) {
 }
 
 const errorCode = Astro.url.searchParams.get('error');
-const errorMessages = {
+const errorMessages: Record<string, string> = {
   invalid: 'Invalid username or password.',
   ratelimited: 'Too many attempts from this client. Try again in a few minutes.',
   notconfigured: 'The admin portal is not configured on this deployment.',
@@ -15,6 +15,7 @@ const errorMessages = {
 const errorMessage = errorCode ? (errorMessages[errorCode] ?? 'Sign-in failed.') : null;
 ---
 <Layout title="Admin sign-in">
+  <header class="page-header"><p class="eyebrow">Restricted access</p><h1>Administrator sign-in</h1><p>Identity management, SQL auditing, and security validation for the training instance.</p></header>
   <div class="banner">
     Restricted operator access. This workspace can enable, disable, rename, and rotate the SQL Server
     <code>sa</code> login; every action is audited and forwarded to the central security workspace.

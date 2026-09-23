@@ -1,0 +1,88 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../lib/adminAuth.mjs';
+import { listSqlLogins, loginRestriction } from '../lib/adminDb.mjs';
+import { isAdminSecretsConfigured } from '../lib/adminSecrets.mjs';
+
+Astro.response.headers.set('Cache-Control', 'no-store');
+const authenticated = isAuthenticated(Astro.cookies);
+let logins: Array<{ principal_id: number; name: string; type_desc: string; is_disabled: boolean; isBuiltInAdmin: boolean; hasServerPrivileges: boolean }> = [];
+let unavailable = false;
+if (authenticated) {
+  try { logins = await listSqlLogins(); } catch { unavailable = true; }
+}
+const builtIn = logins.find((login) => login.isBuiltInAdmin);
+const password = authenticated ? Astro.cookies.get(ROTATED_SECRET_COOKIE_NAME)?.value : null;
+if (password) Astro.cookies.delete(ROTATED_SECRET_COOKIE_NAME, { path: '/' });
+const messages: Record<string, string> = {
+  sa_enabled: 'Built-in administrator enabled.', sa_disabled: 'Built-in administrator disabled.',
+  sa_rotated: 'Built-in administrator password rotated and synchronized to Key Vault.',
+  sa_renamed: 'Built-in administrator renamed and synchronized to Key Vault.',
+  login_updated: 'Login change completed.', login_failed: 'Login change failed. Check the restrictions, SQL permissions, and current login state. No success is implied.',
+};
+const message = messages[Astro.url.searchParams.get('msg') ?? ''];
+const failed = Astro.url.searchParams.has('error') || Astro.url.searchParams.get('msg') === 'login_failed';
+const vaultConfigured = isAdminSecretsConfigured();
+---
+<Layout title="Users">
+  <header class="page-header">
+    <p class="eyebrow">Identity administration</p><h1>Users and SQL logins</h1>
+    <p>Server sign-in identities for this SQL instance. Database users and role membership are available in Schema.</p>
+  </header>
+  {!authenticated ? <div class="warn">Sign in as an administrator to view and manage SQL logins. <a href="/admin/login">Admin sign-in</a></div> : <>
+    <div class="banner">Training environment. Login changes take effect immediately. Application, Windows, system, and privileged identities are protected from general actions.</div>
+    {message && <div class={failed ? 'danger' : 'ok'} role="status">{message}</div>}
+    {Astro.url.searchParams.has('error') && <div class="danger" role="alert">The administrator operation failed. Verify SQL and Key Vault state before retrying; a partial change may have occurred.</div>}
+    {password && <div class="warn"><strong>New password, shown once:</strong> <code>{password}</code></div>}
+    {unavailable && <div class="warn">SQL login inventory is unavailable. Check the configured admin connection and permissions.</div>}
+    {builtIn && <section class="section">
+      <div class="section-header"><h2>Built-in administrator</h2><span class="badge">SID 0x01</span></div>
+      <div class="grid">
+        <div class="card"><div class="label">Current name</div><div class="value">{builtIn.name}</div></div>
+        <div class="card"><div class="label">Login state</div><div class="value">{builtIn.is_disabled ? 'Disabled' : 'Enabled'}</div></div>
+      </div>
+      <p>Identified by SID even after rename. Blank passwords are never allowed. Rename and rotation synchronize with Key Vault.</p>
+      <div class="actions">
+        <form method="post" action={`/api/admin/sa/${builtIn.is_disabled ? 'enable' : 'disable'}`}>
+          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm state change</label>
+          <button type="submit" class="secondary">{builtIn.is_disabled ? 'Enable login' : 'Disable login'}</button>
+        </form>
+        <form method="post" action="/api/admin/sa/rotate">
+          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm password rotation</label>
+          <button type="submit" disabled={!vaultConfigured}>Rotate password</button>
+        </form>
+        <form class="stack" method="post" action="/api/admin/sa/rename">
+          <label>New login name<input type="text" name="newUsername" pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" required /></label>
+          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm rename</label>
+          <button type="submit" class="secondary" disabled={!vaultConfigured}>Rename login</button>
+        </form>
+      </div>
+      {!vaultConfigured && <p class="warn">Key Vault is not configured. Rename and rotation are unavailable.</p>}
+    </section>}
+    <section class="section"><div class="section-header"><h2>Server login inventory</h2><span>{logins.length} identities</span></div>
+      <div class="table-shell" tabindex="0" role="region" aria-label="SQL login inventory"><table>
+        <thead><tr><th scope="col">Login</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Management</th></tr></thead>
+        <tbody>{logins.map((login) => {
+          const restriction = loginRestriction(login);
+          return <tr><td>{login.name}</td><td>{login.type_desc.replaceAll('_', ' ')}</td><td>{login.is_disabled ? 'Disabled' : 'Enabled'}</td><td>
+            {restriction ? <span>{restriction}</span> : <form class="row-actions" method="post" action="/api/admin/users/action">
+              <input type="hidden" name="principalId" value={login.principal_id} />
+              <label>Action for {login.name}<select name="action">
+                <option value={login.is_disabled ? 'enable' : 'disable'}>{login.is_disabled ? 'Enable' : 'Disable'}</option>
+                <option value="rotate">Rotate password</option>
+                {process.env.ALLOW_DEMO_BLANK_PASSWORDS === 'true' && /^dojo_demo_[a-z0-9_]+$/i.test(login.name) && <option value="clear">Clear password (isolated demo only)</option>}
+              </select></label>
+              <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm change</label><button type="submit">Apply</button>
+            </form>}
+          </td></tr>;
+        })}</tbody>
+      </table></div>
+    </section>
+    <section class="section"><h2>Disposable test identity</h2><p><code>dojo_demo_reader</code> has a strong generated password and no application database user. Existing identities are never overwritten.</p>
+      <form method="post" action="/api/admin/users/action"><input type="hidden" name="action" value="create-demo" />
+        <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Create the isolated demo login</label><button type="submit" class="secondary">Create demo login</button>
+      </form>
+      <p>Blank-password testing is off by default. It requires the server setting <code>ALLOW_DEMO_BLANK_PASSWORDS=true</code>, a <code>dojo_demo_</code> login, no server privileges, and no application database user mappings. Restrict network access before opting in; rotate the password afterward.</p>
+    </section>
+  </>}
+</Layout>

@@ -68,14 +68,26 @@ setting() {
     printf '%s' "${value:-$2}"
 }
 
-WORKSPACE_GROUP="${WORKSPACE_GROUP:-$(setting centralWorkspaceResourceGroup NP-Sentinel-CentralUS)}"
-WORKSPACE_NAME="${WORKSPACE_NAME:-$(setting centralWorkspaceName log-np-sentinel-centralus)}"
 VM_GROUP="${VM_GROUP:-$(setting sqlResourceGroup "NP-ninjapaws-dojo-sql-${ENVIRONMENT}")}"
 VM_NAME="${VM_NAME:-$(setting sqlVmName "ninjapaws-sql-vm-${ENVIRONMENT}")}"
+SENTINEL_MODE="${SENTINEL_MODE:-$(setting sentinelMode "new")}"
+case "$SENTINEL_MODE" in
+    new)
+        WORKSPACE_GROUP="${WORKSPACE_GROUP:-$(setting sentinelResourceGroup "$VM_GROUP")}"
+        WORKSPACE_NAME="${WORKSPACE_NAME:-$(setting sentinelWorkspaceName "log-${VM_NAME}")}"
+        ;;
+    existing)
+        WORKSPACE_GROUP="${WORKSPACE_GROUP:-$(setting centralWorkspaceResourceGroup NP-Sentinel-CentralUS)}"
+        WORKSPACE_NAME="${WORKSPACE_NAME:-$(setting centralWorkspaceName log-np-sentinel-centralus)}"
+        ;;
+    *)
+        fail "sentinelMode must be 'new' or 'existing'."
+        ;;
+esac
 DEPLOYMENT_NAME="dojo-sql-sentinel-${ENVIRONMENT}"
 
-printf 'Workspace: %s / %s\nSQL VM: %s / %s\nAnalytics enabled: %s\n' \
-    "$WORKSPACE_GROUP" "$WORKSPACE_NAME" "$VM_GROUP" "$VM_NAME" "$ENABLE_ANALYTICS"
+printf 'Sentinel mode: %s\nWorkspace: %s / %s\nSQL VM: %s / %s\nAnalytics enabled: %s\n' \
+    "$SENTINEL_MODE" "$WORKSPACE_GROUP" "$WORKSPACE_NAME" "$VM_GROUP" "$VM_NAME" "$ENABLE_ANALYTICS"
 printf '%s\n' 'Content: DojoSqlAudit parser, four analytics rules, login-change hunt, ingestion-health query.'
 printf '%s\n' 'Unchanged: workspace ingestion/retention, Sentinel onboarding, AMA/DCR, SQL state, Key Vault.'
 [[ "$COMMAND" != plan ]] || exit 0

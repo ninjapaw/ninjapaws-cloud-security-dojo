@@ -151,6 +151,18 @@ ADMIN_PORTAL_USERNAME="$(config_setting adminPortalUsername "dojo-admin")"
 CENTRAL_WORKSPACE_RESOURCE_GROUP="$(config_setting centralWorkspaceResourceGroup "NP-Sentinel-CentralUS")"
 CENTRAL_WORKSPACE_NAME="$(config_setting centralWorkspaceName "log-np-sentinel-centralus")"
 CENTRAL_WORKSPACE_RETENTION_DAYS="$(config_setting workspaceRetentionDays 30)"
+SENTINEL_MODE="$(config_setting sentinelMode "new")"
+case "$SENTINEL_MODE" in
+    new)
+        CENTRAL_WORKSPACE_RESOURCE_GROUP="$(config_setting sentinelResourceGroup "$RESOURCE_GROUP")"
+        CENTRAL_WORKSPACE_NAME="$(config_setting sentinelWorkspaceName "log-${VM_NAME}")"
+        ;;
+    existing)
+        ;;
+    *)
+        fail "sentinelMode must be 'new' or 'existing', got '$SENTINEL_MODE'."
+        ;;
+esac
 GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'dev')"
 BOOTSTRAP_SCRIPT_URL="https://raw.githubusercontent.com/ninjapaw/ninjapaws-cloud-security-dojo/${GIT_BRANCH}/scripts/sql/Setup-FutonManufacturing.ps1"
 BICEP_FILE="$AZURE_REPO_ROOT/infra/sql-defender-scenario/main.bicep"
@@ -500,7 +512,7 @@ ${BLUE}Public SQL endpoint:${NC} $ALLOW_PUBLIC_SQL_ACCESS (TCP 1433 from public 
 ${BLUE}Public Key Vault endpoint:${NC} $ALLOW_PUBLIC_KEY_VAULT_ACCESS
 ${BLUE}Defender for Servers:${NC} $DEFENDER_SERVERS_PLAN / $DEFENDER_SERVERS_SUBPLAN (includes Defender for Endpoint)
 ${BLUE}Defender for SQL:${NC} $DEFENDER_SQL_PLAN (Standard tier)
-${BLUE}Central Log Analytics workspace:${NC} $CENTRAL_WORKSPACE_NAME (resource group $CENTRAL_WORKSPACE_RESOURCE_GROUP) — standardized across every scenario in this repo
+${BLUE}Sentinel workspace:${NC} $CENTRAL_WORKSPACE_NAME (resource group $CENTRAL_WORKSPACE_RESOURCE_GROUP, mode $SENTINEL_MODE)
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
 ${BLUE}Pawton Manufacturing Web App:${NC} $WEB_APP_NAME ($WEB_APP_PLAN_SKU, deployWebApp=$DEPLOY_WEB_APP)
 ${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet
@@ -539,12 +551,12 @@ cmd_doctor() {
         state="$(az provider show --namespace "$provider" --query registrationState -o tsv 2>/dev/null || true)"
         [[ "$state" == Registered ]] && ok "$provider: Registered" || warn "$provider: ${state:-unknown} (deploy will attempt to register it)"
     done
-    info "Checking central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME'..."
+    info "Checking Sentinel workspace '$CENTRAL_WORKSPACE_NAME'..."
     if az monitor log-analytics workspace show --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
         --workspace-name "$CENTRAL_WORKSPACE_NAME" --output none 2>/dev/null; then
-        ok "Central workspace '$CENTRAL_WORKSPACE_NAME' already exists in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
+        ok "Sentinel workspace '$CENTRAL_WORKSPACE_NAME' already exists in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
     else
-        warn "Central workspace '$CENTRAL_WORKSPACE_NAME' does not exist yet; 'deploy' will create it in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
+        warn "Sentinel workspace '$CENTRAL_WORKSPACE_NAME' does not exist yet; 'deploy' will create it in '$CENTRAL_WORKSPACE_RESOURCE_GROUP'."
     fi
     complete_status "Complete" "Doctor checks completed. Review warnings before deploying." 100
 }
@@ -559,26 +571,26 @@ ensure_resource_group() {
     fi
 }
 
-# Every scenario in this repo forwards Defender/SQL telemetry into one standardized workspace
-# instead of provisioning a workspace per scenario/VM, so training exercises share a single place
-# to query and correlate signal. Idempotent: leaves an existing workspace untouched.
+# The default creates a Sentinel workspace beside the SQL scenario for simple demo ownership and
+# teardown. Existing mode keeps the prior shared-workspace pattern for subscriptions that already
+# centralize telemetry. Idempotent: leaves an existing workspace untouched.
 ensure_central_workspace() {
     if az group show --name "$CENTRAL_WORKSPACE_RESOURCE_GROUP" --output none 2>/dev/null; then
-        ok "Central workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' already exists."
+        ok "Sentinel workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' already exists (mode: $SENTINEL_MODE)."
     else
-        info "Creating central workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' in $LOCATION..."
+        info "Creating Sentinel workspace resource group '$CENTRAL_WORKSPACE_RESOURCE_GROUP' in $LOCATION..."
         az group create --name "$CENTRAL_WORKSPACE_RESOURCE_GROUP" --location "$LOCATION" --output none
-        ok "Central workspace resource group created."
+        ok "Sentinel workspace resource group created."
     fi
     if az monitor log-analytics workspace show --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
         --workspace-name "$CENTRAL_WORKSPACE_NAME" --output none 2>/dev/null; then
-        ok "Central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME' already exists."
+        ok "Sentinel workspace '$CENTRAL_WORKSPACE_NAME' already exists."
     else
-        info "Creating central Log Analytics workspace '$CENTRAL_WORKSPACE_NAME'..."
+        info "Creating Sentinel Log Analytics workspace '$CENTRAL_WORKSPACE_NAME'..."
         az monitor log-analytics workspace create --resource-group "$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
             --workspace-name "$CENTRAL_WORKSPACE_NAME" --location "$LOCATION" \
             --sku PerGB2018 --retention-time "$CENTRAL_WORKSPACE_RETENTION_DAYS" --output none
-        ok "Central Log Analytics workspace created."
+        ok "Sentinel workspace created."
     fi
 }
 

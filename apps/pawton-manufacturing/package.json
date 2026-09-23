@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "test": "node --test ../../scripts/test-admin-portal.mjs",
     "start": "node ./dist/server/entry.mjs"
   },
   "dependencies": {

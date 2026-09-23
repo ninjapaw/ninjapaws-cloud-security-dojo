@@ -1,4 +1,5 @@
 import { DefaultAzureCredential } from "@azure/identity";
+import { defenderTarget } from "./defenderStatus.mjs";
 import {
   LogsQueryClient,
   LogsQueryResultStatus,
@@ -31,7 +32,7 @@ function tableToObjects(table) {
 
 function extractField(renderedDescription, fieldName) {
   const match = new RegExp(
-    `${fieldName}:(.+?)(?=\\s+[A-Za-z_][A-Za-z0-9_]*:|$)`,
+    `(?:^|\\s)${fieldName}:([\\s\\S]*?)(?=\\s+[A-Za-z_][A-Za-z0-9_]*:|$)`,
     "i",
   ).exec(renderedDescription ?? "");
   if (!match) {
@@ -52,10 +53,12 @@ function formatAuditSummary(event) {
     extractField(event.RenderedDescription, "client_ip") ||
     extractField(event.RenderedDescription, "address");
   const databaseName = extractField(event.RenderedDescription, "database_name");
-  const succeeded = extractField(event.RenderedDescription, "succeeded");
-  const status = succeeded
-    ? `${succeeded.toLowerCase() === "true" ? "success" : "failed"}`
-    : "unknown";
+  const status =
+    event.Success === true
+      ? "success"
+      : event.Success === false
+        ? "failed"
+        : "unknown";
 
   const summaryParts = [];
   if (actionId) summaryParts.push(actionId);
@@ -64,6 +67,27 @@ function formatAuditSummary(event) {
   if (clientIp) summaryParts.push(clientIp);
   summaryParts.push(status);
   return summaryParts.join(" • ");
+}
+
+export function parseAuditEvent(event) {
+  const succeeded = extractField(
+    event.RenderedDescription,
+    "succeeded",
+  )?.toLowerCase();
+  const parsed = {
+    ...event,
+    ActionId: extractField(event.RenderedDescription, "action_id"),
+    Success: succeeded === "true" ? true : succeeded === "false" ? false : null,
+    LoginName:
+      extractField(event.RenderedDescription, "server_principal_name") ||
+      extractField(event.RenderedDescription, "target_server_principal_name") ||
+      extractField(event.RenderedDescription, "session_server_principal_name"),
+    ClientIp:
+      extractField(event.RenderedDescription, "client_ip") ||
+      extractField(event.RenderedDescription, "address"),
+  };
+  parsed.Summary = formatAuditSummary(parsed);
+  return parsed;
 }
 
 // SQL Server audit records that matter for the admin portal are the server-principal change group
@@ -75,9 +99,12 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     return { configured: false, events: [] };
   }
   const workspaceId = process.env.LOG_ANALYTICS_WORKSPACE_ID;
+  const vmId = defenderTarget().vmId;
   const kustoQuery = `
     Event
     | where TimeGenerated > ago(${minutesAgo}m)
+    ${vmId ? `| where _ResourceId =~ '${vmId.replaceAll("'", "''")}'` : ""}
+    | where EventLog == 'Application'
     | where Source == 'MSSQLSERVER'
     | where EventID in (33205, 18453, 18454, 18456)
     | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription
@@ -90,25 +117,7 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
   });
   if (result.status === LogsQueryResultStatus.Success) {
     const table = result.tables[0];
-    const events = table ? tableToObjects(table) : [];
-    for (const event of events) {
-      event.ActionId =
-        event.ActionId ?? extractField(event.RenderedDescription, "action_id");
-      event.Success = event.Success
-        ? event.Success.toLowerCase() === "true"
-        : (
-            extractField(event.RenderedDescription, "succeeded") || "unknown"
-          ).toLowerCase() === "true";
-      event.LoginName =
-        event.LoginName ??
-        extractField(event.RenderedDescription, "server_principal_name") ??
-        extractField(event.RenderedDescription, "target_server_principal_name");
-      event.ClientIp =
-        event.ClientIp ??
-        extractField(event.RenderedDescription, "client_ip") ??
-        extractField(event.RenderedDescription, "address");
-      event.Summary = formatAuditSummary(event);
-    }
+    const events = table ? tableToObjects(table).map(parseAuditEvent) : [];
     return { configured: true, events };
   }
   throw new Error(

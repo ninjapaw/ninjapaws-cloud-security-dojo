@@ -110,6 +110,22 @@ export function isAuthenticated(cookies) {
   return verifySessionToken(cookies.get(SESSION_COOKIE_NAME)?.value);
 }
 
+export function getAuthenticatedUsername(cookies) {
+  return isAuthenticated(cookies) ? process.env.ADMIN_PORTAL_USERNAME : null;
+}
+
+export function authorizeAdminMutation(request, cookies) {
+  if (!isAuthenticated(cookies)) {
+    return new Response("Your session has expired. Sign in again.", {
+      status: 401,
+    });
+  }
+  if (request.headers.get("origin") !== new URL(request.url).origin) {
+    return new Response("Same-origin request required.", { status: 403 });
+  }
+  return null;
+}
+
 export const sessionCookieOptions = {
   httpOnly: true,
   secure: true,

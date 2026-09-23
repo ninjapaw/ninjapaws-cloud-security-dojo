@@ -18,23 +18,44 @@ if (isDatabaseConfigured()) {
       customers: customers.Count,
       openOrders: openOrders.Count,
     };
-  } catch (err) {
-    error = err.message;
+  } catch {
+    error = 'Operating measures are unavailable. Contact the environment operator.';
   }
 } else {
   error = 'SQL_SERVER_HOST / SQL_APP_LOGIN_PASSWORD are not configured on this Web App yet.';
 }
 ---
 <Layout title="Overview">
-  <p>Live data from the <strong>Futon Manufacturing</strong> sample database, running on the Scenario 2 SQL Server VM and reached only over a private VNet connection &mdash; there is no public database endpoint.</p>
+  <header class="page-header">
+    <p class="eyebrow">Operations overview</p>
+    <h1>Futon Manufacturing at a glance</h1>
+    <p>A working manufacturing dataset and an isolated SQL security lab. Explore inventory, sales, and production reports; administrators can manage test identities, inspect schema, and validate audit and Defender evidence. In Azure, the dashboard uses a private VNet connection to SQL. Separate public SQL access depends on deployment settings.</p>
+  </header>
   {error && <div class="warn">Could not reach the database: {error}</div>}
   {stats && (
-    <div class="grid">
-      <div class="card"><div class="label">Items</div><div class="value">{stats.items}</div></div>
-      <div class="card"><div class="label">Warehouses</div><div class="value">{stats.warehouses}</div></div>
-      <div class="card"><div class="label">Customers</div><div class="value">{stats.customers}</div></div>
-      <div class="card"><div class="label">Open production orders</div><div class="value">{stats.openOrders}</div></div>
-    </div>
+    <section class="section">
+      <div class="section-header">
+        <h2>Key operating measures</h2>
+        <p>Current counts from Futon Manufacturing</p>
+      </div>
+      <div class="grid">
+        <div class="card"><div class="label">Items in catalog</div><div class="value">{stats.items}</div></div>
+        <div class="card"><div class="label">Warehouses</div><div class="value">{stats.warehouses}</div></div>
+        <div class="card"><div class="label">Customers</div><div class="value">{stats.customers}</div></div>
+        <div class="card"><div class="label">Open production orders</div><div class="value">{stats.openOrders}</div></div>
+      </div>
+    </section>
   )}
-  <p><a class="pill" href="/api/status">View /api/status</a></p>
+  <section class="section">
+    <div class="section-header">
+      <h2>Explore the operation</h2>
+      <p>Operational reports and security evidence</p>
+    </div>
+    <p><a class="pill" href="/api/status">View system status</a></p>
+    <div class="grid">
+      <article class="card"><h3>Operations</h3><p>Read-only report views over the sample manufacturing database.</p><a href="/inventory">Inventory</a> &middot; <a href="/sales">Sales</a> &middot; <a href="/production">Production</a></article>
+      <article class="card"><h3>Identity and access</h3><p>SQL login inventory, controlled account actions, and protected built-in administrator management.</p><a href="/users">Users</a></article>
+      <article class="card"><h3>Security validation</h3><p>Live protection observations, controlled SQL audit exercises, and Microsoft-supported alert simulations.</p><a href="/admin">Security lab</a></article>
+    </div>
+  </section>
 </Layout>

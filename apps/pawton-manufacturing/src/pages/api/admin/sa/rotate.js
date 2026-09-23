@@ -1,5 +1,5 @@
 import {
-  isAuthenticated,
+  authorizeAdminMutation,
   generateSqlPassword,
   ROTATED_SECRET_COOKIE_NAME,
 } from "../../../../lib/adminAuth.mjs";
@@ -10,10 +10,11 @@ import {
   verifyTargetAdminPassword,
 } from "../../../../lib/adminSecrets.mjs";
 
-export async function POST({ cookies, redirect }) {
-  if (!isAuthenticated(cookies)) {
-    return redirect("/admin/login", 303);
-  }
+export async function POST({ cookies, redirect, request }) {
+  const denied = authorizeAdminMutation(request, cookies);
+  if (denied) return denied;
+  if ((await request.formData()).get("confirm") !== "yes")
+    return new Response("Confirmation required.", { status: 400 });
   try {
     requireAdminSecretsConfigured();
     const newPassword = generateSqlPassword();
@@ -32,8 +33,8 @@ export async function POST({ cookies, redirect }) {
       path: "/",
       maxAge: 60,
     });
-    return redirect("/admin?msg=sa_rotated", 303);
+    return redirect("/users?msg=sa_rotated", 303);
   } catch (err) {
-    return redirect(`/admin?error=${encodeURIComponent(err.message)}`, 303);
+    return redirect("/users?error=operation_failed", 303);
   }
 }

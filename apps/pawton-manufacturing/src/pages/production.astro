@@ -2,33 +2,35 @@
 import Layout from '../layouts/Layout.astro';
 import { isDatabaseConfigured, query } from '../lib/db.mjs';
 
-let rows = [];
-let columns = [];
+let rows: Array<Record<string, unknown>> = [];
+let columns: string[] = [];
 let error = null;
 if (isDatabaseConfigured()) {
   try {
     rows = await query('SELECT TOP 25 * FROM vw_ProductionOrderStatus');
     columns = rows.length ? Object.keys(rows[0]) : [];
-  } catch (err) {
-    error = err.message;
+  } catch {
+    error = 'Production data is unavailable. Contact the environment operator.';
   }
 } else {
   error = 'Database is not configured on this Web App yet.';
 }
 ---
 <Layout title="Production">
-  <h2>Production order status</h2>
-  <p>Work orders with completion percentages and schedule status, from the <code>vw_ProductionOrderStatus</code> report view.</p>
+  <header class="page-header">
+    <p class="eyebrow">Factory operations</p>
+    <h1>Production order status</h1>
+    <p>Track work orders, completion percentages, and schedule status from the <code>vw_ProductionOrderStatus</code> report view.</p>
+  </header>
   {error && <div class="warn">{error}</div>}
-  {!error && rows.length === 0 && <p>No production orders returned.</p>}
+  {!error && rows.length === 0 && <div class="section"><p>No production orders are available right now.</p></div>}
   {!error && rows.length > 0 && (
-    <table>
-      <thead><tr>{columns.map((c) => <th>{c}</th>)}</tr></thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr>{columns.map((c) => <td>{String(row[c] ?? '')}</td>)}</tr>
-        ))}
-      </tbody>
-    </table>
+    <section class="section">
+      <div class="section-header"><h2>Order detail</h2><p>Showing up to 25 records</p></div>
+      <div class="table-shell"><table>
+        <thead><tr>{columns.map((c) => <th>{c}</th>)}</tr></thead>
+        <tbody>{rows.map((row) => <tr>{columns.map((c) => <td>{String(row[c] ?? '')}</td>)}</tr>)}</tbody>
+      </table></div>
+    </section>
   )}
 </Layout>
