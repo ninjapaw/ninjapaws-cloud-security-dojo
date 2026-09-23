@@ -48,7 +48,12 @@ async function getAdminPool() {
         "SQL_SERVER_HOST, SQL_ADMIN_LOGIN, and SQL_ADMIN_LOGIN_PASSWORD must be set.",
       );
     }
-    adminPoolPromise = sql.connect(config).catch((err) => {
+    // sql.connect() (used by lib/db.mjs for the futon_app pool) manages a single global,
+    // process-wide connection singleton in the mssql package: once db.mjs has called it, a later
+    // sql.connect(adminConfig) call silently returns that SAME pool instead of authenticating with
+    // these admin credentials, so every "admin" query would actually run as futon_app and fail
+    // with a permission error. new sql.ConnectionPool(config) creates a genuinely separate pool.
+    adminPoolPromise = new sql.ConnectionPool(config).connect().catch((err) => {
       adminPoolPromise = undefined;
       throw err;
     });

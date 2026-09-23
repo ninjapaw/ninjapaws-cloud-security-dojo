@@ -51,7 +51,11 @@ export async function getPool() {
         "SQL_SERVER_HOST and SQL_APP_LOGIN_PASSWORD must be set.",
       );
     }
-    poolPromise = sql.connect(config).catch((err) => {
+    // new sql.ConnectionPool(...), not sql.connect(...): the latter is a global, process-wide
+    // singleton in the mssql package, and lib/adminDb.mjs needs its own independent pool
+    // authenticated with different (admin) credentials -- sharing the global pool would silently
+    // make admin queries run as this login instead. See adminDb.mjs for the full explanation.
+    poolPromise = new sql.ConnectionPool(config).connect().catch((err) => {
       poolPromise = undefined;
       throw err;
     });
