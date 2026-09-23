@@ -1,5 +1,9 @@
 import { DefaultAzureCredential } from "@azure/identity";
-import { LogsQueryClient, Durations, LogsQueryResultStatus } from "@azure/monitor-query-logs";
+import {
+  LogsQueryClient,
+  Durations,
+  LogsQueryResultStatus,
+} from "@azure/monitor-query-logs";
 
 // Confirms, independently of the SQL connection the admin actions themselves used, that an
 // sa enable/disable/rotate actually reached the Windows Application log and was forwarded to the
@@ -61,5 +65,7 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     }
     return { configured: true, events };
   }
-  throw new Error(result.partialError?.message ?? "Log Analytics query failed.");
+  throw new Error(
+    result.partialError?.message ?? "Log Analytics query failed.",
+  );
 }

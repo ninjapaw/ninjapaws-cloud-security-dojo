@@ -15,7 +15,8 @@ function readTimeout(name) {
 }
 
 function readAdminConfig() {
-  const { SQL_SERVER_HOST, SQL_ADMIN_LOGIN, SQL_ADMIN_LOGIN_PASSWORD } = process.env;
+  const { SQL_SERVER_HOST, SQL_ADMIN_LOGIN, SQL_ADMIN_LOGIN_PASSWORD } =
+    process.env;
   if (!SQL_SERVER_HOST || !SQL_ADMIN_LOGIN || !SQL_ADMIN_LOGIN_PASSWORD) {
     return null;
   }
@@ -73,7 +74,9 @@ export async function setSaEnabled(enabled) {
   const pool = await getAdminPool();
   // The login name is a fixed literal ('sa'), never user input, so this does not need
   // parameterization; only values (like the rotated password below) come from user-adjacent input.
-  await pool.request().query(`ALTER LOGIN [sa] ${enabled ? "ENABLE" : "DISABLE"};`);
+  await pool
+    .request()
+    .query(`ALTER LOGIN [sa] ${enabled ? "ENABLE" : "DISABLE"};`);
 }
 
 export async function rotateSaPassword(newPassword) {

@@ -39,8 +39,7 @@ function clientKeyFor(request) {
   // an authoritative client identity and must never be used for anything security-critical beyond
   // slowing down brute force from a single source.
   return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
   );
 }
 
@@ -130,4 +129,3 @@ export function generateSqlPassword(length = 28) {
   const insertAt = randomBytes(1)[0] % (core.length + 1);
   return core.slice(0, insertAt) + specialChar + core.slice(insertAt);
 }
-
