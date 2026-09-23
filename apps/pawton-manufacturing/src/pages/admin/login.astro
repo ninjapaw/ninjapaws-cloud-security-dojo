@@ -16,9 +16,8 @@ const errorMessage = errorCode ? (errorMessages[errorCode] ?? 'Sign-in failed.')
 ---
 <Layout title="Admin sign-in">
   <div class="banner">
-    This account can enable, disable, and rotate the password of the SQL Server <code>sa</code> login.
-    Restricted use only &mdash; see the "Admin portal" section of the repository README for why this
-    is a deliberately high-risk feature.
+    Restricted operator access. This workspace can enable, disable, rename, and rotate the SQL Server
+    <code>sa</code> login; every action is audited and forwarded to the central security workspace.
   </div>
   {errorMessage && <div class="warn">{errorMessage}</div>}
   <form class="stack" method="post" action="/api/admin/login">

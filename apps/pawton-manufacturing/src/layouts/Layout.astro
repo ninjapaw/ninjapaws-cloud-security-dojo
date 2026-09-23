@@ -8,41 +8,76 @@ const { title = 'Overview' } = Astro.props;
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title} — Pawton Manufacturing</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0a1220; color: #d9e7f5; }
-    body { margin: 0; }
-    header { padding: 20px 32px; border-bottom: 1px solid #28415c; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-    header h1 { color: #f2a24a; font-size: 20px; margin: 0; }
-    nav a { color: #7cc4f2; margin-left: 18px; text-decoration: none; font-size: 14px; }
-    nav a:hover { text-decoration: underline; }
-    main { padding: 24px 32px 48px; max-width: 1100px; margin: 0 auto; }
+    /* Keep the portal shell visually aligned with the M365 Profiles Fluent palette while leaving
+       the data pages free to focus on their SQL-backed content. */
+    :root {
+      color-scheme: light;
+      --blue: #0078d4;
+      --blue-dark: #106ebe;
+      --blue-tint: #eff6fc;
+      --text: #201f1e;
+      --text-soft: #424242;
+      --muted: #605e5c;
+      --surface: #fff;
+      --surface-alt: #f8f9fb;
+      --border: #e1dfdd;
+      --success: #107c10;
+      --warning: #8a5a00;
+      --error: #a4262c;
+      --shadow: 0 4px 16px rgb(0 0 0 / 6%);
+      font-family: "Segoe UI", "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      background: var(--surface-alt);
+      color: var(--text);
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --text: #f3f2f1;
+      --text-soft: #d0d0d0;
+      --muted: #b7b7b7;
+      --surface: #1f2937;
+      --surface-alt: #111827;
+      --border: #374151;
+      --blue-tint: #1a2942;
+      --shadow: 0 6px 20px rgb(0 0 0 / 35%);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--surface-alt); }
+    header { position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
+    .header-inner { max-width: 1180px; min-height: 60px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 24px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+    .brand-mark { display: grid; grid-template-columns: 9px 9px; grid-template-rows: 9px 9px; gap: 2px; }
+    .brand-mark span:nth-child(1) { background: #f25022; } .brand-mark span:nth-child(2) { background: #7fba00; }
+    .brand-mark span:nth-child(3) { background: #00a4ef; } .brand-mark span:nth-child(4) { background: #ffb900; }
+    nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+    nav a, .theme-toggle { color: var(--text-soft); text-decoration: none; font-size: 14px; font-weight: 500; border: 0; background: transparent; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+    nav a:hover, nav a.active, .theme-toggle:hover { color: var(--blue); background: var(--blue-tint); text-decoration: none; }
+    .theme-toggle { border: 1px solid var(--border); font-size: 16px; padding: 5px 9px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 34px 20px 56px; }
+    h1, h2, h3 { line-height: 1.25; font-weight: 600; color: var(--text); } h1 { font-size: 2.25rem; } h2 { font-size: 1.75rem; } h3 { font-size: 1.25rem; }
+    p { color: var(--text-soft); line-height: 1.55; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin: 18px 0; }
-    .card { border: 1px solid #28415c; border-radius: 10px; padding: 16px; background: #0d1a2b; }
-    .card .label { color: #8fa6bc; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-    .card .value { font-size: 26px; margin-top: 6px; color: #7be2a5; }
-    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #28415c; font-size: 13px; }
-    th { color: #8fa6bc; text-transform: uppercase; font-size: 11px; }
-    .banner { padding: 10px 14px; border-radius: 8px; background: #3a1414; border: 1px solid #6d1f1f; color: #f2a7a7; font-size: 12px; margin-bottom: 16px; }
-    .warn { padding: 10px 14px; border-radius: 8px; background: #3a2f14; border: 1px solid #6d5a1f; color: #f2cf7c; font-size: 12px; margin-bottom: 16px; }
-    .danger { padding: 10px 14px; border-radius: 8px; background: #3a1414; border: 1px solid #6d1f1f; color: #f2a7a7; font-size: 12px; margin-bottom: 16px; }
-    .ok { padding: 10px 14px; border-radius: 8px; background: #14301f; border: 1px solid #1f6d3f; color: #7ce2a5; font-size: 12px; margin-bottom: 16px; }
-    footer { padding: 16px 32px; color: #58718b; font-size: 11px; border-top: 1px solid #28415c; }
-    a.pill { color: #102f4d; background: #f2a24a; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-decoration: none; }
-    form.stack { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }
-    label { font-size: 13px; color: #8fa6bc; display: flex; flex-direction: column; gap: 4px; }
-    input[type="text"], input[type="password"] { background: #0a1220; border: 1px solid #28415c; border-radius: 6px; padding: 8px 10px; color: #d9e7f5; font-size: 14px; }
-    button { background: #f2a24a; color: #102f4d; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 700; font-size: 13px; cursor: pointer; }
-    button.secondary { background: transparent; color: #f2a24a; border: 1px solid #f2a24a; }
-    button.destructive { background: #d94f4f; color: #fff; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-    code { background: #0a1220; border: 1px solid #28415c; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
-    details summary { cursor: pointer; color: #7cc4f2; }
-    details pre { background: #0a1220; border: 1px solid #28415c; border-radius: 6px; padding: 8px; font-size: 11px; margin-top: 6px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 18px; background: var(--surface); box-shadow: var(--shadow); }
+    .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    .card .value { font-size: 26px; margin-top: 6px; color: var(--blue); font-weight: 600; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; background: var(--surface); border: 1px solid var(--border); }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-soft); vertical-align: top; }
+    th { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+    .banner, .warn, .danger, .ok { padding: 12px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 18px; border: 1px solid; }
+    .banner, .danger { background: #fdf0f0; border-color: #f1c5c5; color: var(--error); } .warn { background: #fff8e7; border-color: #f1d28a; color: var(--warning); } .ok { background: #f0faf0; border-color: #b7dfb7; color: var(--success); }
+    footer { padding: 18px 20px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); background: var(--surface); }
+    a.pill { display: inline-block; color: #fff; background: var(--blue); padding: 7px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; } a.pill:hover, button:hover { background: var(--blue-dark); }
+    form.stack { display: flex; flex-direction: column; gap: 14px; max-width: 360px; } label { font-size: 13px; color: var(--text-soft); display: flex; flex-direction: column; gap: 6px; }
+    input[type="text"], input[type="password"] { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 9px 10px; color: var(--text); font: inherit; font-size: 14px; } input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+    button { background: var(--blue); color: #fff; border: none; border-radius: 6px; padding: 9px 16px; font-weight: 600; font-size: 13px; cursor: pointer; } button.secondary { background: transparent; color: var(--blue); border: 1px solid var(--blue); } button.destructive { background: var(--error); color: #fff; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; } code { background: var(--blue-tint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12px; } details summary { cursor: pointer; color: var(--blue); } details pre { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-size: 11px; margin-top: 8px; overflow: auto; }
+    dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; color: var(--text-soft); font-size: 13px; } dt { color: var(--muted); font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
+    @media (max-width: 720px) { .header-inner { gap: 8px; } .brand { font-size: 15px; } .brand span:last-child { display: none; } nav { gap: 0; } nav a { padding: 7px 6px; font-size: 12px; } main { padding-top: 24px; } h1 { font-size: 1.8rem; } dl { grid-template-columns: 1fr; gap: 2px; } dd { margin-bottom: 8px; } }
   </style>
 </head>
 <body>
   <header>
-    <h1>🐾 Pawton Manufacturing</h1>
+    <div class="header-inner">
+    <a class="brand" href="/" aria-label="Pawton Manufacturing home"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><span>Pawton Manufacturing</span></a>
     <nav>
       <a href="/">Overview</a>
       <a href="/inventory">Inventory</a>
@@ -50,6 +85,8 @@ const { title = 'Overview' } = Astro.props;
       <a href="/production">Production</a>
       <a href="/admin">Admin</a>
     </nav>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+    </div>
   </header>
   <main>
     <slot />
@@ -57,5 +94,20 @@ const { title = 'Overview' } = Astro.props;
   <footer>
     Ninja Paws Cloud Security Dojo &middot; Scenario 2 demo data (Futon Manufacturing sample from microsoft/sql-server-samples) &middot; Not a real business. Protected by Microsoft Defender for App Service, Defender for SQL, and Defender for Servers.
   </footer>
+  <script is:inline>
+    // Persist the operator's theme choice without adding a server-side preference or account state.
+    const themeKey = 'pawton-theme';
+    const savedTheme = localStorage.getItem(themeKey);
+    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+    document.getElementById('theme-toggle')?.addEventListener('click', () => {
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem(themeKey, theme);
+    });
+    const path = window.location.pathname.replace(/\/$/, '') || '/';
+    document.querySelectorAll('nav a').forEach((link) => {
+      if (link.getAttribute('href') === path) link.classList.add('active');
+    });
+  </script>
 </body>
 </html>

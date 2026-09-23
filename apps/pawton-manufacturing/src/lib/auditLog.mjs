@@ -1,7 +1,6 @@
 import { DefaultAzureCredential } from "@azure/identity";
 import {
   LogsQueryClient,
-  Durations,
   LogsQueryResultStatus,
 } from "@azure/monitor-query-logs";
 
@@ -68,9 +67,9 @@ function formatAuditSummary(event) {
 }
 
 // SQL Server audit records that matter for the admin portal are the server-principal change group
-// and the login audit event stream. The generic LGIS entries are useful for noise reduction, but the
-// actions we care about are login enable/disable/password change, so filter to the relevant event
-// IDs and parse the key-value schema into a readable summary rather than dumping the whole XML blob.
+// and the login audit event stream. Keep KQL deliberately schema-light: the Event table varies
+// slightly between AMA deployments, while the JavaScript parser below can safely handle the raw
+// RenderedDescription field without asking Kusto to evaluate a large set of regex expressions.
 export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
   if (!isAuditLogConfigured()) {
     return { configured: false, events: [] };
@@ -81,24 +80,13 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
     | where TimeGenerated > ago(${minutesAgo}m)
     | where Source == 'MSSQLSERVER'
     | where EventID in (33205, 18453, 18454, 18456)
-    | extend ActionId = extract(@"action_id:(\S+)", 1, RenderedDescription)
-    | extend Success = tostring(extract(@"succeeded:(true|false)", 1, RenderedDescription))
-    | extend LoginName = coalesce(
-        extract(@"server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
-        extract(@"target_server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
-        extract(@"session_server_principal_name:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription)
-      )
-    | extend ClientIp = coalesce(
-        extract(@"client_ip:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
-        extract(@"address:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription)
-      )
-    // Keep the Windows Event Viewer identity fields alongside the parsed audit fields for the admin page.
-    | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription, ActionId, Success, LoginName, ClientIp
+    | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription
     | order by TimeGenerated desc
     | take ${take}
   `;
   const result = await getClient().queryWorkspace(workspaceId, kustoQuery, {
-    duration: Durations.oneHour,
+    // Use an explicit ISO 8601 interval so the request remains compatible across SDK releases.
+    duration: "PT1H",
   });
   if (result.status === LogsQueryResultStatus.Success) {
     const table = result.tables[0];
