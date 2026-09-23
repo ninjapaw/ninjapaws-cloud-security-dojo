@@ -599,8 +599,9 @@ generate_password() {
 }
 
 # Reads one "properties.outputs" field out of a bicep deployment's JSON, without a jq dependency.
+# Uses $NODE_COMMAND instead of bare 'node' for Git Bash compatibility (bare 'node' may not be on PATH in some shells).
 read_output() {
-    printf '%s' "$1" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).$2.value)" 2>/dev/null || true
+    printf '%s' "$1" | "$NODE_COMMAND" -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).$2.value)" 2>/dev/null || true
 }
 
 run_deployment() {
@@ -618,12 +619,10 @@ run_deployment() {
     deployment_name="sql-scenario-$(date -u +%Y%m%dT%H%M%SZ)"
 
     info "Deploying infrastructure ($deployment_name)..."
-    update_status "Deploying infrastructure" "Creating or updating the SQL VM, network, Key Vault, and optional dashboard resources." 25
-    output_json="$(az deployment group create \
-        --resource-group "$RESOURCE_GROUP" \
-        --name "$deployment_name" \
-        --template-file "$BICEP_FILE" \
-        --parameters vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
+    # Extract deployment parameters into an array for safe reuse across what-if and create calls.
+    # This ensures the dry-run preview and actual deployment use identical parameter sets.
+    local deployment_parameters=(
+                     vmName="$VM_NAME" adminUsername="$ADMIN_USERNAME" adminPassword="$admin_password" \
                      vmSize="$VM_SIZE" sqlImageSku="$SQL_IMAGE_SKU" bootstrapScriptUrl="$BOOTSTRAP_SCRIPT_URL" \
                      deployBastion="$DEPLOY_BASTION" autoAllowBastionRdp="$AUTO_ALLOW_BASTION_RDP" \
                      allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
@@ -634,8 +633,23 @@ run_deployment() {
                      centralWorkspaceName="$CENTRAL_WORKSPACE_NAME" \
                      adminPortalUsername="$ADMIN_PORTAL_USERNAME" adminPortalPassword="$admin_portal_password" \
                      adminSessionSecret="$admin_session_secret" sqlAdminOpsPassword="$sql_admin_ops_password" \
-                     sqlSaLoginUsername="$sql_sa_login_username" sqlSaLoginPassword="$sql_sa_login_password" \
+                     sqlSaLoginUsername="$sql_sa_login_username" sqlSaLoginPassword="$sql_sa_login_password"
+    )
+    # Safety check: run what-if with ResourceIdOnly format to suppress property diffs that could expose
+    # protected extension settings, then proceed with the actual deployment using identical parameter
+    # Reuse the exact parameters; suppress property diffs that could expose protected extension settings.
+    az deployment group what-if --resource-group "$RESOURCE_GROUP" --name "$deployment_name" \
+        --template-file "$BICEP_FILE" --parameters "${deployment_parameters[@]}" \
+        --mode Incremental --result-format ResourceIdOnly \
+        || fail "Infrastructure preview failed; no deployment was applied."
+    output_json="$(az deployment group create \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$deployment_name" \
+        --template-file "$BICEP_FILE" \
+        --parameters "${deployment_parameters[@]}" \
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
+    # Clear the deployment parameters from the environment to avoid keeping sensitive values in memory longer than needed.
+    unset deployment_parameters
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
 

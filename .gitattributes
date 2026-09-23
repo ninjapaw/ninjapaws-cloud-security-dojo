@@ -2,3 +2,5 @@
 *.json text eol=lf
 infra/sentinel-sql-solution/*.bicep text eol=lf
 infra/sentinel-sql-solution/queries/*.kql text eol=lf
+infra/sql-defender-scenario/*.bicep text eol=lf
+infra/sql-defender-scenario/modules/*.bicep text eol=lf
