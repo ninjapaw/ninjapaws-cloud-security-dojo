@@ -133,6 +133,7 @@ if (auditConfigured) {
   {auditConfigured && !auditError && auditEvents.length === 0 && (
     <div class="warn">No matching Windows events in the last 30 minutes yet.</div>
   )}
+  {/* Keep a separate Event Viewer-style view so operators can inspect the forwarded Windows record itself. */}
   {auditEvents.length > 0 && (
     <table>
       <thead>
@@ -157,5 +158,31 @@ if (auditConfigured) {
         ))}
       </tbody>
     </table>
+  )}
+
+  {auditEvents.length > 0 && (
+    <section>
+      <h3>Local Event Viewer record</h3>
+      <p>
+        These fields mirror the Windows Event Viewer record collected from the SQL VM's Application
+        log before forwarding. The raw description is preserved for independent review.
+      </p>
+      {auditEvents.map((event) => (
+        <details>
+          <summary>
+            {event.Computer ?? 'Unknown computer'} -- Event ID {event.EventID} -- {new Date(event.TimeGenerated).toISOString()}
+          </summary>
+          <dl>
+            <dt>Log</dt><dd>{event.EventLog ?? 'Application'}</dd>
+            <dt>Source</dt><dd>{event.Source ?? 'MSSQLSERVER'}</dd>
+            <dt>Level</dt><dd>{event.EventLevelName ?? 'n/a'}</dd>
+            <dt>Computer</dt><dd>{event.Computer ?? 'n/a'}</dd>
+            <dt>Event ID</dt><dd>{event.EventID}</dd>
+            <dt>Time generated</dt><dd>{new Date(event.TimeGenerated).toISOString()}</dd>
+          </dl>
+          <pre style="white-space: pre-wrap; word-break: break-word;">{event.RenderedDescription}</pre>
+        </details>
+      ))}
+    </section>
   )}
 </Layout>

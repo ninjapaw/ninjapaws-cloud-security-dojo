@@ -79,7 +79,7 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
   const kustoQuery = `
     Event
     | where TimeGenerated > ago(${minutesAgo}m)
-    | where Source == "MSSQLSERVER"
+    | where Source == 'MSSQLSERVER'
     | where EventID in (33205, 18453, 18454, 18456)
     | extend ActionId = extract(@"action_id:(\S+)", 1, RenderedDescription)
     | extend Success = tostring(extract(@"succeeded:(true|false)", 1, RenderedDescription))
@@ -92,7 +92,8 @@ export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
         extract(@"client_ip:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription),
         extract(@"address:(.+?)(?=\s+[A-Za-z_][A-Za-z0-9_]*:|$)", 1, RenderedDescription)
       )
-    | project TimeGenerated, EventID, EventLevelName, Computer, RenderedDescription, ActionId, Success, LoginName, ClientIp
+    // Keep the Windows Event Viewer identity fields alongside the parsed audit fields for the admin page.
+    | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription, ActionId, Success, LoginName, ClientIp
     | order by TimeGenerated desc
     | take ${take}
   `;
