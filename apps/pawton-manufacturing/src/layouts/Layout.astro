@@ -61,6 +61,12 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     .card h3 { margin-top: 0; font-size: 18px; }
     .card .value { overflow-wrap: anywhere; }
     .badge { color: var(--link); font-size: 14px; font-weight: 600; }
+    .status-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid var(--border); background: var(--surface); }
+    .status-hero h2 { margin: 0 0 4px; font-size: 28px; }
+    .status-hero p { margin: 0; }
+    .status-pill { display: inline-flex; align-items: center; white-space: nowrap; padding: 8px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+    .status-pill--ok { color: #9be5ad; background: #174326; }
+    .status-pill--warn { color: #f5d483; background: #49391a; }
     .muted { color: var(--muted); }
     .confirmation { flex-direction: row; align-items: center; margin: 10px 0; }
     .row-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
@@ -111,7 +117,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     button { background: var(--blue); color: #fff; border: none; border-radius: 6px; padding: 9px 16px; font-weight: 600; font-size: 13px; cursor: pointer; } button.secondary { background: transparent; color: var(--blue); border: 1px solid var(--blue); } button.destructive { background: var(--error); color: #fff; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; } code { background: var(--blue-tint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12px; } details summary { cursor: pointer; color: var(--blue); } details pre { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-size: 11px; margin-top: 8px; overflow: auto; }
     dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; color: var(--text-soft); font-size: 13px; } dt { color: var(--muted); font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
-    @media (max-width: 720px) { .header-inner { gap: 8px; padding-block: 10px; } .brand { font-size: 15px; } nav { gap: 0; order: 3; flex-basis: 100%; } .theme-toggle { margin-left: auto; } nav a, .nav-action { padding: 7px 6px; font-size: 12px; } .user-chip { max-width: 120px; padding: 7px 2px; } main { padding-top: 24px; } h1 { font-size: 1.8rem; } .section { padding: 16px 0; } .section-header { display: block; } .section-header p { margin-top: 5px; } dl { grid-template-columns: 1fr; gap: 2px; } dd { margin-bottom: 8px; } }
+    @media (max-width: 720px) { .header-inner { gap: 8px; padding-block: 10px; } .brand { font-size: 15px; } nav { gap: 0; order: 3; flex-basis: 100%; } .theme-toggle { margin-left: auto; } nav a, .nav-action { padding: 7px 6px; font-size: 12px; } .user-chip { max-width: 120px; padding: 7px 2px; } main { padding-top: 24px; } h1 { font-size: 1.8rem; } .section { padding: 16px 0; } .section-header { display: block; } .status-hero { display: block; } .status-pill { margin-top: 16px; } .section-header p { margin-top: 5px; } dl { grid-template-columns: 1fr; gap: 2px; } dd { margin-bottom: 8px; } }
   </style>
 </head>
 <body>
@@ -123,6 +129,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
       <a href="/inventory">Inventory</a>
       <a href="/sales">Sales</a>
       <a href="/production">Production</a>
+      <a href="/status">Status</a>
       <a href="/users">Users</a>
       {adminUsername ? (
         <>
