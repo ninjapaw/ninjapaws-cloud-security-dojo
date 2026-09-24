@@ -97,6 +97,7 @@
     "deployWebApp": "true",
     "enableSqlDemoActions": "true",
     "enableSqlShellAttackTests": "true",
+    "sqlAttackCooldownSeconds": "15",
     "portalTimeZone": "America/New_York",
     "webAppPlanSku": "B1",
     "webAppCustomDomain": "",

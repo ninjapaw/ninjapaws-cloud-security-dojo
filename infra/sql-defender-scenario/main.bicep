@@ -60,6 +60,11 @@ param enableSqlDemoActions bool = true
 @description('Lab-only: configure SQL Server xp_cmdshell at bootstrap. Enables operating-system commands through privileged SQL sessions. Admin changes persist until bootstrap runs again. Set false to disable shell access.')
 param enableSqlShellAttackTests bool = true
 
+@description('Process-local cooldown in seconds between direct SQL attack test starts. Does not permit overlapping runs or change audit-only sample cooldowns.')
+@minValue(1)
+@maxValue(3600)
+param sqlAttackCooldownSeconds int = 60
+
 @description('IANA timezone for portal event and status display. Eastern time observes EST/EDT; use Etc/GMT+5 for fixed EST. Stored audit timestamps remain UTC.')
 param portalTimeZone string = 'America/New_York'
 
@@ -783,6 +788,10 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
         {
           name: 'SQL_SHELL_ATTACK_TESTS_ENABLED'
           value: enableSqlShellAttackTests ? 'true' : 'false'
+        }
+        {
+          name: 'SQL_ATTACK_COOLDOWN_SECONDS'
+          value: string(sqlAttackCooldownSeconds)
         }
         {
           name: 'PORTAL_TIME_ZONE'

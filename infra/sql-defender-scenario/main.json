@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15853079052680460631"
+      "templateHash": "10982974967748889999"
     }
   },
   "parameters": {
@@ -133,6 +133,15 @@
       "defaultValue": true,
       "metadata": {
         "description": "Lab-only: configure SQL Server xp_cmdshell at bootstrap. Enables operating-system commands through privileged SQL sessions. Admin changes persist until bootstrap runs again. Set false to disable shell access."
+      }
+    },
+    "sqlAttackCooldownSeconds": {
+      "type": "int",
+      "defaultValue": 60,
+      "minValue": 1,
+      "maxValue": 3600,
+      "metadata": {
+        "description": "Process-local cooldown in seconds between direct SQL attack test starts. Does not permit overlapping runs or change audit-only sample cooldowns."
       }
     },
     "portalTimeZone": {
@@ -842,6 +851,10 @@
             {
               "name": "SQL_SHELL_ATTACK_TESTS_ENABLED",
               "value": "[if(parameters('enableSqlShellAttackTests'), 'true', 'false')]"
+            },
+            {
+              "name": "SQL_ATTACK_COOLDOWN_SECONDS",
+              "value": "[string(parameters('sqlAttackCooldownSeconds'))]"
             },
             {
               "name": "PORTAL_TIME_ZONE",

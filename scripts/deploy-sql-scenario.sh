@@ -157,6 +157,10 @@ DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
 DEPLOY_WEB_APP="$(config_setting deployWebApp true)"
 ENABLE_SQL_DEMO_ACTIONS="$(config_setting enableSqlDemoActions true)"
 ENABLE_SQL_SHELL_ATTACK_TESTS="$(config_setting enableSqlShellAttackTests true)"
+SQL_ATTACK_COOLDOWN_SECONDS="${SQL_ATTACK_COOLDOWN_SECONDS:-$(config_setting sqlAttackCooldownSeconds 60)}"
+if [[ ! "$SQL_ATTACK_COOLDOWN_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || (( SQL_ATTACK_COOLDOWN_SECONDS > 3600 )); then
+    fail 'sqlAttackCooldownSeconds must be an integer from 1 to 3600.'
+fi
 PORTAL_TIME_ZONE="$(config_setting portalTimeZone America/New_York)"
 WEB_APP_NAME="${WEB_APP_NAME:-$(config_setting webAppName "ninjapaws-pawton-${ENVIRONMENT}")}"
 WEB_APP_PLAN_SKU="$(config_setting webAppPlanSku B1)"
@@ -648,6 +652,7 @@ run_deployment() {
                      allowPublicKeyVaultAccess="$ALLOW_PUBLIC_KEY_VAULT_ACCESS" \
                      deployWebApp="$DEPLOY_WEB_APP" enableSqlDemoActions="$ENABLE_SQL_DEMO_ACTIONS" webAppName="$WEB_APP_NAME" \
                      enableSqlShellAttackTests="$ENABLE_SQL_SHELL_ATTACK_TESTS" \
+                     sqlAttackCooldownSeconds="$SQL_ATTACK_COOLDOWN_SECONDS" \
                      portalTimeZone="$PORTAL_TIME_ZONE" \
                      webAppCustomDomain="$WEB_APP_CUSTOM_DOMAIN" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \

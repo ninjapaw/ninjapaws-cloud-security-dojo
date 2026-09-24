@@ -1,6 +1,8 @@
 ---
+/// <reference path="../../sql.d.ts" />
 import Layout from '../../layouts/Layout.astro';
 import { isAuthenticated } from '../../lib/adminAuth.mjs';
+import auditTemplate from '../../../public/sql/configure-auditing.sql?raw';
 
 if (!isAuthenticated(Astro.cookies)) {
   return Astro.redirect('/admin/login');
@@ -10,7 +12,7 @@ if (!isAuthenticated(Astro.cookies)) {
   <header class="page-header">
     <p class="eyebrow">Security controls</p>
     <h1>SQL auditing configuration</h1>
-    <p>Documented controls for tracking authentication, administrator changes, audit configuration, and data changes in the Futon Manufacturing database.</p>
+    <p>SQL Server Audit configuration for database, schema, and table or view activity, with optional server authentication and security events.</p>
   </header>
 
   <section class="section">
@@ -28,62 +30,29 @@ if (!isAuthenticated(Astro.cookies)) {
 
   <section class="section">
     <div class="section-header">
-      <h2>Reproduce on another SQL Server</h2>
+      <h2>Reusable SQL Server audit script</h2>
       <p>Run as a controlled sysadmin operation</p>
     </div>
-    <p>The scenario implementation is in <code>scripts/sql/Setup-FutonManufacturing.ps1</code>. Do not run the full bootstrap on an existing business server: it restores sample data and changes credentials. The following SQL is a first-time audit-only example; replace the database name and check existing audit definitions first.</p>
-    <pre><code>USE master;
-CREATE SERVER AUDIT FutonManufacturingAudit
-  TO APPLICATION_LOG
-  WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE);
-ALTER SERVER AUDIT FutonManufacturingAudit WITH (STATE = ON);
-
-CREATE SERVER AUDIT SPECIFICATION FutonManufacturingServerAuditSpec
-  FOR SERVER AUDIT FutonManufacturingAudit
-  ADD (FAILED_LOGIN_GROUP),
-  ADD (SUCCESSFUL_LOGIN_GROUP),
-  ADD (LOGIN_CHANGE_PASSWORD_GROUP),
-  ADD (SERVER_PRINCIPAL_CHANGE_GROUP),
-  ADD (SERVER_PERMISSION_CHANGE_GROUP),
-  ADD (SERVER_ROLE_MEMBER_CHANGE_GROUP),
-  ADD (AUDIT_CHANGE_GROUP)
-  WITH (STATE = ON);
-
-USE FutonManufacturing;
-CREATE DATABASE AUDIT SPECIFICATION FutonManufacturingDbAuditSpec
-  FOR SERVER AUDIT FutonManufacturingAudit
-  ADD (SELECT, INSERT, UPDATE, DELETE ON DATABASE::FutonManufacturing BY public)
-  WITH (STATE = ON);</code></pre>
-    <p class="warn">For production, narrow the database principals and objects instead of auditing every public database action. Review retention, event volume, privacy, and the audit failure policy for your workload.</p>
+    <p><a href="/sql/configure-auditing.sql" download>Download audit configuration SQL</a></p>
+    <p>Set the variables at the top for an existing database and choose <code>DATABASE</code>, <code>SCHEMA</code>, or <code>OBJECT</code> scope. OBJECT accepts a table or view, with schema and object names supplied separately. Choose the data actions and an existing database user or role; <code>public</code> includes all database users. Server activity is optional and instance-wide, not limited by the database scope.</p>
+    <p>The default <code>PREVIEW</code> mode validates the selected targets and returns setup and verification SQL without writing configuration. Use <code>APPLY</code> after reviewing the generated SQL, or <code>VERIFY</code> to inspect existing audit definitions and runtime state. Existing audit names are never overwritten. A failed apply can leave partially created definitions; inspect them before retrying.</p>
+    <p>Supports SQL Server on Windows or Linux, including SQL Server VMs. FILE requires an existing directory on the server writable by the SQL Server service account. Set a Windows path such as <code>C:\SQLAudit\</code> or a Linux path. APPLICATION_LOG is Windows-only. Azure SQL Database, Azure SQL Managed Instance, Fabric, and other database engines require their own audit configuration; this script rejects those platforms.</p>
+    <pre><code>{auditTemplate}</code></pre>
+    <p class="warn">Audit-only: this script does not restore databases, change credentials, grant permissions, or configure log forwarding. Run with authorized SQL audit-management permissions: ALTER ANY SERVER AUDIT and ALTER ANY DATABASE AUDIT, plus database access and permissions to read the verification catalog views and DMVs. Review privacy, event volume, and retention: FILE uses 100 MB files and 10 rollover files, deleting the oldest files as it rolls over. ON_FAILURE = CONTINUE favors availability and can allow unaudited operations during an audit-target failure.</p>
+    <p><a href="https://learn.microsoft.com/en-us/sql/t-sql/statements/create-server-audit-transact-sql" target="_blank" rel="noopener noreferrer">Server audit reference</a> · <a href="https://learn.microsoft.com/en-us/sql/t-sql/statements/create-database-audit-specification-transact-sql" target="_blank" rel="noopener noreferrer">Database audit scope reference</a></p>
   </section>
 
   <section class="section">
     <div class="section-header">
       <h2>Verify the controls</h2>
-      <p>Run on the SQL VM</p>
+      <p>Use VERIFY mode with the same audit names</p>
     </div>
-    <pre><code>-- Server audit state and destination
-SELECT name, is_state_enabled, type_desc, on_failure_desc
-FROM sys.server_audits
-WHERE name = 'FutonManufacturingAudit';
-
--- Server-level action groups
-SELECT sas.name, sad.audit_action_name
-FROM sys.server_audit_specifications AS sas
-JOIN sys.server_audit_specification_details AS sad
-  ON sas.server_specification_id = sad.server_specification_id
-WHERE sas.name = 'FutonManufacturingServerAuditSpec';
-
--- Database-level data actions
-SELECT das.name, dad.audit_action_name
-FROM FutonManufacturing.sys.database_audit_specifications AS das
-JOIN FutonManufacturing.sys.database_audit_specification_details AS dad
-  ON das.database_specification_id = dad.database_specification_id
-WHERE das.name = 'FutonManufacturingDbAuditSpec';</code></pre>
+    <p>The script reports audit enablement, target, failure policy, runtime status, selected action groups, and database scope IDs. Confirm runtime status is STARTED and inspect actual audit records separately; configured specifications alone do not prove event delivery. FILE records can be read with <code>sys.fn_get_audit_file</code>. The query below applies only to Windows Application-log collection into Log Analytics.</p>
   <h3>Log Analytics verification (KQL, not T-SQL)</h3>
   <pre><code>Event
 | where TimeGenerated &gt; ago(30m)
-| where EventLog == 'Application' and Source == 'MSSQLSERVER'
+| where EventLog == 'Application'
+| where Source == 'MSSQLSERVER' or Source startswith 'MSSQL$'
 | where EventID == 33205
 | project TimeGenerated, Computer, EventID, RenderedDescription
 | order by TimeGenerated desc

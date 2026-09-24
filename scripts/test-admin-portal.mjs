@@ -31,6 +31,176 @@ import {
   setSqlShellEnabled,
 } from "../apps/pawton-manufacturing/src/lib/adminDb.mjs";
 
+test("auditing page shares a generic preview-first SQL template with its download", async () => {
+  const root = new URL("../apps/pawton-manufacturing/", import.meta.url);
+  const template = await readFile(
+    new URL("public/sql/configure-auditing.sql", root),
+    "utf8",
+  );
+  const page = await readFile(
+    new URL("src/pages/admin/auditing.astro", root),
+    "utf8",
+  );
+  assert.match(page, /configure-auditing\.sql\?raw/);
+  assert.match(page, /<code>\{auditTemplate\}<\/code>/);
+  assert.match(page, /href="\/sql\/configure-auditing.sql" download/);
+  assert.match(template, /@Mode varchar\(10\) = 'PREVIEW'/);
+  assert.match(template, /@Scope varchar\(10\) = 'OBJECT'/);
+  assert.match(template, /@IncludeServerActivity bit = 0/);
+  assert.match(template, /QUOTENAME\(@DatabaseName\)/);
+  assert.match(template, /QUOTENAME\(@SchemaName\)/);
+  assert.match(template, /QUOTENAME\(@ObjectName\)/);
+  assert.doesNotMatch(
+    template,
+    /Futon|CREATE DATABASE\s+\[|RESTORE|ALTER LOGIN|DROP |GRANT /i,
+  );
+  assert.ok(
+    template.indexOf("IF @Mode = 'PREVIEW'") <
+      template.indexOf("EXEC sys.sp_executesql @SetupSql"),
+  );
+  assert.match(template, /already exists\. No changes made/);
+});
+
+test(
+  "reusable auditing SQL previews, applies, and verifies database/schema/table/view scopes",
+  {
+    skip: !process.env.DOJO_AUDIT_TEST_PORT,
+  },
+  async () => {
+    const requireApp = createRequire(
+      new URL("../apps/pawton-manufacturing/package.json", import.meta.url),
+    );
+    const sql = requireApp("mssql");
+    const template = await readFile(
+      new URL(
+        "../apps/pawton-manufacturing/public/sql/configure-auditing.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const pool = await new sql.ConnectionPool({
+      server: "127.0.0.1",
+      port: Number(process.env.DOJO_AUDIT_TEST_PORT),
+      user: "sa",
+      password: process.env.MSSQL_SA_PASSWORD,
+      database: "master",
+      options: { encrypt: true, trustServerCertificate: true },
+      requestTimeout: 30000,
+    }).connect();
+    const database = `Audit_fixture_${randomBytes(6).toString("hex")}`;
+    const configure = (values) => {
+      let text = template;
+      for (const [name, value] of Object.entries({
+        DatabaseName: database,
+        SchemaName: "Audit Schema",
+        ObjectName: "Table] O'Brien",
+        PrincipalName: "Audit Role",
+        FilePath: "/var/opt/mssql/log/",
+        ...values,
+      })) {
+        const declaration = new RegExp(
+          `(DECLARE @${name} [^=\\r\\n]+ = )[^;]+;`,
+        );
+        assert.match(text, declaration);
+        const literal =
+          typeof value === "number"
+            ? String(value)
+            : `N'${value.replaceAll("'", "''")}'`;
+        text = text.replace(declaration, (_, prefix) => `${prefix}${literal};`);
+      }
+      return text;
+    };
+    try {
+      await pool.request().query(`CREATE DATABASE [${database}];`);
+      await pool
+        .request()
+        .query(
+          `USE [${database}]; EXEC(N'CREATE SCHEMA [Audit Schema]'); CREATE ROLE [Audit Role]; CREATE TABLE [Audit Schema].[Table]] O'Brien] (Id int); EXEC(N'CREATE VIEW [Audit Schema].[AuditView] AS SELECT Id FROM [Audit Schema].[Table]] O''Brien]');`,
+        );
+      for (const [index, scope] of [
+        "DATABASE",
+        "SCHEMA",
+        "OBJECT",
+        "OBJECT",
+      ].entries()) {
+        const values = {
+          Scope: scope,
+          AuditName: `FixtureAudit_${index}`,
+          ServerSpecName: `FixtureServer_${index}`,
+          DatabaseSpecName: `FixtureDatabase_${index}`,
+          IncludeServerActivity: 1,
+          ...(index === 3
+            ? {
+                ObjectName: "AuditView",
+                AuditSelect: 1,
+                AuditInsert: 0,
+                AuditUpdate: 0,
+                AuditDelete: 0,
+              }
+            : {}),
+        };
+        const before = (
+          await pool
+            .request()
+            .query("SELECT COUNT(*) AS total FROM sys.server_audits")
+        ).recordset[0].total;
+        const preview = await pool.request().query(configure(values));
+        assert.match(
+          preview.recordset[0].SetupSql,
+          new RegExp(`ON ${scope}::`),
+        );
+        assert.equal(
+          (
+            await pool
+              .request()
+              .query("SELECT COUNT(*) AS total FROM sys.server_audits")
+          ).recordset[0].total,
+          before,
+        );
+        const applied = await pool
+          .request()
+          .query(configure({ ...values, Mode: "APPLY" }));
+        assert.equal(applied.recordsets[0][0].is_state_enabled, true);
+        assert.equal(applied.recordsets[2].length, index === 3 ? 1 : 4);
+        assert.ok(
+          applied.recordsets[2].every((record) => record.is_state_enabled),
+        );
+        await assert.rejects(
+          pool.request().query(configure({ ...values, Mode: "APPLY" })),
+          /already exists/,
+        );
+        const verified = await pool
+          .request()
+          .query(configure({ ...values, Mode: "VERIFY" }));
+        assert.equal(verified.recordsets[0][0].status_desc, "STARTED");
+        assert.equal(
+          (
+            await pool
+              .request()
+              .query("SELECT COUNT(*) AS total FROM sys.server_audits")
+          ).recordset[0].total,
+          before + 1,
+        );
+      }
+      for (const invalid of [
+        { Scope: "INVALID" },
+        { DatabaseName: "missing_database" },
+        { SchemaName: "missing_schema" },
+        { ObjectName: "missing_object" },
+        { PrincipalName: "missing_role" },
+        { AuditSelect: 0, AuditInsert: 0, AuditUpdate: 0, AuditDelete: 0 },
+        { Target: "APPLICATION_LOG" },
+      ]) {
+        await assert.rejects(
+          pool.request().query(configure({ ...invalid, Mode: "APPLY" })),
+        );
+      }
+    } finally {
+      await pool.close();
+    }
+  },
+);
+
 test("page metadata uses configured canonical origins and route-specific descriptions", () => {
   const environment = {
     PORTAL_CUSTOM_DOMAIN: "Pawton.Example.org",
@@ -415,6 +585,30 @@ test("SQL shell lab default is wired from config through ARM and bootstrap", asy
   assert.match(script, /SQL shell setting verification failed/);
 });
 
+test("SQL shell action submits the opposite live state and retains authorization", async () => {
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/admin/index.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const form = page.match(
+    /<form[^>]+action="\/api\/admin\/sql-shell">([\s\S]*?)<\/form>/,
+  )?.[1];
+  assert.ok(form);
+  assert.doesNotMatch(form, /type="checkbox"[^>]*name="enabled"|Apply setting/);
+  assert.match(form, /type="checkbox" name="confirm" value="yes" required/);
+  assert.match(
+    form,
+    /name="enabled" value=\{sqlShellEnabled === false \? 'true' : 'false'\} disabled=\{sqlShellEnabled === null\}/,
+  );
+  assert.match(
+    form,
+    /'SQL shell unavailable' : sqlShellEnabled \? 'Disable SQL shell access' : 'Enable SQL shell access'/,
+  );
+});
+
 test("SQL shell endpoint rejects cross-origin and invalid values without SQL access", async () => {
   const { POST } =
     await import("../apps/pawton-manufacturing/src/pages/api/admin/sql-shell.js");
@@ -497,6 +691,20 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   for (const { id } of attackScenarios) {
     const result = await runner.run(id);
     assert.equal(result.alertConfirmed, false);
+    assert.match(
+      result.outcome,
+      result.state === "blocked"
+        ? /^Attack test blocked\./
+        : /^Attack test completed successfully\./,
+    );
+    assert.match(result.outcome, /Defender alert generation is not guaranteed/);
+    if (result.state === "blocked")
+      assert.doesNotMatch(result.outcome, /completed successfully/);
+    if (id === "brute-force")
+      assert.match(
+        result.outcome,
+        /Twelve authentication failures observed for dojo_invalid_/,
+      );
     assert.equal(
       result.state,
       ["external-source", "obfuscated-shell"].includes(id)
@@ -538,6 +746,136 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   await assert.rejects(runner.run("brute-force"), /disabled/);
   assert.deepEqual((await runner.availability()).ids, []);
 });
+test("brute-force runs never report success for existing identities, interrupted failures, or unexpected authentication", async () => {
+  for (const mode of ["existing", "interrupted", "authenticated"]) {
+    let attempts = 0;
+    let opened = 0;
+    let closed = 0;
+    const runner = createSqlAttackRunner({
+      environment: {
+        SQL_SERVER_HOST: "offline",
+        SQL_APP_LOGIN_PASSWORD: "test-only",
+      },
+      makePool: (config) => {
+        opened++;
+        return {
+          connect: async () => {
+            if (!config.user.startsWith("dojo_invalid_")) return;
+            attempts++;
+            if (mode === "authenticated") return;
+            throw Object.assign(new Error("test-only failure"), {
+              code: attempts === 3 ? "ETIMEOUT" : "ELOGIN",
+            });
+          },
+          close: async () => {
+            closed++;
+          },
+          request: () => {
+            const request = {
+              input: () => request,
+              query: async () => ({
+                recordset: [{ principalId: mode === "existing" ? 1 : null }],
+              }),
+            };
+            return request;
+          },
+        };
+      },
+    });
+    await assert.rejects(
+      runner.run("brute-force"),
+      mode === "existing"
+        ? /already exists/
+        : mode === "authenticated"
+          ? /Unexpected successful authentication/
+          : /did not complete/,
+    );
+    assert.equal(
+      attempts,
+      mode === "existing" ? 0 : mode === "authenticated" ? 1 : 3,
+    );
+    assert.equal(closed, opened);
+  }
+});
+
+test("SQL attack cooldown is configured as fifteen seconds and wired through deployment", async () => {
+  const read = (path) =>
+    readFile(new URL(`../${path}`, import.meta.url), "utf8");
+  const config = JSON.parse(await read("config/deploy.config.json"));
+  const template = JSON.parse(
+    await read("infra/sql-defender-scenario/main.json"),
+  );
+  assert.equal(config.sqlScenario.sqlAttackCooldownSeconds, "15");
+  const parameter = template.parameters.sqlAttackCooldownSeconds;
+  assert.equal(parameter.type, "int");
+  assert.equal(parameter.defaultValue, 60);
+  assert.equal(parameter.minValue, 1);
+  assert.equal(parameter.maxValue, 3600);
+  const settings = template.resources.find(
+    (resource) => resource.type === "Microsoft.Web/sites",
+  ).properties.siteConfig.appSettings;
+  assert.equal(
+    settings.find((setting) => setting.name === "SQL_ATTACK_COOLDOWN_SECONDS")
+      .value,
+    "[string(parameters('sqlAttackCooldownSeconds'))]",
+  );
+  const script = await read("scripts/deploy-sql-scenario.sh");
+  assert.match(
+    script,
+    /SQL_ATTACK_COOLDOWN_SECONDS="\$\{SQL_ATTACK_COOLDOWN_SECONDS:-\$\(config_setting sqlAttackCooldownSeconds 60\)\}"/,
+  );
+  assert.match(
+    script,
+    /sqlAttackCooldownSeconds="\$SQL_ATTACK_COOLDOWN_SECONDS"/,
+  );
+});
+
+test("SQL attack cooldown accepts configured seconds and falls back to sixty for invalid values", async () => {
+  for (const [value, seconds] of [
+    ["15", 15],
+    ["1", 1],
+    ["3600", 3600],
+    [undefined, 60],
+    ["", 60],
+    ["0", 60],
+    ["-1", 60],
+    ["1.5", 60],
+    ["invalid", 60],
+    ["Infinity", 60],
+    ["3601", 60],
+  ]) {
+    let clock = 0;
+    let connections = 0;
+    const runner = createSqlAttackRunner({
+      environment: {
+        SQL_SERVER_HOST: "offline",
+        SQL_APP_LOGIN_PASSWORD: "test-only",
+        SQL_ATTACK_COOLDOWN_SECONDS: value,
+      },
+      now: () => clock,
+      makePool: () => ({
+        connect: async () => {
+          connections++;
+        },
+        close: async () => {},
+        request: () => ({ query: async () => ({ recordset: [] }) }),
+      }),
+    });
+    await runner.run("sql-injection");
+    clock = seconds * 1000 - 1;
+    await assert.rejects(
+      runner.run("suspicious-app"),
+      (error) =>
+        error.status === 429 &&
+        error.message.includes(`Wait ${seconds} seconds.`),
+    );
+    assert.equal(connections, 1);
+    clock++;
+    assert.equal((await runner.run("suspicious-app")).state, "executed");
+    assert.equal(connections, 2);
+  }
+});
+
 test("shell tests execute only fixed marker commands and validate output", async () => {
   const commands = [];
   let clock = 0;
@@ -603,6 +941,7 @@ test("shell tests execute only fixed marker commands and validate output", async
 test("direct SQL runner rejects overlap and closes failed connections without leaking errors", async () => {
   let finishConnection;
   let closed = 0;
+  let clock = 0;
   const pending = new Promise((resolve) => {
     finishConnection = resolve;
   });
@@ -610,7 +949,9 @@ test("direct SQL runner rejects overlap and closes failed connections without le
     environment: {
       SQL_SERVER_HOST: "offline",
       SQL_APP_LOGIN_PASSWORD: "offline",
+      SQL_ATTACK_COOLDOWN_SECONDS: "15",
     },
+    now: () => clock,
     makePool: () => ({
       connect: () => pending,
       close: async () => {
@@ -624,6 +965,7 @@ test("direct SQL runner rejects overlap and closes failed connections without le
     }),
   });
   const firstRun = runner.run("sql-injection");
+  clock = 15001;
   await assert.rejects(runner.run("suspicious-app"), /running or cooling down/);
   finishConnection();
   await assert.rejects(firstRun, (error) => {
@@ -676,6 +1018,101 @@ test("mutations require a signed session and exact same origin", () => {
   );
 });
 
+test("built-in administrator actions live in the SID-identified inventory row", async () => {
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/users.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    page,
+    /<h2>Built-in administrator<\/h2>|const builtIn =|builtIn\./,
+  );
+  assert.match(
+    page,
+    /login.isBuiltInAdmin \? <div class="built-in-management">/,
+  );
+  assert.match(page, /: restriction \? <span>\{restriction\}<\/span>/);
+  assert.match(
+    page,
+    /\/api\/admin\/sa\/\$\{login.is_disabled \? 'enable' : 'disable'\}/,
+  );
+  assert.match(page, /action="\/api\/admin\/sa\/rotate"/);
+  assert.match(page, /action="\/api\/admin\/sa\/rename" hidden/);
+  assert.match(
+    page,
+    /data-rename-toggle aria-expanded="false" aria-controls=\{`rename-login-\$\{login.principal_id\}`\} disabled=\{!vaultConfigured\}/,
+  );
+  assert.match(
+    page,
+    /name="newUsername".*maxlength="128" required disabled=\{!vaultConfigured\}/,
+  );
+  assert.match(page, /Confirm state change/);
+  assert.match(page, /Confirm password rotation/);
+  assert.match(page, /Confirm rename/);
+  assert.match(
+    page,
+    /button.setAttribute\('aria-expanded', String\(!form.hidden\)\)/,
+  );
+  assert.match(page, /\?\.focus\(\)/);
+});
+
+test("inventory rename buttons toggle only their own form and focus the name field", async () => {
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/users.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const script = stripTypeScriptTypes(
+    page.match(/<script>([\s\S]*?)<\/script>/)[1],
+  );
+  const forms = new Map();
+  const buttons = [1, 2].map((principalId) => {
+    const id = `rename-login-${principalId}`;
+    const form = {
+      hidden: true,
+      focused: 0,
+      querySelector: () => ({
+        focus: () => {
+          form.focused++;
+        },
+      }),
+    };
+    forms.set(id, form);
+    const attributes = new Map([
+      ["aria-controls", id],
+      ["aria-expanded", "false"],
+    ]);
+    const button = {
+      getAttribute: (name) => attributes.get(name),
+      setAttribute: (name, value) => attributes.set(name, value),
+      addEventListener: (_, handler) => {
+        button.click = handler;
+      },
+    };
+    return button;
+  });
+  runInNewContext(script, {
+    document: {
+      querySelectorAll: () => buttons,
+      getElementById: (id) => forms.get(id),
+    },
+  });
+  buttons[0].click();
+  assert.equal(forms.get("rename-login-1").hidden, false);
+  assert.equal(forms.get("rename-login-1").focused, 1);
+  assert.equal(buttons[0].getAttribute("aria-expanded"), "true");
+  assert.equal(forms.get("rename-login-2").hidden, true);
+  buttons[0].click();
+  assert.equal(forms.get("rename-login-1").hidden, true);
+  assert.equal(buttons[0].getAttribute("aria-expanded"), "false");
+  assert.equal(forms.get("rename-login-1").focused, 1);
+});
+
 test("built-in, system, Windows, privileged and service logins are protected", () => {
   for (const login of [
     { ...demo, isBuiltInAdmin: true, name: "renamed_admin" },
@@ -687,13 +1124,84 @@ test("built-in, system, Windows, privileged and service logins are protected", (
     { ...demo, hasServerPrivileges: true },
   ]) {
     assert.ok(loginRestriction(login, {}));
-    for (const action of ["enable", "disable", "rotate", "clear"])
+    for (const action of ["enable", "disable", "rotate", "clear", "rename"])
       assert.throws(() =>
         validateLoginAction(login, action, {
           ALLOW_DEMO_BLANK_PASSWORDS: "true",
         }),
       );
   }
+});
+
+test("demo login rename validates identities and names and changes only the selected login", async () => {
+  const queries = [];
+  let inventory = [
+    { ...demo, principal_id: 7 },
+    { ...demo, principal_id: 8, name: "existing_login" },
+  ];
+  const pool = {
+    request: () => ({
+      query: async (query) => {
+        if (query.includes("sys.server_principals"))
+          return { recordset: inventory };
+        queries.push(query);
+        return { recordset: [] };
+      },
+    }),
+  };
+  const rename = (name, id = 7) =>
+    changeSqlLogin(id, "rename", "", name, async () => pool);
+  assert.equal(await rename(" dojo_demo_renamed "), "dojo_demo_renamed");
+  assert.deepEqual(queries, [
+    "ALTER LOGIN [dojo_demo_reader] WITH NAME = [dojo_demo_renamed];",
+  ]);
+  queries.length = 0;
+  assert.equal(await rename("dojo_demo_reader"), "dojo_demo_reader");
+  for (const name of [
+    "",
+    "a".repeat(129),
+    "1invalid",
+    "bad name",
+    "bad]; DROP LOGIN [other]--",
+    "sa",
+    "SA",
+    "futon_app",
+    "dojo_admin_portal_svc",
+    "EXISTING_LOGIN",
+  ])
+    await assert.rejects(rename(name));
+  await assert.rejects(rename("valid", 999), /no longer exists/);
+  assert.deepEqual(queries, []);
+  inventory = [{ ...demo, principal_id: 7, name: "dojo_demo_renamed" }];
+  assert.equal(await rename("demo_training"), "demo_training");
+  assert.equal(
+    queries.at(-1),
+    "ALTER LOGIN [dojo_demo_renamed] WITH NAME = [demo_training];",
+  );
+  queries.length = 0;
+  for (const identity of [
+    { isBuiltInAdmin: true },
+    { hasServerPrivileges: true },
+    { hasDatabasePrivileges: true },
+    { type_desc: "WINDOWS_LOGIN" },
+    { name: "futon_app" },
+  ]) {
+    inventory = [{ ...demo, principal_id: 7, ...identity }];
+    await assert.rejects(rename("valid_demo"));
+  }
+  assert.deepEqual(queries, []);
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/users.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(page, /name="action" value="rename"/);
+  assert.match(
+    page,
+    /method="post" action="\/api\/admin\/users\/action" hidden/,
+  );
 });
 
 test("blank passwords require explicit opt-in and the demo prefix", async () => {
@@ -992,6 +1500,133 @@ test("Windows event pages use fixed scoped windows, bounded queries, and clamped
     else process.env.LOG_ANALYTICS_WORKSPACE_ID = previousWorkspace;
     if (previousVm === undefined) delete process.env.SQL_VM_RESOURCE_ID;
     else process.env.SQL_VM_RESOURCE_ID = previousVm;
+  }
+});
+
+test("forwarded Windows records are collapsed by default with a native disclosure", async () => {
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/admin/index.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(
+    page,
+    /<details id="audit-event-records">\s*<summary><h3>Forwarded Windows event records<\/h3><\/summary>/,
+  );
+  assert.doesNotMatch(
+    page,
+    /<details[^>]*id="audit-event-records"[^>]*\bopen\b/,
+  );
+  assert.match(page, /#audit-event-records > summary h3 \{ display: inline;/);
+  assert.match(
+    page,
+    /<\/details>\s*\)\}\s*\{auditConfigured && !auditError && <RecordPager/,
+  );
+});
+
+test("Windows event filter form and navigation preserve the selected operation", async () => {
+  const read = (path) =>
+    readFile(
+      new URL(`../apps/pawton-manufacturing/src/${path}`, import.meta.url),
+      "utf8",
+    );
+  const admin = await read("pages/admin/index.astro");
+  const pager = await read("components/RecordPager.astro");
+  assert.match(
+    admin,
+    /normalizeAuditFilter\(Astro.url.searchParams.get\('operation'\)\)/,
+  );
+  assert.match(admin, /operation: auditOperation/);
+  assert.match(admin, /<select id="event-operation-filter" name="operation">/);
+  assert.match(admin, /selected=\{auditOperation === filter.value\}/);
+  const form = admin.match(/<form class="event-filter"[\s\S]*?<\/form>/)?.[0];
+  assert.ok(form);
+  assert.match(form, /method="get" action="\/admin#windows-events"/);
+  assert.doesNotMatch(form, /name="record"/);
+  assert.match(form, /name="until" value=\{auditWindowEnd\}/);
+  const refresh = admin.match(
+    /<form class="event-refresh"[\s\S]*?<\/form>/,
+  )?.[0];
+  assert.ok(refresh);
+  assert.match(refresh, /method="get" action="\/admin#windows-events"/);
+  assert.match(refresh, /<button type="submit">Refresh events<\/button>/);
+  assert.match(refresh, /name="operation" value=\{auditOperation\}/);
+  assert.doesNotMatch(refresh, /name="(?:record|until)"/);
+  assert.match(pager, /new URL\(Astro.url\)/);
+  assert.match(
+    pager,
+    /preservedParams.map\(\(\[name, value\]\) => <input type="hidden" name=\{name\} value=\{value\}/,
+  );
+});
+
+test("Windows event operation filters apply before counts and paging with safe defaults", async (context) => {
+  const {
+    getRecentSaAuditEvents,
+    auditOperationFilters,
+    normalizeAuditFilter,
+  } = await import("../apps/pawton-manufacturing/src/lib/auditLog.mjs");
+  const previous = process.env.LOG_ANALYTICS_WORKSPACE_ID;
+  process.env.LOG_ANALYTICS_WORKSPACE_ID =
+    "00000000-0000-0000-0000-000000000000";
+  context.after(() => {
+    if (previous === undefined) delete process.env.LOG_ANALYTICS_WORKSPACE_ID;
+    else process.env.LOG_ANALYTICS_WORKSPACE_ID = previous;
+  });
+  for (const operation of [
+    undefined,
+    'invalid" | take 9999',
+    ...auditOperationFilters.map((filter) => filter.value),
+  ]) {
+    const queries = [];
+    const result = await getRecentSaAuditEvents(30, 25, {
+      operation,
+      record: "999",
+      until: "2026-01-01T12:00:00Z",
+      client: {
+        queryWorkspace: async (_, query) => {
+          queries.push(query);
+          return {
+            status: "Success",
+            tables: [
+              {
+                columnDescriptors: query.endsWith("| count")
+                  ? [{ name: "Count" }]
+                  : [{ name: "EventID" }],
+                rows: query.endsWith("| count") ? [[26]] : [[18456]],
+              },
+            ],
+          };
+        },
+      },
+    });
+    assert.equal(result.total, 26);
+    assert.equal(result.start, 25);
+    const normalized = normalizeAuditFilter(operation);
+    for (const query of queries) {
+      assert.doesNotMatch(query, /take 9999/);
+      if (normalized === "all") assert.doesNotMatch(query, /where Operation/);
+      else {
+        const predicate =
+          normalized === "hide-login-succeeded"
+            ? 'Operation != "Login succeeded"'
+            : `Operation == ${JSON.stringify(normalized)}`;
+        assert.ok(query.includes(predicate));
+        assert.ok(
+          query.indexOf(predicate) <
+            query.indexOf(query.endsWith("| count") ? "| count" : "| order by"),
+        );
+        assert.ok(query.includes(String.raw`(?:^|\s)action_id:`));
+        assert.ok(query.includes(String.raw`(?:^|\s)statement:`));
+        assert.ok(query.includes("EventID in (18453, 18454)"));
+        assert.match(query, /isnotempty\(extract\(/);
+        assert.doesNotMatch(query, /matches regex/);
+        assert.ok(
+          query.indexOf('"Login enabled"') < query.indexOf('"Login succeeded"'),
+        );
+      }
+    }
   }
 });
 

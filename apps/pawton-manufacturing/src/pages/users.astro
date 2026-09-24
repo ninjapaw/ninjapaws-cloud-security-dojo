@@ -12,7 +12,6 @@ let unavailable = false;
 if (authenticated) {
   try { logins = await listSqlLogins(); } catch { unavailable = true; }
 }
-const builtIn = logins.find((login) => login.isBuiltInAdmin);
 const password = authenticated ? Astro.cookies.get(ROTATED_SECRET_COOKIE_NAME)?.value : null;
 if (password) Astro.cookies.delete(ROTATED_SECRET_COOKIE_NAME, { path: '/' });
 const messages: Record<string, string> = {
@@ -36,37 +35,32 @@ const vaultConfigured = isAdminSecretsConfigured();
     {Astro.url.searchParams.has('error') && <div class="danger" role="alert">The administrator operation failed. Verify SQL and Key Vault state before retrying; a partial change may have occurred.</div>}
     {password && <div class="warn"><strong>New password, shown once:</strong> <code>{password}</code></div>}
     {unavailable && <div class="warn">SQL login inventory is unavailable. Check the configured admin connection and permissions.</div>}
-    {builtIn && <section class="section">
-      <div class="section-header"><h2>Built-in administrator</h2><span class="badge">SID 0x01</span></div>
-      <div class="grid">
-        <div class="card"><div class="label">Current name</div><div class="value">{builtIn.name}</div></div>
-        <div class="card"><div class="label">Login state</div><div class="value">{builtIn.is_disabled ? 'Disabled' : 'Enabled'}</div></div>
-      </div>
-      <p>Identified by SID even after rename. Blank passwords are never allowed. Rename and rotation synchronize with Key Vault.</p>
-      <div class="actions">
-        <form method="post" action={`/api/admin/sa/${builtIn.is_disabled ? 'enable' : 'disable'}`}>
-          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm state change</label>
-          <button type="submit" class="secondary">{builtIn.is_disabled ? 'Enable login' : 'Disable login'}</button>
-        </form>
-        <form method="post" action="/api/admin/sa/rotate">
-          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm password rotation</label>
-          <button type="submit" disabled={!vaultConfigured}>Rotate password</button>
-        </form>
-        <form class="stack" method="post" action="/api/admin/sa/rename">
-          <label>New login name<input type="text" name="newUsername" pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" required /></label>
-          <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm rename</label>
-          <button type="submit" class="secondary" disabled={!vaultConfigured}>Rename login</button>
-        </form>
-      </div>
-      {!vaultConfigured && <p class="warn">Key Vault is not configured. Rename and rotation are unavailable.</p>}
-    </section>}
     <section class="section"><div class="section-header"><h2>Server login inventory</h2><span>{logins.length} identities</span></div>
       <div class="table-shell" id="login-records" tabindex="0" role="region" aria-label="SQL login inventory"><table>
         <thead><tr><th scope="col">Login</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Management</th></tr></thead>
         <tbody>{logins.map((login, index) => {
           const restriction = loginRestriction(login);
-          return <tr data-record hidden={index >= 25}><td>{login.name}</td><td>{login.type_desc.replaceAll('_', ' ')}</td><td>{login.is_disabled ? 'Disabled' : 'Enabled'}</td><td>
-            {restriction ? <span>{restriction}</span> : <form class="row-actions" method="post" action="/api/admin/users/action">
+          return <tr data-record hidden={index >= 25}><td>{login.name}{login.isBuiltInAdmin && <span class="built-in-label">Built-in administrator (SID 0x01)</span>}</td><td>{login.type_desc.replaceAll('_', ' ')}</td><td>{login.is_disabled ? 'Disabled' : 'Enabled'}</td><td>
+            {login.isBuiltInAdmin ? <div class="built-in-management">
+              <div class="built-in-actions">
+                <form method="post" action={`/api/admin/sa/${login.is_disabled ? 'enable' : 'disable'}`}>
+                  <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm state change</label>
+                  <button type="submit" class="secondary">{login.is_disabled ? 'Enable login' : 'Disable login'}</button>
+                </form>
+                <form method="post" action="/api/admin/sa/rotate">
+                  <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!vaultConfigured} />Confirm password rotation</label>
+                  <button type="submit" disabled={!vaultConfigured}>Rotate password</button>
+                </form>
+                <button type="button" class="secondary" data-rename-toggle aria-expanded="false" aria-controls={`rename-login-${login.principal_id}`} disabled={!vaultConfigured}>Rename login</button>
+              </div>
+              <form class="rename-form" id={`rename-login-${login.principal_id}`} method="post" action="/api/admin/sa/rename" hidden>
+                <label>New login name<input type="text" name="newUsername" pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" required disabled={!vaultConfigured} /></label>
+                <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!vaultConfigured} />Confirm rename</label>
+                <button type="submit" class="secondary" disabled={!vaultConfigured}>Apply rename</button>
+              </form>
+              {!vaultConfigured && <p class="warn">Key Vault is not configured. Rename and rotation are unavailable.</p>}
+            </div> : restriction ? <span>{restriction}</span> : <div>
+            <form class="row-actions" method="post" action="/api/admin/users/action">
               <input type="hidden" name="principalId" value={login.principal_id} />
               <label>Action for {login.name}<select name="action">
                 <option value={login.is_disabled ? 'enable' : 'disable'}>{login.is_disabled ? 'Enable' : 'Disable'}</option>
@@ -74,7 +68,16 @@ const vaultConfigured = isAdminSecretsConfigured();
                 {process.env.ALLOW_DEMO_BLANK_PASSWORDS === 'true' && /^dojo_demo_[a-z0-9_]+$/i.test(login.name) && <option value="clear">Clear password (isolated demo only)</option>}
               </select></label>
               <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm change</label><button type="submit">Apply</button>
-            </form>}
+            </form>
+            <button type="button" class="secondary" data-rename-toggle aria-expanded="false" aria-controls={`rename-login-${login.principal_id}`}>Rename login</button>
+            <form class="rename-form" id={`rename-login-${login.principal_id}`} method="post" action="/api/admin/users/action" hidden>
+              <input type="hidden" name="principalId" value={login.principal_id} />
+              <input type="hidden" name="action" value="rename" />
+              <label>New login name<input type="text" name="newUsername" pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" maxlength="128" required /></label>
+              <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required />Confirm rename</label>
+              <button type="submit" class="secondary">Apply rename</button>
+            </form>
+            </div>}
           </td></tr>;
         })}</tbody>
       </table></div>
@@ -88,3 +91,23 @@ const vaultConfigured = isAdminSecretsConfigured();
     </section>
   </>}
 </Layout>
+
+<style>
+  .built-in-label { display: block; font-size: 12px; margin-top: 0.35rem; }
+  .built-in-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 0.75rem; }
+  .built-in-actions form { display: grid; gap: 0.5rem; margin: 0; }
+  .rename-form { display: grid; gap: 0.75rem; margin-top: 1rem; max-width: 320px; }
+  .rename-form[hidden] { display: none; }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('[data-rename-toggle]').forEach(button => {
+    button.addEventListener('click', () => {
+      const form = document.getElementById(button.getAttribute('aria-controls')!);
+      if (!form) return;
+      form.hidden = !form.hidden;
+      button.setAttribute('aria-expanded', String(!form.hidden));
+      if (!form.hidden) form.querySelector<HTMLInputElement>('input[name="newUsername"]')?.focus();
+    });
+  });
+</script>

@@ -96,9 +96,27 @@ test("one Login entry point serves both roles and keeps orders protected", async
       "utf8",
     );
   const login = await readPage("pages/login.astro");
+  const legacy = await readPage("pages/admin/login.astro");
   const list = await readPage("pages/orders/index.astro");
   const layout = await readPage("layouts/Layout.astro");
   assert.match(login, /<h1>Login<\/h1>/);
+  assert.equal((login.match(/<form\b/g) ?? []).length, 1);
+  assert.match(login, /method="post" action="\/api\/user\/login"/);
+  assert.match(
+    login,
+    /name="username" autocomplete="username" maxlength="100" required disabled=\{!configured\}/,
+  );
+  assert.match(
+    login,
+    /name="password" autocomplete="current-password" maxlength="1024" required disabled=\{!configured\}/,
+  );
+  assert.match(
+    login,
+    /isUserLoginConfigured\(\) \|\| isAdminPortalConfigured\(\)/,
+  );
+  assert.match(login, /role="alert"/);
+  assert.match(legacy, /encodeURIComponent\(error\)/);
+  assert.doesNotMatch(legacy, /<form\b/);
   assert.match(login, /Astro.redirect\('\/admin'\)/);
   assert.match(login, /Astro.redirect\('\/orders'\)/);
   assert.match(list, /if \(!username\) return Astro.redirect\('\/login'\)/);
@@ -138,33 +156,47 @@ function configure(context) {
     },
   };
 }
-test("shared login issues only the matching role's session and rejects invalid requests", async (context) => {
-  configure(context);
-  assert.equal(legacyLoginPost, loginPost);
-  async function submit(username, password, options = {}) {
-    const values = new Map();
-    const deleted = [];
-    const cookies = {
-      get: (name) => values.get(name),
-      set: (name, value, settings) => values.set(name, { value, settings }),
-      delete: (name) => deleted.push(name),
-    };
-    const request = new Request("https://portal.example/api/user/login", {
+async function submitLogin(username, password, options = {}) {
+  const values = new Map(options.initialCookies ?? []);
+  const deleted = [];
+  const saved = [];
+  const cookies = {
+    get: (name) => values.get(name),
+    set: (name, value, settings) => {
+      saved.push(name);
+      values.set(name, { value, settings });
+    },
+    delete: (name) => {
+      deleted.push(name);
+      values.delete(name);
+    },
+  };
+  const request = new Request(
+    `https://portal.example${options.path ?? "/api/user/login"}`,
+    {
       method: "POST",
       headers: {
-        Origin: options.origin ?? "https://portal.example",
+        ...(options.origin === null
+          ? {}
+          : { Origin: options.origin ?? "https://portal.example" }),
         "X-Forwarded-For": options.client ?? randomUUID(),
       },
       body: options.body ?? new URLSearchParams({ username, password }),
-    });
-    const response = await loginPost({
-      request,
-      cookies,
-      redirect: (location, status) =>
-        new Response(null, { status, headers: { Location: location } }),
-    });
-    return { response, cookies, values, deleted };
-  }
+    },
+  );
+  const response = await (options.handler ?? loginPost)({
+    request,
+    cookies,
+    redirect: (location, status) =>
+      new Response(null, { status, headers: { Location: location } }),
+  });
+  return { response, cookies, values, deleted, saved };
+}
+
+test("shared login issues only the matching role's session and rejects invalid requests", async (context) => {
+  configure(context);
+  assert.equal(legacyLoginPost, loginPost);
+  const submit = submitLogin;
   for (const [username, password, destination, cookie] of [
     ["staff-test", "test-only", "/orders", USER_SESSION_COOKIE],
     ["admin-test", "admin-only", "/admin", SESSION_COOKIE_NAME],
@@ -245,6 +277,216 @@ test("shared login issues only the matching role's session and rejects invalid r
     (await submit("admin-test", "admin-only")).response.headers.get("location"),
     "/login?error=invalid",
   );
+});
+
+test("switching login roles removes existing sessions and rotated-secret cookies", async (context) => {
+  configure(context);
+  for (const [username, password, cookieName] of [
+    ["staff-test", "test-only", USER_SESSION_COOKIE],
+    ["admin-test", "admin-only", SESSION_COOKIE_NAME],
+  ]) {
+    const initialCookies = [
+      [USER_SESSION_COOKIE, { value: createUserSession() }],
+      [SESSION_COOKIE_NAME, { value: createSessionToken() }],
+      [ROTATED_SECRET_COOKIE_NAME, { value: "test-only-rotated-value" }],
+    ];
+    const result = await submitLogin(username, password, { initialCookies });
+    assert.equal(result.response.status, 303);
+    assert.deepEqual([...result.values.keys()], [cookieName]);
+    assert.notEqual(
+      result.values.get(cookieName).value,
+      new Map(initialCookies).get(cookieName).value,
+    );
+    assert.deepEqual(result.values.get(cookieName).settings, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+      path: "/",
+      maxAge: 900,
+    });
+  }
+});
+
+test("both login endpoints reject malformed or invalid requests without changing sessions", async (context) => {
+  configure(context);
+  const initialCookies = [
+    [USER_SESSION_COOKIE, { value: createUserSession() }],
+  ];
+  for (const [handler, path] of [
+    [loginPost, "/api/user/login"],
+    [legacyLoginPost, "/api/admin/login"],
+  ]) {
+    for (const [username, password, options, status] of [
+      ["staff-test", "test-only", { origin: null }, 403],
+      ["staff-test", "test-only", { origin: "null" }, 403],
+      [
+        "staff-test",
+        "test-only",
+        { origin: "https://portal.example.evil.test" },
+        403,
+      ],
+      ["staff-test", "test-only", { origin: "http://portal.example" }, 403],
+      ["staff-test", "test-only", { body: "invalid-form" }, 400],
+      ["", "", { body: new URLSearchParams() }, 303],
+      ["x".repeat(101), "test-only", {}, 303],
+      ["staff-test", "x".repeat(1025), {}, 303],
+      ["staff-test", "admin-only", {}, 303],
+      ["admin-test", "test-only", {}, 303],
+      ["unknown", "admin-only", {}, 303],
+    ]) {
+      const result = await submitLogin(username, password, {
+        ...options,
+        initialCookies,
+        handler,
+        path,
+      });
+      assert.equal(result.response.status, status);
+      if (status === 303)
+        assert.equal(
+          result.response.headers.get("location"),
+          "/login?error=invalid",
+        );
+      assert.deepEqual([...result.values], initialCookies);
+      assert.deepEqual(result.deleted, []);
+      assert.deepEqual(result.saved, []);
+    }
+  }
+});
+
+test("each role requires all of its configuration without disabling the other role", async (context) => {
+  configure(context);
+  for (const prefix of ["USER", "ADMIN"]) {
+    for (const suffix of [
+      "PORTAL_USERNAME",
+      "PORTAL_PASSWORD",
+      "SESSION_SECRET",
+    ]) {
+      const key = `${prefix}_${suffix}`;
+      const original = process.env[key];
+      for (const missing of [undefined, ""]) {
+        if (missing === undefined) delete process.env[key];
+        else process.env[key] = missing;
+        for (const [role, username, password, destination] of [
+          ["USER", "staff-test", "test-only", "/orders"],
+          ["ADMIN", "admin-test", "admin-only", "/admin"],
+        ]) {
+          const result = await submitLogin(username, password);
+          assert.equal(
+            result.response.headers.get("location"),
+            role === prefix ? "/login?error=invalid" : destination,
+            key,
+          );
+          assert.equal(result.saved.length, role === prefix ? 0 : 1);
+        }
+      }
+      process.env[key] = original;
+    }
+  }
+});
+
+test("login throttling is shared across endpoints and resets on success or window expiry", async (context) => {
+  configure(context);
+  let now = Date.now();
+  context.mock.method(Date, "now", () => now);
+  const client = randomUUID();
+  const legacy = { handler: legacyLoginPost, path: "/api/admin/login", client };
+  const failure = () => submitLogin("admin-test", "wrong", legacy);
+  for (let attempt = 0; attempt < 4; attempt++) await failure();
+  assert.equal(
+    (
+      await submitLogin("staff-test", "test-only", { client })
+    ).response.headers.get("location"),
+    "/orders",
+  );
+  for (let attempt = 0; attempt < 4; attempt++) await failure();
+  assert.equal(
+    (
+      await submitLogin("admin-test", "admin-only", legacy)
+    ).response.headers.get("location"),
+    "/admin",
+  );
+  for (let attempt = 0; attempt < 5; attempt++) await failure();
+  now += 899999;
+  for (const options of [{ client }, legacy]) {
+    const result = await submitLogin("admin-test", "admin-only", options);
+    assert.equal(
+      result.response.headers.get("location"),
+      "/login?error=ratelimited",
+    );
+    assert.deepEqual(result.saved, []);
+  }
+  assert.equal(
+    (await submitLogin("admin-test", "admin-only")).response.headers.get(
+      "location",
+    ),
+    "/admin",
+  );
+  now += 1;
+  assert.equal(
+    (
+      await submitLogin("admin-test", "admin-only", legacy)
+    ).response.headers.get("location"),
+    "/admin",
+  );
+});
+
+test("both login routes accept credential length limits and distinguish equal usernames by password", async (context) => {
+  configure(context);
+  process.env.USER_PORTAL_USERNAME = "account".padEnd(100, "x");
+  process.env.ADMIN_PORTAL_USERNAME = process.env.USER_PORTAL_USERNAME;
+  process.env.USER_PORTAL_PASSWORD = "manager".padEnd(1024, "x");
+  process.env.ADMIN_PORTAL_PASSWORD = "admin".padEnd(1024, "x");
+  for (const options of [
+    {},
+    { handler: legacyLoginPost, path: "/api/admin/login" },
+  ]) {
+    for (const [password, destination] of [
+      [process.env.USER_PORTAL_PASSWORD, "/orders"],
+      [process.env.ADMIN_PORTAL_PASSWORD, "/admin"],
+    ]) {
+      const result = await submitLogin(
+        process.env.USER_PORTAL_USERNAME,
+        password,
+        options,
+      );
+      assert.equal(result.response.status, 303);
+      assert.equal(result.response.headers.get("location"), destination);
+      assert.equal(result.saved.length, 1);
+    }
+  }
+});
+
+test("sessions issued through shared login expire at fifteen minutes and reject tampering or key rotation", async (context) => {
+  configure(context);
+  const issuedAt = Math.floor(Date.now() / 1000) * 1000;
+  let now = issuedAt;
+  context.mock.method(Date, "now", () => now);
+  const manager = await submitLogin("staff-test", "test-only");
+  const admin = await submitLogin("admin-test", "admin-only");
+  const managerToken = manager.values.get(USER_SESSION_COOKIE).value;
+  const adminToken = admin.values.get(SESSION_COOKIE_NAME).value;
+  now = issuedAt + 899000;
+  assert.equal(getUser(manager.cookies), "staff-test");
+  assert.equal(verifySessionToken(adminToken), true);
+  now = issuedAt + 900000;
+  assert.equal(getUser(manager.cookies), null);
+  assert.equal(verifySessionToken(adminToken), false);
+  now = issuedAt;
+  for (const token of [managerToken, adminToken]) {
+    const parts = token.split(".");
+    const payload = JSON.parse(
+      Buffer.from(parts[0], "base64url").toString("utf8"),
+    );
+    payload.exp += 3600;
+    const tampered = `${Buffer.from(JSON.stringify(payload)).toString("base64url")}.${parts[1]}`;
+    assert.equal(getUser({ get: () => ({ value: tampered }) }), null);
+    assert.equal(verifySessionToken(tampered), false);
+  }
+  process.env.USER_SESSION_SECRET = "rotated-manager-test-key";
+  assert.equal(getUser(manager.cookies), null);
+  assert.equal(verifySessionToken(adminToken), true);
+  process.env.ADMIN_SESSION_SECRET = "rotated-admin-test-key";
+  assert.equal(verifySessionToken(adminToken), false);
 });
 
 function mockSql(context, handler) {

@@ -213,7 +213,7 @@ export function loginRestriction(login, environment = process.env) {
 }
 
 export function validateLoginAction(login, action, environment = process.env) {
-  if (!["enable", "disable", "rotate", "clear"].includes(action))
+  if (!["enable", "disable", "rotate", "clear", "rename"].includes(action))
     throw new Error("Unsupported login action.");
   const restriction = loginRestriction(login, environment);
   if (restriction) throw new Error(restriction);
@@ -228,8 +228,8 @@ export function validateLoginAction(login, action, environment = process.env) {
   }
 }
 
-export async function listSqlLogins() {
-  const pool = await getAdminPool();
+export async function listSqlLogins(pool = null) {
+  pool ??= await getAdminPool();
   const result = await pool.request().query(`
     SELECT principal_id, name, type_desc, is_disabled,
       CAST(CASE WHEN sid = 0x01 THEN 1 ELSE 0 END AS bit) AS isBuiltInAdmin,
@@ -242,15 +242,41 @@ export async function listSqlLogins() {
   return result.recordset;
 }
 
-export async function changeSqlLogin(principalId, action, password) {
+export async function changeSqlLogin(
+  principalId,
+  action,
+  password,
+  newUsername = "",
+  getPool = getAdminPool,
+) {
   if (!Number.isSafeInteger(principalId) || principalId < 1)
     throw new Error("Invalid login identifier.");
-  const pool = await getAdminPool();
-  const login = (await listSqlLogins()).find(
-    (entry) => entry.principal_id === principalId,
-  );
+  const pool = await getPool();
+  const logins = await listSqlLogins(pool);
+  const login = logins.find((entry) => entry.principal_id === principalId);
   if (!login) throw new Error("Login no longer exists.");
   validateLoginAction(login, action);
+  if (action === "rename") {
+    const name = String(newUsername).trim();
+    const newIdentifier = quoteIdentifier(name);
+    const restriction = loginRestriction({ ...login, name });
+    if (restriction) throw new Error(restriction);
+    if (
+      logins.some(
+        (entry) =>
+          entry.principal_id !== principalId &&
+          entry.name.toLowerCase() === name.toLowerCase(),
+      )
+    )
+      throw new Error("A login with that name already exists.");
+    if (login.name !== name)
+      await pool
+        .request()
+        .query(
+          `ALTER LOGIN ${quoteIdentifier(login.name)} WITH NAME = ${newIdentifier};`,
+        );
+    return name;
+  }
   if (action === "clear") {
     const unavailable = await pool
       .request()

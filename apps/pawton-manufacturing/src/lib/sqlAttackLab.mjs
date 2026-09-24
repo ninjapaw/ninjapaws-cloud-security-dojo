@@ -95,6 +95,13 @@ export function createSqlAttackRunner({
 } = {}) {
   let running = false;
   let nextRunAt = 0;
+  const configuredCooldown = Number(environment.SQL_ATTACK_COOLDOWN_SECONDS);
+  const cooldownSeconds =
+    Number.isInteger(configuredCooldown) &&
+    configuredCooldown >= 1 &&
+    configuredCooldown <= 3600
+      ? configuredCooldown
+      : 60;
 
   function checkEnabled() {
     if (environment.ENABLE_SQL_DEMO_ACTIONS === "false")
@@ -142,7 +149,7 @@ export function createSqlAttackRunner({
     checkEnabled();
     if (running || now() < nextRunAt)
       throw new SimulationError(
-        "Another SQL lab test is running or cooling down. Wait 60 seconds.",
+        `Another SQL lab test is running or cooling down. Wait ${cooldownSeconds} seconds.`,
         429,
       );
     const config = connectionConfig(environment, privilegedScenarios.has(id));
@@ -150,7 +157,7 @@ export function createSqlAttackRunner({
     const marker = `dojo-attack-test:${id}:${runId}`;
     const startedAt = new Date(now()).toISOString();
     running = true;
-    nextRunAt = now() + 60_000;
+    nextRunAt = now() + cooldownSeconds * 1000;
     try {
       let detail;
       if (id === "brute-force") {
@@ -262,7 +269,7 @@ END CATCH`;
         scenario: id,
         state: detail?.blocked ? "blocked" : "executed",
         alertConfirmed: false,
-        outcome: `${detail?.detail || detail} Defender alert generation is not guaranteed; verify the configured VM's Defender alerts separately.`,
+        outcome: `${detail?.blocked ? "Attack test blocked." : "Attack test completed successfully."} ${detail?.detail || detail} Defender alert generation is not guaranteed; verify the configured VM's Defender alerts separately.`,
       };
     } catch (error) {
       if (error instanceof SimulationError) throw error;

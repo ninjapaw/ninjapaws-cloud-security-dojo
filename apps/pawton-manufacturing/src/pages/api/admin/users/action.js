@@ -16,7 +16,12 @@ export async function POST({ request, cookies, redirect }) {
   try {
     if (action === "create-demo") await createDemoLogin(password);
     else
-      await changeSqlLogin(Number(form.get("principalId")), action, password);
+      await changeSqlLogin(
+        Number(form.get("principalId")),
+        action,
+        password,
+        String(form.get("newUsername") ?? ""),
+      );
     if (action === "rotate" || action === "create-demo") {
       cookies.set(ROTATED_SECRET_COOKIE_NAME, password, {
         httpOnly: true,

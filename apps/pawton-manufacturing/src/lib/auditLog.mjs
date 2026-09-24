@@ -42,29 +42,78 @@ function extractField(renderedDescription, fieldName) {
   return raw.length > 0 ? raw : null;
 }
 
+const operationRules = [
+  { label: "Login enabled", action: "LGEA" },
+  { label: "Login disabled", action: "LGDA" },
+  { label: "Login password changed", action: "PWR" },
+  { label: "Audit configuration changed", action: "AUSC" },
+  {
+    label: "Login enabled",
+    pattern: /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+ENABLE\b/i,
+  },
+  {
+    label: "Login disabled",
+    pattern: /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+DISABLE\b/i,
+  },
+  {
+    label: "Login password changed",
+    pattern: /^ALTER\s+LOGIN\s+.*?\s+WITH\s+PASSWORD\b/i,
+  },
+  { label: "Login renamed", pattern: /^ALTER\s+LOGIN\s+.*?\s+WITH\s+NAME\b/i },
+  {
+    label: "Audit configuration changed",
+    pattern: /^(CREATE|ALTER|DROP)\s+(SERVER|DATABASE)\s+AUDIT\b/i,
+  },
+  { label: "Login succeeded", action: "LGIS", eventIds: [18453, 18454] },
+  { label: "Login failed", action: "LGIF", eventIds: [18456] },
+];
+const otherOperation = "Other SQL audit";
+export const auditOperationFilters = [
+  { value: "hide-login-succeeded", label: "Hide Login succeeded" },
+  { value: "all", label: "All operations" },
+  ...[...new Set(operationRules.map((rule) => rule.label)), otherOperation].map(
+    (label) => ({ value: label, label }),
+  ),
+];
+
+export function normalizeAuditFilter(value) {
+  return auditOperationFilters.some((filter) => filter.value === value)
+    ? value
+    : "hide-login-succeeded";
+}
+
 function getAuditOperation({ ActionId, Statement, EventID }) {
-  if (ActionId === "LGEA") return "Login enabled";
-  if (ActionId === "LGDA") return "Login disabled";
-  if (ActionId === "PWR") return "Login password changed";
-  if (ActionId === "AUSC") return "Audit configuration changed";
-  if (
-    /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+ENABLE\b/i.test(Statement)
-  )
-    return "Login enabled";
-  if (
-    /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+DISABLE\b/i.test(Statement)
-  )
-    return "Login disabled";
-  if (/^ALTER\s+LOGIN\s+.*?\s+WITH\s+PASSWORD\b/i.test(Statement))
-    return "Login password changed";
-  if (/^ALTER\s+LOGIN\s+.*?\s+WITH\s+NAME\b/i.test(Statement))
-    return "Login renamed";
-  if (/^(CREATE|ALTER|DROP)\s+(SERVER|DATABASE)\s+AUDIT\b/i.test(Statement))
-    return "Audit configuration changed";
-  if (ActionId === "LGIS" || EventID === 18453 || EventID === 18454)
-    return "Login succeeded";
-  if (ActionId === "LGIF" || EventID === 18456) return "Login failed";
-  return "Other SQL audit";
+  return (
+    operationRules.find(
+      (rule) =>
+        (rule.action && rule.action === ActionId) ||
+        rule.eventIds?.includes(EventID) ||
+        rule.pattern?.test(Statement),
+    )?.label ?? otherOperation
+  );
+}
+
+function operationFilterQuery(value) {
+  const filter = normalizeAuditFilter(value);
+  if (filter === "all") return "";
+  const cases = operationRules.map((rule) => {
+    const conditions = [];
+    if (rule.action)
+      conditions.push(`AuditAction == ${JSON.stringify(rule.action)}`);
+    if (rule.eventIds)
+      conditions.push(`EventID in (${rule.eventIds.join(", ")})`);
+    if (rule.pattern)
+      conditions.push(
+        `isnotempty(extract(${JSON.stringify(`(?i)${rule.pattern.source}`)}, 0, AuditStatement))`,
+      );
+    return `${conditions.join(" or ")}, ${JSON.stringify(rule.label)}`;
+  });
+  return String.raw`
+    | extend AuditAction = trim(@"\s+", extract(@"(?is)(?:^|\s)action_id:(.*?)(?:\s+[a-z_][a-z0-9_]*:|$)", 1, RenderedDescription))
+    | extend AuditStatement = trim(@"\s+", extract(@"(?is)(?:^|\s)statement:(.*?)(?:\s+[a-z_][a-z0-9_]*:|$)", 1, RenderedDescription))
+    | extend Operation = case(${cases.join(", ")}, ${JSON.stringify(otherOperation)})
+    | where Operation ${filter === "hide-login-succeeded" ? `!= "Login succeeded"` : `== ${JSON.stringify(filter)}`}
+  `;
 }
 
 function formatAuditSummary(event) {
@@ -123,13 +172,16 @@ export function parseAuditEvent(event) {
 }
 
 // SQL Server audit records that matter for the admin portal are the server-principal change group
-// and the login audit event stream. Keep KQL deliberately schema-light: the Event table varies
-// slightly between AMA deployments, while the JavaScript parser below can safely handle the raw
-// RenderedDescription field without asking Kusto to evaluate a large set of regex expressions.
+// and the login audit event stream.
 export async function getRecentSaAuditEvents(
   minutesAgo = 15,
   take = 25,
-  { record = "1", until = "", client = null } = {},
+  {
+    record = "1",
+    until = "",
+    operation = "hide-login-succeeded",
+    client = null,
+  } = {},
 ) {
   const minutes =
     Number.isInteger(minutesAgo) && minutesAgo > 0 && minutesAgo <= 1440
@@ -164,6 +216,7 @@ export async function getRecentSaAuditEvents(
     | where EventLog == 'Application'
     | where Source == 'MSSQLSERVER'
     | where EventID in (33205, 18453, 18454, 18456)
+    ${operationFilterQuery(operation)}
     | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription
   `;
   const queryClient = client ?? getClient();

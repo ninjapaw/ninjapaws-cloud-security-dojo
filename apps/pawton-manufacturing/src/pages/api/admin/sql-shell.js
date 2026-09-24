@@ -13,7 +13,7 @@ export async function POST({ request, cookies, redirect }) {
   if (form.get("confirm") !== "yes")
     return new Response("Confirmation required.", { status: 400 });
   const value = form.get("enabled");
-  if (value !== null && value !== "true")
+  if (value !== null && value !== "true" && value !== "false")
     return new Response("Invalid SQL shell setting.", { status: 400 });
   try {
     const result = await setSqlShellEnabled(value === "true");

@@ -4,7 +4,7 @@ import RecordPager from '../../components/RecordPager.astro';
 import { isAuthenticated } from '../../lib/adminAuth.mjs';
 import { getDefenderStatus } from '../../lib/defenderStatus.mjs';
 import { probes, alertReferenceDocs, isSqlDemoActionsEnabled } from '../../lib/securityLab.mjs';
-import { isAuditLogConfigured, getRecentSaAuditEvents } from '../../lib/auditLog.mjs';
+import { isAuditLogConfigured, getRecentSaAuditEvents, auditOperationFilters, normalizeAuditFilter } from '../../lib/auditLog.mjs';
 import { sqlAttackRunner, attackScenarios } from '../../lib/sqlAttackLab.mjs';
 import { getSqlShellStatus } from '../../lib/adminDb.mjs';
 import { formatTimestamp, getPortalTimeZone } from '../../lib/timeZone.mjs';
@@ -36,12 +36,14 @@ let auditError = null;
 let auditTotal = 0;
 let auditStart = 0;
 let auditWindowEnd = '';
+const auditOperation = normalizeAuditFilter(Astro.url.searchParams.get('operation'));
 let auditConfigured = isAuditLogConfigured();
 if (auditConfigured) {
   try {
     const auditResult = await getRecentSaAuditEvents(30, 25, {
       record: Astro.url.searchParams.get('record') ?? '1',
       until: Astro.url.searchParams.get('until') ?? '',
+      operation: auditOperation,
     });
     auditEvents = auditResult.events;
     auditTotal = auditResult.total;
@@ -70,9 +72,8 @@ if (auditConfigured) {
     {sqlShellMessage && <p role="status">{sqlShellMessage}</p>}
     {sqlShellEnabled === null && <p>SQL status could not be read. Setting changes are unavailable until the administrator connection is restored.</p>}
     <form class="stack" method="post" action="/api/admin/sql-shell">
-      <label class="confirmation"><input type="checkbox" role="switch" name="enabled" value="true" checked={sqlShellEnabled === true} disabled={sqlShellEnabled === null} />Enable SQL shell access</label>
       <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={sqlShellEnabled === null} />I authorize this server-wide lab setting change</label>
-      <div class="actions"><button type="submit" disabled={sqlShellEnabled === null}>Apply setting</button></div>
+      <div class="actions"><button type="submit" name="enabled" value={sqlShellEnabled === false ? 'true' : 'false'} disabled={sqlShellEnabled === null}>{sqlShellEnabled === null ? 'SQL shell unavailable' : sqlShellEnabled ? 'Disable SQL shell access' : 'Enable SQL shell access'}</button></div>
     </form>
     <p>Admin changes persist in SQL Server. A subsequent bootstrap run reapplies the deployment variable <code>enableSqlShellAttackTests</code>.</p>
   </section>
@@ -107,6 +108,16 @@ if (auditConfigured) {
   </section>
 
   <h2 id="windows-events">Windows Event confirmation</h2>
+  <form class="event-filter" method="get" action="/admin#windows-events">
+    {auditWindowEnd && <input type="hidden" name="until" value={auditWindowEnd} />}
+    <div class="event-filter-field">
+      <label for="event-operation-filter">Filter</label>
+      <select id="event-operation-filter" name="operation">
+        {auditOperationFilters.map(filter => <option value={filter.value} selected={auditOperation === filter.value}>{filter.label}</option>)}
+      </select>
+    </div>
+    <button type="submit">Apply filter</button>
+  </form>
   {!defender.target.vmId && <div class="warn">No VM scope is configured. These are workspace-wide SQL events and may belong to other machines.</div>}
   <p><a class="pill" href="/admin/auditing">View SQL auditing configuration</a></p>
   <p>
@@ -121,9 +132,13 @@ if (auditConfigured) {
   )}
   {auditError && <div class="warn">Could not query Log Analytics: {auditError}</div>}
   {auditConfigured && !auditError && auditEvents.length === 0 && (
-    <div class="warn">No matching Windows events in this 30-minute window.</div>
+    <div class="warn">No Windows events match this filter in the 30-minute window.</div>
   )}
-  {auditWindowEnd && <p>30-minute window ending {formatTimestamp(auditWindowEnd, portalTimeZone)}. <a href="/admin#windows-events">Refresh events</a></p>}
+  {auditWindowEnd && <form class="event-refresh" method="get" action="/admin#windows-events">
+    <p>30-minute window ending {formatTimestamp(auditWindowEnd, portalTimeZone)}.</p>
+    <input type="hidden" name="operation" value={auditOperation} />
+    <button type="submit">Refresh events</button>
+  </form>}
   {/* Keep a separate Event Viewer-style view so operators can inspect the forwarded Windows record itself. */}
   {auditEvents.length > 0 && (
     <div class="table-shell" tabindex="0" role="region" aria-label="Forwarded audit events"><table id="audit-event-table">
@@ -154,8 +169,8 @@ if (auditConfigured) {
   )}
 
   {auditEvents.length > 0 && (
-    <section id="audit-event-records">
-      <h3>Forwarded Windows event records</h3>
+    <details id="audit-event-records">
+      <summary><h3>Forwarded Windows event records</h3></summary>
       <p>
         These fields mirror the Windows Event Viewer record collected from the SQL VM's Application
         log before forwarding. The raw description is preserved for independent review.
@@ -176,10 +191,20 @@ if (auditConfigured) {
           <pre style="white-space: pre-wrap; word-break: break-word;">{event.RenderedDescription}</pre>
         </details>
       ))}
-    </section>
+    </details>
   )}
   {auditConfigured && !auditError && <RecordPager target="windows-events" total={auditTotal} start={auditStart} windowEnd={auditWindowEnd} server />}
 </Layout>
+
+<style>
+  .event-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-block: 1rem; }
+  .event-refresh p { margin: 0; }
+  #audit-event-records > summary { padding-block: 0.75rem; }
+  #audit-event-records > summary h3 { display: inline; margin: 0; }
+  .event-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 0.75rem; margin-block: 1rem; }
+  .event-filter-field { display: grid; gap: 0.35rem; min-width: 0; max-width: 100%; }
+  .event-filter select { width: 270px; max-width: 100%; min-height: 38px; }
+</style>
 
 <script>
   document.querySelectorAll<HTMLFormElement>('.probe-form, .simulation-sample-form, .defender-simulation-form').forEach((form) => {
