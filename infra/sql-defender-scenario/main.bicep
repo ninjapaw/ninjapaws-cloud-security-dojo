@@ -892,7 +892,7 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
         }
         {
           name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: '~22'
+          value: '~24'
         }
         {
           // Oryx's zipped node_modules (tar.zst) extraction plus CA cert sync on first boot

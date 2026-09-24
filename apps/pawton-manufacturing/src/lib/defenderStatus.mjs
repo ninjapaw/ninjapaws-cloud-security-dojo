@@ -111,3 +111,151 @@ export async function getDefenderStatus() {
     observations: [...observations, extension],
   };
 }
+
+const attackAlertTypes = {
+  "brute-force": /^SQL\.VM_BruteForce$/i,
+  "suspicious-app": /^SQL\.VM_HarmfulApplication$/i,
+  "sql-injection": /^SQL\.VM_.*SqlInjection$/i,
+  "principal-anomaly": /^SQL\.VM_PrincipalAnomaly$/i,
+  "external-source": /^SQL\.VM_ShellExternalSourceAnomaly$/i,
+  "obfuscated-shell": /^SQL\.VM_PotentialSqlInjection$/i,
+};
+
+export async function getRunDefenderEvidence(
+  run,
+  { environment = process.env, read = armRead, now = Date.now } = {},
+) {
+  const target = defenderTarget(environment);
+  const result = {
+    checkedAt: new Date(now()).toISOString(),
+    state: "unavailable",
+    alerts: [],
+    blocking:
+      "Not confirmed. Alert presence or lifecycle status does not prove Defender blocked execution.",
+    portal: target.portal,
+    detail: "A configured SQL VM and a valid recorded run are required.",
+  };
+  const started = Date.parse(run?.startedAt);
+  const completed = Date.parse(run?.completedAt);
+  if (
+    !target.vmId ||
+    !attackAlertTypes[run?.scenario] ||
+    !Number.isFinite(started) ||
+    !Number.isFinite(completed)
+  )
+    return result;
+  const groupScope = target.vmId.split(/\/providers\//i)[0];
+  const path = `${groupScope}/providers/Microsoft.Security/alerts`;
+  const sqlVmId = target.vmId.replace(
+    /Microsoft\.Compute\/virtualMachines/i,
+    "Microsoft.SqlVirtualMachine/sqlVirtualMachines",
+  );
+  const resourceIds = [target.vmId, sqlVmId].map((value) =>
+    value.toLowerCase(),
+  );
+  let next = `${path}?api-version=2022-01-01`;
+  try {
+    for (let page = 0; next && page < 5; page++) {
+      const data = await read(next);
+      if (!Array.isArray(data.value))
+        throw new Error("Invalid alert response.");
+      for (const entry of data.value) {
+        const properties = entry.properties || {};
+        if (/sentinel/i.test(properties.productName || "")) continue;
+        if (
+          !properties.resourceIdentifiers?.some((resource) =>
+            resourceIds.includes(
+              String(resource.azureResourceId || "").toLowerCase(),
+            ),
+          )
+        )
+          continue;
+        const first = Date.parse(properties.startTimeUtc);
+        const last = Date.parse(
+          properties.endTimeUtc || properties.startTimeUtc,
+        );
+        if (
+          !Number.isFinite(first) ||
+          !Number.isFinite(last) ||
+          first > completed + 120000 ||
+          last < started - 120000
+        )
+          continue;
+        const evidence = JSON.stringify([
+          properties.description,
+          properties.entities,
+          properties.extendedProperties,
+          properties.supportingEvidence,
+        ]);
+        const correlated = [run.marker, run.correlationIdentity].some(
+          (value) => value && evidence.includes(value),
+        );
+        if (
+          !correlated &&
+          !attackAlertTypes[run.scenario].test(properties.alertType || "")
+        )
+          continue;
+        let portal = result.portal;
+        try {
+          const link = new URL(properties.alertUri);
+          if (
+            link.protocol === "https:" &&
+            link.hostname === "portal.azure.com" &&
+            !link.username &&
+            !link.password
+          )
+            portal = link.href;
+        } catch {}
+        result.alerts.push({
+          id: String(properties.systemAlertId || entry.name || ""),
+          title: String(
+            properties.alertDisplayName ||
+              properties.alertType ||
+              "Defender alert",
+          ),
+          type: String(properties.alertType || "Unknown"),
+          severity: String(properties.severity || "Unknown"),
+          status: String(properties.status || "Unknown"),
+          startedAt: properties.startTimeUtc,
+          correlation: correlated
+            ? "Run marker or test identity matched"
+            : "VM, activity window and alert family only; attribution unconfirmed",
+          correlated,
+          portal,
+        });
+      }
+      next = null;
+      if (data.nextLink) {
+        const link = new URL(data.nextLink, "https://management.azure.com");
+        if (
+          link.origin !== "https://management.azure.com" ||
+          link.username ||
+          link.password ||
+          link.pathname.toLowerCase() !== path.toLowerCase()
+        )
+          throw new Error("Invalid alert continuation.");
+        next = `${link.pathname}${link.search}`;
+      }
+    }
+    result.state = next
+      ? "partial"
+      : result.alerts.some((alert) => alert.correlated)
+        ? "correlated"
+        : result.alerts.length
+          ? "possible"
+          : "none-yet";
+    result.detail = next
+      ? "Partial results: the five-page lookup limit was reached. Review Defender for the complete list."
+      : result.alerts.length
+        ? "Review alert evidence below. Time and family matches alone do not prove this run caused an alert."
+        : "No matching Defender alerts returned yet. Detection and ingestion can be delayed; this does not prove no detection or that the machine is unprotected.";
+    return result;
+  } catch {
+    return {
+      ...result,
+      state: "unavailable",
+      detail:
+        "Defender alerts could not be fully read. Check managed-identity Security Reader access and Azure connectivity; no negative detection verdict is available.",
+    };
+  }
+}

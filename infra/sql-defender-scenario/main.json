@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10982974967748889999"
+      "templateHash": "15127511319572044963"
     }
   },
   "parameters": {
@@ -946,7 +946,7 @@
             },
             {
               "name": "WEBSITE_NODE_DEFAULT_VERSION",
-              "value": "~22"
+              "value": "~24"
             },
             {
               "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",

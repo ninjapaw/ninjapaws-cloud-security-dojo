@@ -1,4 +1,8 @@
-import { authorizeAdminMutation } from "../../../lib/adminAuth.mjs";
+import {
+  authorizeAdminMutation,
+  isAuthenticated,
+} from "../../../lib/adminAuth.mjs";
+import { getRunDefenderEvidence } from "../../../lib/defenderStatus.mjs";
 import {
   sqlAttackRunner,
   SimulationError,
@@ -30,6 +34,7 @@ export async function POST({ request, cookies }) {
   } catch (error) {
     return Response.json(
       {
+        run: error instanceof SimulationError ? error.run : undefined,
         error:
           error instanceof SimulationError
             ? error.message
@@ -41,4 +46,32 @@ export async function POST({ request, cookies }) {
       },
     );
   }
+}
+
+export async function GET({ request, cookies }) {
+  const headers = { "Cache-Control": "no-store" };
+  if (!isAuthenticated(cookies))
+    return Response.json(
+      { error: "Authentication required." },
+      { status: 401, headers },
+    );
+  const runId = new URL(request.url).searchParams.get("runId") || "";
+  if (!/^[a-f0-9-]{36}$/i.test(runId))
+    return Response.json(
+      { error: "Invalid run identifier." },
+      { status: 400, headers },
+    );
+  const run = sqlAttackRunner.getRun(runId);
+  if (!run)
+    return Response.json(
+      {
+        error:
+          "Run unavailable or expired. Records are retained for up to 24 hours (50 runs) and reset when the app restarts.",
+      },
+      { status: 404, headers },
+    );
+  return Response.json(
+    { run, evidence: await getRunDefenderEvidence(run) },
+    { headers },
+  );
 }

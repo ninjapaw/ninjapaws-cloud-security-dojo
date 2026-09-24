@@ -31,6 +31,47 @@ import {
   setSqlShellEnabled,
 } from "../apps/pawton-manufacturing/src/lib/adminDb.mjs";
 
+test("every attack scenario explains its purpose, bounded steps, and expected outcome", async () => {
+  const { attackScenarios } =
+    await import("../apps/pawton-manufacturing/src/lib/sqlAttackLab.mjs");
+  assert.equal(attackScenarios.length, 6);
+  for (const scenario of attackScenarios) {
+    assert.ok(scenario.about.length > 50);
+    assert.equal(scenario.steps.length, 3);
+    assert.ok(scenario.steps.every((step) => step.length > 20));
+    assert.ok(scenario.expected.length > 50);
+    for (const field of ["path", "waf", "prevention", "detection"]) {
+      assert.ok(
+        scenario.boundary[field].length > 70,
+        `${scenario.id}: ${field}`,
+      );
+    }
+  }
+  const injection = attackScenarios.find(
+    (scenario) => scenario.id === "sql-injection",
+  );
+  assert.match(injection.boundary.waf, /WAF can detect.*block/);
+  assert.match(injection.boundary.waf, /not proof.*bypassed/);
+  assert.match(injection.boundary.prevention, /Parameterized queries/);
+  const external = attackScenarios.find(
+    (scenario) => scenario.id === "external-source",
+  );
+  assert.match(
+    external.boundary.prevention,
+    /cannot validate an outbound-network block/,
+  );
+  const page = await readFile(
+    new URL(
+      "../apps/pawton-manufacturing/src/pages/admin/index.astro",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  for (const field of ["path", "waf", "prevention", "detection"]) {
+    assert.ok(page.includes(`{scenario.boundary.${field}}`));
+  }
+});
+
 test("auditing page shares a generic preview-first SQL template with its download", async () => {
   const root = new URL("../apps/pawton-manufacturing/", import.meta.url);
   const template = await readFile(
@@ -691,6 +732,10 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   for (const { id } of attackScenarios) {
     const result = await runner.run(id);
     assert.equal(result.alertConfirmed, false);
+    assert.equal(runner.getRun(result.runId), result);
+    assert.equal(result.completedAt, new Date(clock).toISOString());
+    assert.match(result.marker, /^dojo-attack-test:/);
+    assert.match(result.defenderBlocking, /Not confirmed/);
     assert.match(
       result.outcome,
       result.state === "blocked"
@@ -746,6 +791,129 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   await assert.rejects(runner.run("brute-force"), /disabled/);
   assert.deepEqual((await runner.availability()).ids, []);
 });
+test("attack run records are bounded, expire, and retain failed-run evidence without leaking SQL errors", async () => {
+  let clock = 0;
+  let fail = false;
+  const runner = createSqlAttackRunner({
+    environment: {
+      SQL_SERVER_HOST: "offline",
+      SQL_APP_LOGIN_PASSWORD: "test-only",
+      SQL_ATTACK_COOLDOWN_SECONDS: "1",
+    },
+    now: () => clock,
+    makePool: () => ({
+      connect: async () => {
+        if (fail) throw new Error("secret connection details");
+      },
+      close: async () => {},
+      request: () => ({ query: async () => ({ recordset: [] }) }),
+    }),
+  });
+  const first = await runner.run("suspicious-app");
+  for (let index = 0; index < 50; index++) {
+    clock += 1001;
+    await runner.run("suspicious-app");
+  }
+  assert.equal(runner.getRun(first.runId), null);
+  fail = true;
+  clock += 1001;
+  let failedRun;
+  await assert.rejects(runner.run("suspicious-app"), (error) => {
+    failedRun = error.run;
+    assert.equal(failedRun.state, "failed");
+    assert.match(failedRun.sqlProtection, /not proof of blocking/);
+    assert.doesNotMatch(JSON.stringify(failedRun), /secret connection details/);
+    return true;
+  });
+  assert.equal(runner.getRun(failedRun.runId), failedRun);
+  clock += 86400001;
+  assert.equal(runner.getRun(failedRun.runId), null);
+});
+
+test("Defender evidence distinguishes run matches, candidates, missing evidence and access failures", async () => {
+  const { getRunDefenderEvidence } =
+    await import("../apps/pawton-manufacturing/src/lib/defenderStatus.mjs");
+  const vmId =
+    "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/lab/providers/Microsoft.Compute/virtualMachines/sql";
+  const run = {
+    scenario: "brute-force",
+    marker: "dojo-attack-test:brute-force:test-run",
+    correlationIdentity: "dojo_invalid_test",
+    startedAt: "2026-09-24T12:00:00Z",
+    completedAt: "2026-09-24T12:00:30Z",
+  };
+  const properties = {
+    alertType: "SQL.VM_BruteForce",
+    alertDisplayName: "SQL brute force",
+    resourceIdentifiers: [{ azureResourceId: vmId }],
+    startTimeUtc: run.startedAt,
+    endTimeUtc: run.completedAt,
+    status: "Resolved",
+  };
+  const options = {
+    environment: { SQL_VM_RESOURCE_ID: vmId },
+    read: async () => ({ value: [{ properties }] }),
+  };
+  let result = await getRunDefenderEvidence(run, options);
+  assert.equal(result.state, "possible");
+  assert.equal(result.alerts[0].correlated, false);
+  assert.match(result.blocking, /does not prove/);
+  properties.extendedProperties = { login: run.correlationIdentity };
+  properties.alertUri = "javascript:alert(1)";
+  result = await getRunDefenderEvidence(run, options);
+  assert.equal(result.state, "correlated");
+  assert.match(result.alerts[0].portal, /^https:\/\/portal\.azure\.com/);
+  properties.isIncident = true;
+  properties.productName = "Microsoft Defender for Cloud";
+  assert.equal(
+    (await getRunDefenderEvidence(run, options)).state,
+    "correlated",
+  );
+  properties.resourceIdentifiers = [{ azureResourceId: `${vmId}-other` }];
+  assert.equal((await getRunDefenderEvidence(run, options)).state, "none-yet");
+  properties.resourceIdentifiers = [{ azureResourceId: vmId }];
+  properties.productName = "Microsoft Sentinel";
+  assert.equal((await getRunDefenderEvidence(run, options)).state, "none-yet");
+  delete properties.productName;
+  properties.startTimeUtc = properties.endTimeUtc = "2026-09-23T12:00:00Z";
+  assert.equal((await getRunDefenderEvidence(run, options)).state, "none-yet");
+  assert.equal(
+    (
+      await getRunDefenderEvidence(run, {
+        ...options,
+        read: async () => {
+          throw new Error("secret upstream response");
+        },
+      })
+    ).state,
+    "unavailable",
+  );
+  assert.equal(
+    (await getRunDefenderEvidence(run, { ...options, environment: {} })).state,
+    "unavailable",
+  );
+  let calls = 0;
+  const paged = {
+    ...options,
+    read: async () => {
+      calls++;
+      return {
+        value: [],
+        nextLink: `https://management.azure.com${vmId.split("/providers/")[0]}/providers/Microsoft.Security/alerts?api-version=2022-01-01&next=1`,
+      };
+    },
+  };
+  assert.equal((await getRunDefenderEvidence(run, paged)).state, "partial");
+  assert.equal(calls, 5);
+  calls = 0;
+  paged.read = async () => {
+    calls++;
+    return { value: [], nextLink: "https://evil.example/steal" };
+  };
+  assert.equal((await getRunDefenderEvidence(run, paged)).state, "unavailable");
+  assert.equal(calls, 1);
+});
+
 test("brute-force runs never report success for existing identities, interrupted failures, or unexpected authentication", async () => {
   for (const mode of ["existing", "interrupted", "authenticated"]) {
     let attempts = 0;
@@ -796,6 +964,39 @@ test("brute-force runs never report success for existing identities, interrupted
     );
     assert.equal(closed, opened);
   }
+});
+
+test("IaC supplies the existing read-only Defender identity and single-process Node 24 runtime", async () => {
+  const template = await readFile(
+    new URL("../infra/sql-defender-scenario/main.bicep", import.meta.url),
+    "utf8",
+  );
+  const reader = await readFile(
+    new URL(
+      "../infra/sql-defender-scenario/modules/defender-status-reader.bicep",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(template, /type: 'SystemAssigned'/);
+  assert.match(
+    template,
+    /name: 'SQL_VM_RESOURCE_ID'\s+value: resourceId\('Microsoft.Compute\/virtualMachines', vmName\)/,
+  );
+  assert.match(
+    template,
+    /module webAppDefenderStatusReader[^]*?scope: subscription\(\)[^]*?principalId: webApp!\.identity\.principalId/,
+  );
+  assert.match(reader, /39bc4728-0917-49c7-9d2c-d95423bc2eb4/);
+  assert.match(reader, /principalType: 'ServicePrincipal'/);
+  assert.match(template, /resource webAppPlan[^]*?capacity: 1/);
+  assert.match(template, /linuxFxVersion: 'NODE\|24-lts'/);
+  assert.match(template, /appCommandLine: 'node \.\/dist\/server\/entry\.mjs'/);
+  assert.match(template, /name: 'WEBSITE_NODE_DEFAULT_VERSION'\s+value: '~24'/);
+  assert.match(
+    template,
+    /name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'\s+value: 'true'/,
+  );
 });
 
 test("SQL attack cooldown is configured as fifteen seconds and wired through deployment", async () => {
@@ -1764,6 +1965,33 @@ test("Defender endpoint rejects cross-origin and arbitrary scenario requests", a
   assert.equal(response.status, 400);
   assert.equal(response.headers.get("Cache-Control"), "no-store");
   assert.match((await response.json()).error, /Unknown/);
+});
+
+test("Defender evidence endpoint requires admin authentication and a server-recorded run", async () => {
+  const { GET } =
+    await import("../apps/pawton-manufacturing/src/pages/api/admin/defender-simulation.js");
+  const request = new Request(
+    "https://demo.example/api/admin/defender-simulation?runId=11111111-1111-1111-1111-111111111111",
+  );
+  assert.equal(
+    (await GET({ request, cookies: { get: () => undefined } })).status,
+    401,
+  );
+  const response = await GET({ request, cookies });
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.match((await response.json()).error, /expired/);
+  assert.equal(
+    (
+      await GET({
+        request: new Request(
+          "https://demo.example/api/admin/defender-simulation?runId=arbitrary&startedAt=2020-01-01",
+        ),
+        cookies,
+      })
+    ).status,
+    400,
+  );
 });
 
 test("data-change probe rolls back on success and SQL failure, never commits", async () => {

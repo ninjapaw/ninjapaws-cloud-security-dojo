@@ -87,17 +87,50 @@ if (auditConfigured) {
   </section>
   <section class="section"><div class="section-header"><h2>Defender for SQL attack tests</h2><a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">SQL alert reference</a></div>
     <p>Direct, bounded activity against the configured lab SQL Server. Results distinguish execution from SQL blocking; Defender detection is not guaranteed. Anomaly detections depend on learned behavior. External-source tests only print a URL and do not reproduce a download.</p>
+    <p><strong>Beyond the web boundary:</strong> a web application firewall (WAF) inspects HTTP/S requests routed through it. These tests run over separate backend SQL connections. A WAF could stop their incoming HTTP trigger, but cannot inspect the resulting SQL session or host process. Each scenario separates web filtering, database/host prevention, and detection; no test here certifies WAF coverage or bypass.</p>
     {simulationAvailability.reason && <div class="warn">{simulationAvailability.reason}</div>}
-    <div class="grid">{attackScenarios.map((scenario) => <article class="card"><h3>{scenario.name}</h3><p>{scenario.description}</p><p class="muted">{scenario.evidence}</p>
+    <div class="attack-scenarios" data-timezone={portalTimeZone}>{attackScenarios.map((scenario, index) => <details class="attack-scenario" id={`attack-${scenario.id}`} open={index === 0}>
+    <summary><h3>{scenario.name}</h3><span class="scenario-family">{scenario.evidence}</span></summary>
+    <div class="scenario-walkthrough">
+    <div class="scenario-brief">
+      <h4>1. What this attack is about</h4><p>{scenario.about}</p><p>{scenario.description}</p>
+      <details class="protection-boundary"><summary>WAF coverage and deeper protection layers</summary>
+        <p><strong>Execution path:</strong> {scenario.boundary.path}</p>
+        <p><strong>WAF boundary:</strong> {scenario.boundary.waf}</p>
+        <p><strong>Controls that can prevent or limit impact:</strong> {scenario.boundary.prevention}</p>
+        <p><strong>Detection and evidence:</strong> {scenario.boundary.detection}</p>
+      </details>
+      <h4>2. What will happen</h4><ol class="attack-steps">{scenario.steps.map((step) => <li>{step}</li>)}</ol>
+      <p><strong>Expected result:</strong> {scenario.expected}</p>
+    </div>
+    <div class="scenario-execution">
+    <h4>3. Run the lab attack</h4>
     <form class="defender-simulation-form" method="post" action="/api/admin/defender-simulation">
       <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!simulationAvailability.ids.includes(scenario.id)} />I authorize this lab test</label>
       <button type="submit" disabled={!simulationAvailability.ids.includes(scenario.id)}>Run attack test</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>
       {!simulationAvailability.ids.includes(scenario.id) && <p class="muted">SQL connection unavailable or lab tests disabled.</p>}
     </form>
+    <h4>4. Execution result</h4>
+    <p class="attack-outcome" role="status" aria-live="polite">Not run.</p>
+    <dl class="attack-result" hidden>
+      <dt>Run ID</dt><dd data-result="runId"></dd>
+      <dt>Started</dt><dd data-result="startedAt"></dd>
+      <dt>Finished</dt><dd data-result="completedAt"></dd>
+      <dt>SQL response</dt><dd data-result="sqlProtection"></dd>
+      <dt>Evidence marker</dt><dd data-result="marker"></dd>
+      <dt>Test identity</dt><dd data-result="correlationIdentity"></dd>
+    </dl>
+    <h4>5. Defender evidence</h4>
+    <button class="check-defender" type="button" disabled>Check Defender alerts</button>
+    <p class="defender-evidence-state" role="status" aria-live="polite">Awaiting a recorded run.</p>
+    <p class="defender-blocking">Defender blocking: not confirmed. SQL rejection is not a Defender blocking verdict.</p>
+    <ul class="defender-alerts"></ul>
+    <div class="actions"><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open Defender in Azure</a><a href="#windows-events">Windows audit evidence</a></div>
+    </div></div>
     <details><summary>Audit-only sample</summary><form class="simulation-sample-form" method="post" action="/api/admin/simulation-sample">
       <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!demosEnabled} />I authorize this sample</label>
       <button type="submit" disabled={!demosEnabled}>Run audit sample</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>
-    </form></details></article>)}</div>
+    </form></details></details>)}</div>
     <p>Audit-only samples produce SQL Audit evidence, not Defender alerts. A matching Sentinel training incident is separate from a Defender for SQL alert. <a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">Documented SQL alerts</a>.</p>
   </section>
   <section class="section"><h2>Compare protection states</h2><p>Defender for SQL detects suspicious activity and assesses vulnerabilities. It is not a general-purpose query-blocking firewall. SQL permissions, password policy, encryption, and SQL Audit remain separate controls.</p>
@@ -197,6 +230,22 @@ if (auditConfigured) {
 </Layout>
 
 <style>
+  .attack-scenario { border-top: 1px solid var(--border); padding-block: 1rem; }
+  .attack-scenario > summary { color: var(--link); padding-block: 0.5rem; }
+  .attack-scenario > summary h3 { display: inline; margin: 0; font-size: 1.1rem; }
+  .scenario-family { display: block; margin-top: 0.4rem; color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+  .scenario-walkthrough { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; padding-block: 0.5rem 1.5rem; }
+  .scenario-walkthrough h4 { font-size: 1rem; margin-block: 1rem 0.5rem; }
+  .scenario-walkthrough p { margin-block: 0.5rem 1rem; }
+  .scenario-execution { border-left: 2px solid var(--border); padding-left: 1.5rem; min-width: 0; }
+  .attack-steps { padding-left: 1.5rem; }
+  .attack-steps li { padding-block: 0.35rem; color: var(--text-soft); }
+  .attack-result[hidden] { display: none; }
+  .attack-outcome { min-height: 3rem; }
+  .defender-alerts { padding-left: 1.2rem; overflow-wrap: anywhere; }
+  .defender-alerts li { margin-bottom: 1rem; }
+  .attack-scenario[aria-busy="true"] .attack-outcome { border-left: 3px solid var(--link); padding-left: 0.75rem; }
+  @media (max-width: 800px) { .scenario-walkthrough { grid-template-columns: minmax(0, 1fr); gap: 0; } .scenario-execution { border-left: 0; border-top: 1px solid var(--border); padding-left: 0; } }
   .event-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-block: 1rem; }
   .event-refresh p { margin: 0; }
   #audit-event-records > summary { padding-block: 0.75rem; }
@@ -207,7 +256,7 @@ if (auditConfigured) {
 </style>
 
 <script>
-  document.querySelectorAll<HTMLFormElement>('.probe-form, .simulation-sample-form, .defender-simulation-form').forEach((form) => {
+  document.querySelectorAll<HTMLFormElement>('.probe-form, .simulation-sample-form').forEach((form) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const button = form.querySelector<HTMLButtonElement>('button')!;
@@ -224,6 +273,108 @@ if (auditConfigured) {
       } catch (error) {
         output.textContent = error instanceof Error ? error.message : fallbackMessage;
       } finally { button.disabled = false; }
+    });
+  });
+
+  const attackZone = document.querySelector<HTMLElement>('.attack-scenarios')?.dataset.timezone || 'UTC';
+  const attackTime = (value: string) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'long', timeZone: attackZone }).format(new Date(value));
+  document.querySelectorAll<HTMLElement>('.attack-scenario').forEach((scenario) => {
+    const form = scenario.querySelector<HTMLFormElement>('.defender-simulation-form')!;
+    const runButton = form.querySelector<HTMLButtonElement>('button')!;
+    const checkButton = scenario.querySelector<HTMLButtonElement>('.check-defender')!;
+    const progress = form.querySelector<HTMLElement>('.simulation-sample-result')!;
+    const outcome = scenario.querySelector<HTMLElement>('.attack-outcome')!;
+    const evidenceState = scenario.querySelector<HTMLElement>('.defender-evidence-state')!;
+    const blocking = scenario.querySelector<HTMLElement>('.defender-blocking')!;
+    const alerts = scenario.querySelector<HTMLElement>('.defender-alerts')!;
+    let runId = '';
+    let generation = 0;
+
+    function renderRun(run: Record<string, string>) {
+      runId = run.runId;
+      scenario.querySelector<HTMLElement>('.attack-result')!.hidden = false;
+      scenario.querySelectorAll<HTMLElement>('[data-result]').forEach((field) => {
+        const key = field.dataset.result!;
+        field.textContent = run[key] ? (key.endsWith('At') ? attackTime(run[key]) : run[key]) : 'Not applicable';
+      });
+      outcome.textContent = `${run.state === 'blocked' ? 'Blocked by SQL configuration' : run.state === 'failed' ? 'Incomplete or failed' : 'Test completed'}: ${run.outcome}`;
+      blocking.textContent = `Defender blocking: ${run.defenderBlocking}`;
+      evidenceState.textContent = 'Not checked. Defender alerts may take time to appear.';
+      checkButton.disabled = false;
+    }
+
+    async function checkEvidence() {
+      if (!runId) return;
+      const current = generation;
+      checkButton.disabled = true;
+      alerts.replaceChildren();
+      blocking.textContent = 'Defender blocking: not confirmed.';
+      evidenceState.textContent = 'Checking Defender for this VM and recorded activity window...';
+      try {
+        const response = await fetch(`/api/admin/defender-simulation?runId=${encodeURIComponent(runId)}`, { cache: 'no-store' });
+        if (response.status === 401) throw new Error('Session expired. Sign in again.');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Defender evidence unavailable.');
+        if (current !== generation) return;
+        const evidence = result.evidence;
+        const labels: Record<string, string> = { correlated: 'Run-correlated alert found', possible: 'Possible related alerts', 'none-yet': 'No matching alerts yet', partial: 'Incomplete lookup', unavailable: 'Unable to verify' };
+        evidenceState.textContent = `${labels[evidence.state] || 'Unknown'} - checked ${attackTime(evidence.checkedAt)}. ${evidence.detail}`;
+        blocking.textContent = `Defender blocking: ${evidence.blocking}`;
+        alerts.replaceChildren();
+        for (const alert of evidence.alerts) {
+          const item = document.createElement('li');
+          const link = document.createElement('a');
+          link.href = alert.portal;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = alert.title;
+          const detail = document.createElement('p');
+          detail.textContent = `${alert.type} | ${alert.severity} | ${alert.status} | ${attackTime(alert.startedAt)}. ${alert.correlation}. Alert ID: ${alert.id}`;
+          item.append(link, detail);
+          alerts.append(item);
+        }
+      } catch (error) {
+        if (current === generation) evidenceState.textContent = error instanceof Error ? error.message : 'Defender evidence unavailable.';
+      } finally {
+        if (current === generation) checkButton.disabled = false;
+      }
+    }
+
+    checkButton.addEventListener('click', checkEvidence);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (runButton.disabled) return;
+      generation++;
+      runId = '';
+      runButton.disabled = true;
+      checkButton.disabled = true;
+      scenario.setAttribute('aria-busy', 'true');
+      scenario.querySelector<HTMLElement>('.attack-result')!.hidden = true;
+      alerts.replaceChildren();
+      progress.textContent = 'Running the fixed lab test. Awaiting the server response...';
+      outcome.textContent = 'Execution in progress. Individual steps are not confirmed until the server returns.';
+      evidenceState.textContent = 'Awaiting this run. Previous alert results have been cleared.';
+      blocking.textContent = 'Defender blocking: not confirmed.';
+      try {
+        const response = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+        if (response.status === 401) throw new Error('Session expired. Sign in again.');
+        const result = await response.json();
+        if (result.run) renderRun(result.run);
+        else if (response.ok) renderRun(result);
+        if (!response.ok) throw new Error(result.error || 'Attack test failed.');
+        progress.textContent = 'Server response received.';
+      } catch (error) {
+        progress.textContent = error instanceof Error ? error.message : 'Request failed.';
+        if (!runId) {
+          outcome.textContent = 'No execution result received. Activity may have occurred; do not infer that it was blocked.';
+          evidenceState.textContent = 'No run record received. Review independent evidence in Azure before retrying.';
+        }
+      } finally {
+        scenario.setAttribute('aria-busy', 'false');
+        runButton.disabled = false;
+        form.querySelector<HTMLInputElement>('[name="confirm"]')!.checked = false;
+      }
+      if (runId) await checkEvidence();
     });
   });
 </script>
