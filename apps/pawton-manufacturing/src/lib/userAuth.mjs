@@ -4,7 +4,10 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { verifyAdminCredentials } from "./adminAuth.mjs";
+import {
+  getAuthenticatedUsername,
+  verifyAdminCredentials,
+} from "./adminAuth.mjs";
 
 export const USER_SESSION_COOKIE = "dojo_user_session";
 const sessionSeconds = 15 * 60;
@@ -54,6 +57,8 @@ export function createUserSession() {
 }
 
 export function getUser(cookies) {
+  const administrator = getAuthenticatedUsername(cookies);
+  if (administrator) return administrator;
   if (!isUserLoginConfigured()) return null;
   const token = cookies.get(USER_SESSION_COOKIE)?.value;
   if (typeof token !== "string" || token.length > 2048) return null;

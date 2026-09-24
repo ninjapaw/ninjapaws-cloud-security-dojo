@@ -219,7 +219,7 @@ export async function getRunDefenderEvidence(
           startedAt: properties.startTimeUtc,
           correlation: correlated
             ? "Run marker or test identity matched"
-            : "VM, activity window and alert family only; attribution unconfirmed",
+            : "VM, activity window and alert family only; attribution unconfirmed. Some alert types are shared across scenarios; review the title and supporting evidence.",
           correlated,
           portal,
         });

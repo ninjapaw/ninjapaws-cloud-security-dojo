@@ -40,6 +40,11 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
     assert.equal(scenario.steps.length, 3);
     assert.ok(scenario.steps.every((step) => step.length > 20));
     assert.ok(scenario.expected.length > 50);
+    assert.ok(scenario.protection.noAlert.length > 70);
+    assert.equal(scenario.protection.steps.length, 3);
+    assert.ok(scenario.protection.steps.every((step) => step.length > 70));
+    assert.ok(scenario.protection.verification.length > 70);
+    assert.ok(scenario.protection.simulation.length > 5);
     for (const field of ["path", "waf", "prevention", "detection"]) {
       assert.ok(
         scenario.boundary[field].length > 70,
@@ -70,6 +75,33 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
   for (const field of ["path", "waf", "prevention", "detection"]) {
     assert.ok(page.includes(`{scenario.boundary.${field}}`));
   }
+  for (const field of ["noAlert", "verification", "simulation"]) {
+    assert.ok(page.includes(`{scenario.protection.${field}}`));
+  }
+  assert.ok(page.includes("scenario.protection.steps.map"));
+  assert.match(page, /not an inline SQL-blocking firewall/);
+  assert.match(page, /separate run and need not match this portal run ID/);
+  assert.match(page, /simulate-alerts-sql-machines/);
+  assert.match(page, /No Defender for SQL alert\?/);
+  assert.match(page, /suppression rules or filters/);
+  const shell = attackScenarios.find(
+    (scenario) => scenario.id === "obfuscated-shell",
+  );
+  assert.match(shell.protection.noAlert, /SQL-layer obfuscation/);
+  assert.match(shell.protection.noAlert, /not a guaranteed alert trigger/);
+  assert.match(shell.protection.verification, /precheck/);
+  assert.match(
+    shell.protection.verification,
+    /do not label.*Defender prevention/,
+  );
+  assert.match(
+    external.protection.verification,
+    /cannot test outbound filtering/,
+  );
+  assert.match(
+    injection.protection.verification,
+    /cannot validate an HTTP injection block/,
+  );
 });
 
 test("auditing page shares a generic preview-first SQL template with its download", async () => {
@@ -719,6 +751,8 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
             input: () => request,
             query: async (text) => {
               queries.push(text);
+              if (text.includes("AS SafeMatches"))
+                return { recordset: [{ SafeMatches: 0, UnsafeMatches: 2 }] };
               return { recordset: [{ principalId: null, enabled: 0 }] };
             },
           };
@@ -773,7 +807,16 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   );
   assert.ok(configs.some((config) => config.options.appName === "sqlmap"));
   assert.equal(closed, configs.length);
-  assert.ok(queries.some((text) => text.includes("OR 1=1 UNION SELECT")));
+  assert.ok(
+    queries.some(
+      (text) => text.includes("@unsafeStatement") && text.includes("OR 1=1"),
+    ),
+  );
+  assert.ok(
+    queries.some(
+      (text) => text.includes("TOP (5)") && text.includes("FROM sys.tables"),
+    ),
+  );
   assert.ok(
     queries.some(
       (text) =>
@@ -791,6 +834,95 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   await assert.rejects(runner.run("brute-force"), /disabled/);
   assert.deepEqual((await runner.availability()).ids, []);
 });
+test("synthetic injection requires unsafe and parameterized counts without exposing rows", async () => {
+  for (const counts of [
+    { SafeMatches: 0, UnsafeMatches: 2 },
+    { SafeMatches: 2, UnsafeMatches: 2 },
+    { SafeMatches: 0, UnsafeMatches: 0 },
+    {},
+  ]) {
+    let closed = false;
+    const runner = createSqlAttackRunner({
+      environment: {
+        SQL_SERVER_HOST: "offline",
+        SQL_APP_LOGIN_PASSWORD: "offline",
+      },
+      makePool: () => ({
+        connect: async () => {},
+        close: async () => {
+          closed = true;
+        },
+        request: () => ({
+          query: async (text) => {
+            assert.match(
+              text,
+              /@value = @input, @matched = @safeMatches OUTPUT/,
+            );
+            assert.match(text, /\+ @input \+/);
+            assert.equal((text.match(/FROM \(VALUES/g) || []).length, 2);
+            assert.doesNotMatch(text, /dbo\.|\b(?:INSERT|UPDATE|DELETE)\b/i);
+            return {
+              recordset: [{ ...counts, privateValue: "not-for-browser" }],
+            };
+          },
+        }),
+      }),
+    });
+    if (counts.SafeMatches === 0 && counts.UnsafeMatches === 2) {
+      const result = await runner.run("sql-injection");
+      assert.equal(result.state, "executed");
+      assert.doesNotMatch(JSON.stringify(result), /not-for-browser/);
+    } else {
+      await assert.rejects(runner.run("sql-injection"), /expected counts/);
+    }
+    assert.equal(closed, true);
+  }
+});
+
+test(
+  "bounded SQL probes execute against disposable SQL Server",
+  { skip: !process.env.DOJO_AUDIT_TEST_PORT },
+  async () => {
+    const requireApp = createRequire(
+      new URL("../apps/pawton-manufacturing/package.json", import.meta.url),
+    );
+    const sql = requireApp("mssql");
+    const runner = createSqlAttackRunner({
+      environment: {
+        SQL_SERVER_HOST: "127.0.0.1",
+        SQL_DATABASE: "master",
+        SQL_APP_LOGIN: "sa",
+        SQL_APP_LOGIN_PASSWORD: process.env.MSSQL_SA_PASSWORD,
+      },
+      makePool: (config) =>
+        new sql.ConnectionPool({
+          ...config,
+          port: Number(process.env.DOJO_AUDIT_TEST_PORT),
+          connectionTimeout: 30000,
+        }),
+    });
+    const result = await runner.run("sql-injection");
+    assert.equal(result.state, "executed");
+    assert.match(result.outcome, /parameter binding matched zero rows/);
+    assert.equal(result.alertConfirmed, false);
+    const discovery = createSqlAttackRunner({
+      environment: {
+        SQL_SERVER_HOST: "127.0.0.1",
+        SQL_DATABASE: "master",
+        SQL_APP_LOGIN: "sa",
+        SQL_APP_LOGIN_PASSWORD: process.env.MSSQL_SA_PASSWORD,
+      },
+      makePool: (config) =>
+        new sql.ConnectionPool({
+          ...config,
+          port: Number(process.env.DOJO_AUDIT_TEST_PORT),
+          connectionTimeout: 30000,
+        }),
+    });
+    assert.equal((await discovery.run("suspicious-app")).state, "executed");
+  },
+);
+
 test("attack run records are bounded, expire, and retain failed-run evidence without leaking SQL errors", async () => {
   let clock = 0;
   let fail = false;
@@ -912,6 +1044,53 @@ test("Defender evidence distinguishes run matches, candidates, missing evidence 
   };
   assert.equal((await getRunDefenderEvidence(run, paged)).state, "unavailable");
   assert.equal(calls, 1);
+});
+
+test("Defender evidence matches each documented scenario family without treating shared types as proof", async () => {
+  const { getRunDefenderEvidence } =
+    await import("../apps/pawton-manufacturing/src/lib/defenderStatus.mjs");
+  const vmId =
+    "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/lab/providers/Microsoft.Compute/virtualMachines/sql";
+  const families = [
+    ["brute-force", "SQL.VM_BruteForce"],
+    ["suspicious-app", "SQL.VM_HarmfulApplication"],
+    ["sql-injection", "SQL.VM_VulnerabilityToSqlInjection"],
+    ["sql-injection", "SQL.VM_PotentialSqlInjection"],
+    ["principal-anomaly", "SQL.VM_PrincipalAnomaly"],
+    ["external-source", "SQL.VM_ShellExternalSourceAnomaly"],
+    ["obfuscated-shell", "SQL.VM_PotentialSqlInjection"],
+  ];
+  for (const [scenario, alertType] of families) {
+    const run = {
+      scenario,
+      marker: "dojo-attack-test:unique-test-run",
+      startedAt: "2026-09-24T12:00:00Z",
+      completedAt: "2026-09-24T12:00:01Z",
+    };
+    const properties = {
+      alertType,
+      resourceIdentifiers: [{ azureResourceId: vmId }],
+      startTimeUtc: run.startedAt,
+    };
+    const options = {
+      environment: { SQL_VM_RESOURCE_ID: vmId },
+      read: async () => ({ value: [{ properties }] }),
+    };
+    const candidate = await getRunDefenderEvidence(run, options);
+    assert.equal(candidate.state, "possible", `${scenario}: ${alertType}`);
+    assert.equal(candidate.alerts[0].correlated, false);
+    assert.match(candidate.alerts[0].correlation, /shared across scenarios/);
+    properties.alertType = "SQL.VM_DataExfiltration";
+    assert.equal(
+      (await getRunDefenderEvidence(run, options)).state,
+      "none-yet",
+    );
+    properties.extendedProperties = { marker: run.marker };
+    assert.equal(
+      (await getRunDefenderEvidence(run, options)).state,
+      "correlated",
+    );
+  }
 });
 
 test("brute-force runs never report success for existing identities, interrupted failures, or unexpected authentication", async () => {
@@ -1059,7 +1238,11 @@ test("SQL attack cooldown accepts configured seconds and falls back to sixty for
           connections++;
         },
         close: async () => {},
-        request: () => ({ query: async () => ({ recordset: [] }) }),
+        request: () => ({
+          query: async () => ({
+            recordset: [{ SafeMatches: 0, UnsafeMatches: 2 }],
+          }),
+        }),
       }),
     });
     await runner.run("sql-injection");
@@ -1079,6 +1262,7 @@ test("SQL attack cooldown accepts configured seconds and falls back to sixty for
 
 test("shell tests execute only fixed marker commands and validate output", async () => {
   const commands = [];
+  const statements = [];
   let clock = 0;
   let validOutput = true;
   const runner = createSqlAttackRunner({
@@ -1102,6 +1286,7 @@ test("shell tests execute only fixed marker commands and validate output", async
             if (text.includes("sys.configurations"))
               return { recordset: [{ enabled: 1 }] };
             commands.push(command);
+            statements.push(text);
             const decoded = command.includes("-EncodedCommand")
               ? Buffer.from(command.split(" ").at(-1), "base64").toString(
                   "utf16le",
@@ -1137,6 +1322,18 @@ test("shell tests execute only fixed marker commands and validate output", async
   );
   validOutput = false;
   await assert.rejects(runner.run("external-source"), /expected marker/);
+  assert.match(
+    statements[0],
+    /EXEC @result = master\.dbo\.xp_cmdshell @command/,
+  );
+  assert.match(statements[1], /N'xp_' \+ N'cmdshell @shellCommand;'/);
+  assert.match(statements[1], /EXEC sys\.sp_executesql @statement/);
+  assert.match(
+    statements[1],
+    /@shellCommand = @command, @shellResult = @result OUTPUT/,
+  );
+  assert.ok(!statements[1].includes(commands[1]));
+  assert.match(statements[1], /SELECT @result AS exitCode/);
 });
 
 test("direct SQL runner rejects overlap and closes failed connections without leaking errors", async () => {

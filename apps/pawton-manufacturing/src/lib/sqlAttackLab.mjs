@@ -15,6 +15,18 @@ export const attackScenarios = [
     description:
       "Twelve failed SQL logins using one random, nonexistent test identity. No real account passwords are guessed.",
     evidence: "SQL.VM_BruteForce",
+    protection: {
+      noAlert:
+        "Twelve rejected logins with a nonexistent identity are a bounded probe, not a guaranteed brute-force detection threshold. This does not reproduce the documented valid-user or successful-sign-in variants. Do not target real accounts or increase password guessing to force an alert; use the supported Brute force authentication simulation to validate alert delivery.",
+      steps: [
+        "Restrict the SQL listener with private connectivity and scoped network rules; remove unnecessary public SQL exposure after reviewing dependent clients.",
+        "Use strong credentials and supported SQL login password/lockout policies for real SQL logins. Keep application and administrative identities separate.",
+        "Keep Defender for SQL enabled for detection and investigate authentication alerts. Alert-driven response automation acts after detection; it is not inline login prevention.",
+      ],
+      verification:
+        "This test should already show twelve authentication rejections. That is SQL authentication enforcement. Verify network denial separately from an approved disallowed source; this portal runs from an allowed application host and cannot prove that network boundary.",
+      simulation: "Brute force authentication",
+    },
     about:
       "Repeated login attempts can indicate password guessing. This test exercises failed-authentication detection without targeting a real account.",
     boundary: {
@@ -37,8 +49,20 @@ export const attackScenarios = [
     id: "suspicious-app",
     name: "Suspicious application",
     description:
-      "Connect with the sqlmap client name and execute one read-only metadata query. No attack tool is installed.",
+      "Connect with the sqlmap client name, inspect session/database metadata, and enumerate at most five visible user-table names. No business rows are read or attack tool installed.",
     evidence: "SQL.VM_HarmfulApplication",
+    protection: {
+      noAlert:
+        "The test supplies sqlmap as client metadata and performs bounded session/database and table-name discovery. It does not run an attack tool, and these signals need not produce an alert. Review the actual client, login, target, and activity time in a HarmfulApplication alert before attributing it to this run; an older alert of the same type is not new run evidence.",
+      steps: [
+        "Allow SQL connections only from approved hosts and identities, using scoped network access and least-privileged database permissions.",
+        "Remove unnecessary rights from application logins. Do not use the SQL application-name string as an authorization rule: the caller can change it.",
+        "Use Defender for SQL alerts to investigate suspicious clients. Apply any identity revocation or network containment only after confirming scope and operational impact.",
+      ],
+      verification:
+        "An approved client with valid credentials may still run this metadata query. Test denied connections and denied protected operations separately with a restricted test identity. A successful metadata query is not a failed prevention control.",
+      simulation: "Authentication from suspicious application",
+    },
     about:
       "Attack tools can identify themselves through SQL client metadata. A suspicious application name is a detection signal, not proof that exploitation occurred.",
     boundary: {
@@ -51,7 +75,7 @@ export const attackScenarios = [
     },
     steps: [
       "Connect using the application login with the client name sqlmap.",
-      "Read the application name and original SQL login.",
+      "Read session/database metadata and at most five visible table names, without querying their rows.",
       "Close the connection without changing data.",
     ],
     expected:
@@ -61,10 +85,22 @@ export const attackScenarios = [
     id: "sql-injection",
     name: "SQL injection",
     description:
-      "Execute a fixed tautology and UNION injection against an inline synthetic row. No application input or business data is exposed.",
+      "Compare a fixed injection string passed through unsafe concatenation versus parameter binding against two synthetic rows. No browser-supplied SQL or business data is used.",
     evidence: "SQL injection alert family",
+    protection: {
+      noAlert:
+        "The fixed input changes the meaning of an intentionally concatenated query over synthetic rows, while parameter binding prevents that change. This is an isolated demonstration, not exploitation of an HTTP endpoint, and it need not generate a detection. Microsoft documents PotentialSqlInjection for both injection and SQL shell obfuscation; the alert type alone cannot distinguish them. Use the supported SQL injection simulation to validate alert delivery.",
+      steps: [
+        "Use parameterized queries for data values and allowlisted identifiers at the application input boundary; avoid concatenating untrusted input into SQL.",
+        "Restrict the application login to required data operations. Use WAF prevention rules for inspected HTTP requests as an additional layer, not as a substitute for parameterization.",
+        "Keep Defender for SQL enabled to detect suspicious query activity. There is no Defender for SQL setting that turns this valid synthetic SELECT into a guaranteed blocked query.",
+      ],
+      verification:
+        "Verify that a benign injection-shaped input is treated as literal data by an isolated application's parameterized query. This direct-SQL test may still complete after hardening because it bypasses the application input boundary by design; it cannot validate an HTTP injection block.",
+      simulation: "SQL injection",
+    },
     about:
-      "SQL injection changes query meaning using input such as an always-true condition or UNION. This direct SQL test uses synthetic values, not a vulnerable application endpoint.",
+      "SQL injection occurs when input becomes executable query syntax. The same fixed input is compared as concatenated SQL and as a bound value over two synthetic rows; only the deliberately unsafe query should match both rows.",
     boundary: {
       path: "Application server -> SQL engine -> synthetic query evaluation. The test sends fixed SQL directly; it does not inject through an HTTP parameter.",
       waf: "A WAF can detect and, in prevention mode, block recognizable SQL injection in HTTP requests it inspects. Here the HTTP request contains only a scenario selection; the SQL is generated on the server afterward. The WAF cannot inspect that backend query. This is not proof that a WAF rule was bypassed.",
@@ -75,11 +111,11 @@ export const attackScenarios = [
     },
     steps: [
       "Connect with the application SQL login.",
-      "Execute a fixed OR 1=1 and UNION query against an inline synthetic row.",
-      "Discard the query output and close the connection.",
+      "Run the same fixed OR 1=1 input against two synthetic rows using parameter binding and then unsafe concatenation.",
+      "Require zero parameterized matches and two concatenated matches; close the connection without returning any rows to the browser.",
     ],
     expected:
-      "A read-only query completes. It does not demonstrate a vulnerability in this portal or expose business records.",
+      "Unsafe concatenation matches two synthetic rows; parameter binding matches zero. Unexpected counts fail the test. This does not expose business records or establish a vulnerability in the portal's order endpoints.",
   },
   {
     id: "principal-anomaly",
@@ -87,8 +123,20 @@ export const attackScenarios = [
     description:
       "Create a temporary database principal, grant a sample-table read, impersonate it, then roll back all changes.",
     evidence: "SQL.VM_PrincipalAnomaly",
+    protection: {
+      noAlert:
+        "The documented PrincipalAnomaly is a login from a principal not seen in 60 days, with context-dependent suppression of expected changes. Creating a temporary database user and using EXECUTE AS within an existing session is not a new login and does not reproduce that history. Use the supported Principal anomaly simulation rather than creating persistent accounts or waiting for a baseline to force detection.",
+      steps: [
+        "Remove unnecessary user-management, permission-granting, and impersonation rights from application identities. Review inherited role membership as well as direct grants.",
+        "Keep privileged administration separate. This scenario intentionally uses the lab admin SQL connection; restrictions on the application login do not restrict that connection.",
+        "Audit principal and permission changes and use Defender for SQL for anomaly detection. Remediating excessive permissions is SQL hardening, not a Defender blocking mode.",
+      ],
+      verification:
+        "In a disposable database, verify that a restricted test identity cannot create users, grant access, or impersonate principals. Do not remove the portal's administrative permissions on the shared lab merely to force this scenario to fail.",
+      simulation: "Principal anomaly",
+    },
     about:
-      "Unexpected database identities or unusual access patterns can indicate account misuse. Anomaly detection depends on the machine's learned activity baseline.",
+      "A login from a principal not seen in 60 days can indicate account misuse. This related identity-management exercise uses a temporary database user within an existing session; it does not reproduce the documented login anomaly.",
     boundary: {
       path: "Privileged SQL session -> database user creation -> permission grant -> impersonated read. Activity occurs inside the database's identity and authorization boundary.",
       waf: "A WAF cannot evaluate CREATE USER, GRANT, or EXECUTE AS in a backend SQL session. Those operations may follow a permitted web request, a compromised service credential, or direct administrator access without any malicious HTTP payload to inspect.",
@@ -111,6 +159,18 @@ export const attackScenarios = [
     description:
       "Print a reserved external URL through the SQL shell. No network request or download occurs. Requires xp_cmdshell already enabled.",
     evidence: "SQL.VM_ShellExternalSourceAnomaly (limited probe)",
+    protection: {
+      noAlert:
+        "This probe only echoes an example.invalid URL. It performs no download or outbound connection, so external-source behavior is not fully reproduced and no alert is guaranteed. Use the supported Shell external source anomaly simulation to validate alert delivery; do not replace the reserved URL with a real download destination to force an alert.",
+      steps: [
+        "For an approved lab comparison, use Disable SQL shell access in this page's SQL shell section and verify the live state is Disabled. This is a server-wide SQL change; review other consumers first.",
+        "Restrict privileges that can execute or re-enable xp_cmdshell. For lasting hardening, review the deployment's enableSqlShellAttackTests value because bootstrap can reapply its configured default.",
+        "For real outbound activity, use scoped egress controls and host application control. Defender for Endpoint prevention is a separate product/control from Defender for SQL; verify its onboarding and applicable policies independently.",
+      ],
+      verification:
+        "After disabling shell access, this runner should report blocked at its xp_cmdshell precheck. Confirm the disabled SQL state independently. This demonstrates the SQL configuration gate, not a Defender block or an egress block; the echo-only probe cannot test outbound filtering.",
+      simulation: "Shell external source anomaly",
+    },
     about:
       "Shell commands referencing external sources can accompany payload downloads. This limited probe only prints a reserved URL and does not reproduce a download.",
     boundary: {
@@ -133,10 +193,22 @@ export const attackScenarios = [
     id: "obfuscated-shell",
     name: "Shell obfuscation",
     description:
-      "Run an encoded PowerShell command through the SQL shell that only prints the run marker. Requires xp_cmdshell already enabled.",
+      "Construct a fixed SQL shell call with SQL string concatenation, then run encoded PowerShell that only prints the run marker. Requires xp_cmdshell already enabled.",
     evidence: "SQL.VM_PotentialSqlInjection",
+    protection: {
+      noAlert:
+        "The SQL batch constructs the fixed xp_cmdshell procedure name using string concatenation, closer to the documented SQL-layer obfuscation behavior. The encoded payload remains only PowerShell Write-Output of a marker. This is a detection-fidelity improvement, not a guaranteed alert trigger; a successful marker is not proof that Defender missed malicious execution.",
+      steps: [
+        "For an approved lab comparison, use Disable SQL shell access in this page's SQL shell section and verify the live state is Disabled. Review the server-wide impact before changing it.",
+        "Restrict SQL privileges that can execute or re-enable xp_cmdshell, and keep the SQL execution identity least privileged. Review enableSqlShellAttackTests for future bootstrap runs so hardening is not silently undone.",
+        "Where shell access is genuinely required, assess host application control and Defender for Endpoint prevention policies on an isolated target. These are separate from Defender for SQL, and a harmless encoded command is not guaranteed to be blocked by endpoint protection either.",
+      ],
+      verification:
+        "With xp_cmdshell disabled, this runner should stop at its configuration precheck and report blocked before starting PowerShell. Independently verify the SQL setting; do not label the precheck as Defender prevention. If testing host controls, require an explicit endpoint action/event, not just a SQL error or a missing marker.",
+      simulation: "Shell obfuscation",
+    },
     about:
-      "Encoded shell commands can conceal intent. Here the encoded payload is fixed and only prints a unique marker, allowing observation without a destructive payload.",
+      "SQL string concatenation can conceal an operating-system procedure call. This test constructs that fixed call inside SQL and passes a fixed encoded PowerShell command that only prints a unique marker. No arbitrary SQL or shell input is accepted.",
     boundary: {
       path: "Privileged SQL session -> xp_cmdshell -> PowerShell execution. The test reaches the host's process and script controls, deeper than the web-request boundary.",
       waf: "A WAF may flag encoded content present in inspected HTTP input. In this test the fixed encoded command is generated server-side and executed through SQL, so it is not present in that HTTP input. The WAF does not inspect the resulting host process.",
@@ -147,7 +219,7 @@ export const attackScenarios = [
     },
     steps: [
       "Read the current xp_cmdshell setting without changing it.",
-      "If enabled, execute a fixed encoded PowerShell Write-Output command through SQL.",
+      "If enabled, construct the fixed SQL shell procedure name inside SQL and execute the parameterized marker-only PowerShell command.",
       "Verify the printed marker and successful shell exit status.",
     ],
     expected:
@@ -329,7 +401,12 @@ export function createSqlAttackRunner({
               .request()
               .input("command", sql.VarChar(8000), command)
               .query(
-                `DECLARE @result int; EXEC @result = master.dbo.xp_cmdshell @command; SELECT @result AS exitCode; /* ${marker} */`,
+                id === "obfuscated-shell"
+                  ? `DECLARE @result int;
+DECLARE @statement nvarchar(max) = N'EXEC @shellResult = master.dbo.' + N'xp_' + N'cmdshell @shellCommand;';
+EXEC sys.sp_executesql @statement, N'@shellCommand varchar(8000), @shellResult int OUTPUT', @shellCommand = @command, @shellResult = @result OUTPUT;
+SELECT @result AS exitCode; /* ${marker} */`
+                  : `DECLARE @result int; EXEC @result = master.dbo.xp_cmdshell @command; SELECT @result AS exitCode; /* ${marker} */`,
               );
             const records = result.recordsets?.flat() || [];
             if (
@@ -350,10 +427,26 @@ export function createSqlAttackRunner({
           let statement;
           if (id === "suspicious-app")
             statement =
-              "SELECT APP_NAME() AS ApplicationName, ORIGINAL_LOGIN() AS OriginalLogin";
-          if (id === "sql-injection")
-            statement =
-              "SELECT TOP (1) ItemId FROM (VALUES (1, N'dojo')) AS sample(ItemId, ItemName) WHERE ItemName = N'' OR 1=1 UNION SELECT 2 -- fixed synthetic injection";
+              "SELECT APP_NAME() AS ApplicationName, ORIGINAL_LOGIN() AS OriginalLogin, DB_NAME() AS DatabaseName; SELECT TOP (5) SCHEMA_NAME(schema_id) AS SchemaName, name AS TableName FROM sys.tables WHERE is_ms_shipped = 0 ORDER BY schema_id, name";
+          if (id === "sql-injection") {
+            const result = await pool.request().query(`/* ${marker} */
+DECLARE @input nvarchar(100) = N''' OR 1=1 --';
+DECLARE @safeMatches int, @unsafeMatches int;
+DECLARE @safeStatement nvarchar(max) = N'SELECT @matched = COUNT(*) FROM (VALUES (1, N''dojo''), (2, N''training'')) AS sample(ItemId, ItemName) WHERE ItemName = @value;';
+EXEC sys.sp_executesql @safeStatement, N'@value nvarchar(100), @matched int OUTPUT', @value = @input, @matched = @safeMatches OUTPUT;
+DECLARE @unsafeStatement nvarchar(max) = N'SELECT @matched = COUNT(*) FROM (VALUES (1, N''dojo''), (2, N''training'')) AS sample(ItemId, ItemName) WHERE ItemName = N''' + @input + N'''';
+EXEC sys.sp_executesql @unsafeStatement, N'@matched int OUTPUT', @matched = @unsafeMatches OUTPUT;
+SELECT @safeMatches AS SafeMatches, @unsafeMatches AS UnsafeMatches;`);
+            if (
+              result.recordset?.[0]?.SafeMatches !== 0 ||
+              result.recordset?.[0]?.UnsafeMatches !== 2
+            )
+              throw new SimulationError(
+                "Synthetic injection comparison did not return its expected counts.",
+                502,
+              );
+            return "Fixed input changed the concatenated query to match both synthetic rows; parameter binding matched zero rows. No business tables were queried or changed. This demonstrates an isolated query-construction flaw, not a vulnerability in the portal's order endpoints.";
+          }
           if (id === "principal-anomaly") {
             const principal = `dojo_probe_${runId.replaceAll("-", "")}`;
             statement = `SET XACT_ABORT ON;

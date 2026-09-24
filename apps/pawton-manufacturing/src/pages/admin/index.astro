@@ -88,6 +88,14 @@ if (auditConfigured) {
   <section class="section"><div class="section-header"><h2>Defender for SQL attack tests</h2><a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">SQL alert reference</a></div>
     <p>Direct, bounded activity against the configured lab SQL Server. Results distinguish execution from SQL blocking; Defender detection is not guaranteed. Anomaly detections depend on learned behavior. External-source tests only print a URL and do not reproduce a download.</p>
     <p><strong>Beyond the web boundary:</strong> a web application firewall (WAF) inspects HTTP/S requests routed through it. These tests run over separate backend SQL connections. A WAF could stop their incoming HTTP trigger, but cannot inspect the resulting SQL session or host process. Each scenario separates web filtering, database/host prevention, and detection; no test here certifies WAF coverage or bypass.</p>
+    <details class="missing-alert-guidance"><summary>No Defender for SQL alert?</summary>
+      <ol>
+        <li>Confirm the SQL Servers on Machines plan is enabled for the correct subscription and the target SQL machine is successfully protected. A plan setting alone does not prove healthy sensor telemetry.</li>
+        <li>Check the target resource's alerts directly in Defender for Cloud, including dismissed/resolved alerts and any suppression rules or filters. Use the run's activity time, accounting for the displayed timezone, and allow for ingestion delay. This portal's bounded VM/time correlation is not an inventory of every alert.</li>
+        <li>Inspect SQL Audit and available host process evidence separately. A Sentinel training alert is not a Defender for SQL alert, and an execution success is not a protection verdict.</li>
+        <li>Use the supported Azure Simulate Alerts workflow in each scenario's prevention section to validate alert delivery. If that simulation also produces no alert after the documented few-minute delay, inspect the Sql-SimulateAlert extension result and machine protection health; do not make the portal payload more aggressive to force detection.</li>
+      </ol>
+    </details>
     {simulationAvailability.reason && <div class="warn">{simulationAvailability.reason}</div>}
     <div class="attack-scenarios" data-timezone={portalTimeZone}>{attackScenarios.map((scenario, index) => <details class="attack-scenario" id={`attack-${scenario.id}`} open={index === 0}>
     <summary><h3>{scenario.name}</h3><span class="scenario-family">{scenario.evidence}</span></summary>
@@ -127,6 +135,14 @@ if (auditConfigured) {
     <ul class="defender-alerts"></ul>
     <div class="actions"><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open Defender in Azure</a><a href="#windows-events">Windows audit evidence</a></div>
     </div></div>
+    <details class="scenario-prevention"><summary>6. How to prevent or block this activity</summary>
+      <p><strong>Defender for SQL role:</strong> threat detection and vulnerability assessment, not an inline SQL-blocking firewall. There is no per-scenario switch to make Defender for SQL block these tests. SQL, network, application, and endpoint controls enforce prevention; alert-driven automation is a separate, post-detection response.</p>
+      <p><strong>Why an alert may be absent:</strong> {scenario.protection.noAlert}</p>
+      <ol>{scenario.protection.steps.map((step) => <li>{step}</li>)}</ol>
+      <p><strong>Verify the blocking control:</strong> {scenario.protection.verification}</p>
+      <p><strong>Test Defender alert delivery separately:</strong> after verifying the SQL Servers on Machines plan and target machine protection health, use Azure SQL &gt; your SQL VM or Arc SQL instance &gt; Security &gt; Microsoft Defender for Cloud &gt; Security Alerts &gt; Simulate Alerts. Select <strong>{scenario.protection.simulation}</strong> and follow the required permissions and test-credential prerequisites. The supported Sql-SimulateAlert extension injects telemetry; it validates alert delivery and response workflows, not whether this portal payload was detected or blocked. Allow a few minutes, then check that resource's alerts in Azure. It is a separate run and need not match this portal run ID.</p>
+      <div class="actions"><a href="https://learn.microsoft.com/azure/defender-for-cloud/defender-for-sql-on-machines-overview" target="_blank" rel="noopener noreferrer">Defender for SQL capabilities</a><a href="https://learn.microsoft.com/azure/defender-for-cloud/simulate-alerts-sql-machines" target="_blank" rel="noopener noreferrer">Supported alert simulation</a><a href="https://learn.microsoft.com/azure/defender-for-cloud/verify-machine-protection" target="_blank" rel="noopener noreferrer">Verify machine protection</a></div>
+    </details>
     <details><summary>Audit-only sample</summary><form class="simulation-sample-form" method="post" action="/api/admin/simulation-sample">
       <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!demosEnabled} />I authorize this sample</label>
       <button type="submit" disabled={!demosEnabled}>Run audit sample</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>

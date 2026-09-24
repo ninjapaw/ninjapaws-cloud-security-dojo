@@ -212,10 +212,7 @@ test("shared login issues only the matching role's session and rejects invalid r
     ]);
     assert.equal(result.values.get(cookie).settings.secure, true);
     assert.equal(result.values.get(cookie).settings.httpOnly, true);
-    assert.equal(
-      getUser(result.cookies),
-      cookie === USER_SESSION_COOKIE ? username : null,
-    );
+    assert.equal(getUser(result.cookies), username);
     assert.equal(
       verifySessionToken(result.values.get(cookie).value),
       cookie === SESSION_COOKIE_NAME,
@@ -520,16 +517,38 @@ function mockSql(context, handler) {
   };
 }
 
-test("staff sessions cannot authorize admin operations, even with matching signing keys", (context) => {
+test("admins inherit manager access while staff cannot authorize admin operations, even with matching signing keys", (context) => {
   const { token, cookies } = configure(context);
   assert.equal(getUser(cookies), "staff-test");
   assert.equal(getUser(anonymous), null);
   assert.equal(verifySessionToken(token), false);
   const admin = createSessionToken();
-  assert.equal(getUser({ get: () => ({ value: admin }) }), null);
+  const adminCookies = {
+    get: (name) =>
+      name === SESSION_COOKIE_NAME ? { value: admin } : undefined,
+  };
+  assert.equal(getUser(adminCookies), "admin-test");
+  assert.equal(
+    getUser({
+      get: (name) =>
+        name === USER_SESSION_COOKIE ? { value: admin } : undefined,
+    }),
+    null,
+  );
   const request = new Request("https://portal.example/api/orders", {
     headers: { Origin: "https://portal.example" },
   });
+  assert.equal(authorizeUserMutation(request, adminCookies), null);
+  assert.equal(authorizeAdminMutation(request, adminCookies), null);
+  assert.equal(
+    authorizeUserMutation(
+      new Request(request.url, {
+        headers: { Origin: "https://other.example" },
+      }),
+      adminCookies,
+    ).status,
+    403,
+  );
   assert.equal(authorizeUserMutation(request, cookies), null);
   assert.equal(authorizeAdminMutation(request, cookies).status, 401);
   assert.equal(authorizeUserMutation(request, anonymous).status, 401);
@@ -568,6 +587,25 @@ test("staff sessions cannot authorize admin operations, even with matching signi
     null,
   );
   process.env.USER_PORTAL_PASSWORD = "rotated";
+  assert.equal(getUser(cookies), null);
+});
+
+test("admin manager access requires a valid admin session but no manager configuration", (context) => {
+  configure(context);
+  const token = createSessionToken();
+  const cookies = {
+    get: (name) =>
+      name === SESSION_COOKIE_NAME ? { value: token } : undefined,
+  };
+  delete process.env.USER_PORTAL_USERNAME;
+  delete process.env.USER_PORTAL_PASSWORD;
+  delete process.env.USER_SESSION_SECRET;
+  assert.equal(getUser(cookies), "admin-test");
+  const now = Date.now();
+  context.mock.method(Date, "now", () => now + 901000);
+  assert.equal(getUser(cookies), null);
+  context.mock.restoreAll();
+  process.env.ADMIN_SESSION_SECRET = "rotated-admin-secret";
   assert.equal(getUser(cookies), null);
 });
 
@@ -740,10 +778,12 @@ test("confirm and cancel operate on drafts without inventory or production write
   assert.doesNotMatch(events.join("\n"), /Inventory|ProductionOrder/);
 });
 
-test("order API rejects anonymous/admin-only/cross-origin requests before writing", async (context) => {
+test("order API permits admins and managers but rejects anonymous and cross-origin requests", async (context) => {
   const { cookies } = configure(context);
-  context.mock.method(orders, "save", () => {
-    throw new Error("Must not write");
+  const savedUsers = [];
+  context.mock.method(orders, "save", async (_draft, username) => {
+    savedUsers.push(username);
+    return 42;
   });
   const { POST } =
     await import("../apps/pawton-manufacturing/src/pages/api/orders.js");
@@ -767,18 +807,89 @@ test("order API rejects anonymous/admin-only/cross-origin requests before writin
     403,
   );
   const admin = createSessionToken();
+  assert.deepEqual(savedUsers, []);
   assert.equal(
     (
       await POST({
         request: request("https://portal.example"),
-        cookies: { get: () => ({ value: admin }) },
+        cookies: {
+          get: (name) =>
+            name === SESSION_COOKIE_NAME ? { value: admin } : undefined,
+        },
       })
     ).status,
-    401,
+    200,
   );
+  assert.equal(
+    (await POST({ request: request("https://portal.example"), cookies }))
+      .status,
+    200,
+  );
+  assert.deepEqual(savedUsers, ["admin-test", "staff-test"]);
 });
 
-test("order pages require staff authentication and order code uses no admin connection", async () => {
+test("admins and managers can edit, confirm and cancel orders under their own identities", async (context) => {
+  const { cookies } = configure(context);
+  const adminToken = createSessionToken();
+  const adminCookies = {
+    get: (name) =>
+      name === SESSION_COOKIE_NAME ? { value: adminToken } : undefined,
+  };
+  const calls = [];
+  context.mock.method(
+    orders,
+    "save",
+    async (_draft, username, id, revision) => {
+      calls.push({ action: "save", username, id, revision });
+      return id;
+    },
+  );
+  context.mock.method(
+    orders,
+    "transition",
+    async (id, username, action, revision) => {
+      calls.push({ action, username, id, revision });
+      return id;
+    },
+  );
+  const { POST } =
+    await import("../apps/pawton-manufacturing/src/pages/api/orders.js");
+  for (const [session, username] of [
+    [adminCookies, "admin-test"],
+    [cookies, "staff-test"],
+  ]) {
+    for (const action of ["save", "confirm", "cancel"]) {
+      const response = await POST({
+        cookies: session,
+        request: new Request("https://portal.example/api/orders", {
+          method: "POST",
+          headers: {
+            Origin: "https://portal.example",
+            Accept: "application/json",
+          },
+          body: new URLSearchParams({
+            action,
+            orderId: "42",
+            revision: "v1",
+            confirm: "yes",
+            username: "forged-owner",
+            role: "admin",
+          }),
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(calls.at(-1), {
+        action,
+        username,
+        id: 42,
+        revision: "v1",
+      });
+    }
+  }
+  assert.equal(calls.length, 6);
+});
+
+test("order pages require manager-capable authentication and order code uses no admin connection", async () => {
   const form = await readFile(
     new URL(
       "../apps/pawton-manufacturing/src/components/OrderForm.astro",
