@@ -13,7 +13,7 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 // which is an accepted tradeoff for a training environment rather than a general-purpose control.
 const loginAttempts = new Map();
 
-function isAdminPortalConfigured() {
+export function isAdminPortalConfigured() {
   const { ADMIN_PORTAL_USERNAME, ADMIN_PORTAL_PASSWORD, ADMIN_SESSION_SECRET } =
     process.env;
   return Boolean(

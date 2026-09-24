@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { verifyAdminCredentials } from "./adminAuth.mjs";
 
 export const USER_SESSION_COOKIE = "dojo_user_session";
 const sessionSeconds = 15 * 60;
@@ -75,6 +76,14 @@ export function getUser(cookies) {
 }
 
 export function checkUserCredentials(request, username, password) {
+  return checkLoginCredentials(request, username, password, false);
+}
+
+export function checkPortalCredentials(request, username, password) {
+  return checkLoginCredentials(request, username, password, true);
+}
+
+function checkLoginCredentials(request, username, password, allowAdmin) {
   const now = Date.now();
   for (const [key, entry] of attempts)
     if (entry.until <= now) attempts.delete(key);
@@ -85,9 +94,12 @@ export function checkUserCredentials(request, username, password) {
     return "ratelimited";
   const userMatches = equal(username, process.env.USER_PORTAL_USERNAME);
   const passwordMatches = equal(password, process.env.USER_PORTAL_PASSWORD);
-  if (isUserLoginConfigured() && userMatches && passwordMatches) {
+  const managerMatches =
+    isUserLoginConfigured() && userMatches && passwordMatches;
+  const adminMatches = allowAdmin && verifyAdminCredentials(username, password);
+  if (managerMatches || adminMatches) {
     attempts.delete(key);
-    return "success";
+    return managerMatches ? "success" : "admin";
   }
   attempts.set(key, {
     count: (entry?.count ?? 0) + 1,

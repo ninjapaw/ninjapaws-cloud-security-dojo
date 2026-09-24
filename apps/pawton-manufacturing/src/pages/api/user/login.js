@@ -1,5 +1,5 @@
 import {
-  checkUserCredentials,
+  checkPortalCredentials,
   createUserSession,
   USER_SESSION_COOKIE,
   userSessionCookieOptions,
@@ -7,6 +7,8 @@ import {
 import {
   SESSION_COOKIE_NAME,
   ROTATED_SECRET_COOKIE_NAME,
+  createSessionToken,
+  sessionCookieOptions,
 } from "../../../lib/adminAuth.mjs";
 
 export async function POST({ request, cookies, redirect }) {
@@ -22,10 +24,20 @@ export async function POST({ request, cookies, redirect }) {
   const password = String(form.get("password") ?? "");
   if (username.length > 100 || password.length > 1024)
     return redirect("/login?error=invalid", 303);
-  const result = checkUserCredentials(request, username, password);
-  if (result !== "success") return redirect(`/login?error=${result}`, 303);
+  const result = checkPortalCredentials(request, username, password);
+  if (result !== "success" && result !== "admin")
+    return redirect(`/login?error=${result}`, 303);
   cookies.delete(SESSION_COOKIE_NAME, { path: "/" });
   cookies.delete(ROTATED_SECRET_COOKIE_NAME, { path: "/" });
+  cookies.delete(USER_SESSION_COOKIE, { path: "/" });
+  if (result === "admin") {
+    cookies.set(
+      SESSION_COOKIE_NAME,
+      createSessionToken(),
+      sessionCookieOptions,
+    );
+    return redirect("/admin", 303);
+  }
   cookies.set(
     USER_SESSION_COOKIE,
     createUserSession(),

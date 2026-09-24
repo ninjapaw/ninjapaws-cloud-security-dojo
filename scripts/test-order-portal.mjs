@@ -15,7 +15,11 @@ import {
   createSessionToken,
   verifySessionToken,
   authorizeAdminMutation,
+  SESSION_COOKIE_NAME,
+  ROTATED_SECRET_COOKIE_NAME,
 } from "../apps/pawton-manufacturing/src/lib/adminAuth.mjs";
+import { POST as loginPost } from "../apps/pawton-manufacturing/src/pages/api/user/login.js";
+import { POST as legacyLoginPost } from "../apps/pawton-manufacturing/src/pages/api/admin/login.js";
 import {
   createOrderService,
   validateDraft,
@@ -85,7 +89,7 @@ test("IaC provisions separate manager secrets and matching app settings without 
   assert.doesNotMatch(script, /user-portal-password[^\n]*--query value/);
 });
 
-test("manager entry point leads to the protected order-management screen", async () => {
+test("one Login entry point serves both roles and keeps orders protected", async () => {
   const readPage = (name) =>
     readFile(
       new URL(`../apps/pawton-manufacturing/src/${name}`, import.meta.url),
@@ -94,13 +98,15 @@ test("manager entry point leads to the protected order-management screen", async
   const login = await readPage("pages/login.astro");
   const list = await readPage("pages/orders/index.astro");
   const layout = await readPage("layouts/Layout.astro");
-  assert.match(login, /<h1>Log in as manager<\/h1>/);
-  assert.match(login, /Manage customer orders/);
+  assert.match(login, /<h1>Login<\/h1>/);
+  assert.match(login, /Astro.redirect\('\/admin'\)/);
   assert.match(login, /Astro.redirect\('\/orders'\)/);
   assert.match(list, /if \(!username\) return Astro.redirect\('\/login'\)/);
   assert.match(list, /<h1>Manage orders<\/h1>/);
   assert.match(list, /'Edit draft' : 'View order'/);
-  assert.match(layout, /href="\/login">Log in as manager/);
+  assert.match(layout, /href="\/login">Login/);
+  assert.doesNotMatch(layout, /href="\/admin\/login"/);
+  assert.doesNotMatch(login, /Administrator sign-in|Log in as manager/);
   assert.match(layout, /href="\/orders">Manage orders/);
 });
 
@@ -132,6 +138,115 @@ function configure(context) {
     },
   };
 }
+test("shared login issues only the matching role's session and rejects invalid requests", async (context) => {
+  configure(context);
+  assert.equal(legacyLoginPost, loginPost);
+  async function submit(username, password, options = {}) {
+    const values = new Map();
+    const deleted = [];
+    const cookies = {
+      get: (name) => values.get(name),
+      set: (name, value, settings) => values.set(name, { value, settings }),
+      delete: (name) => deleted.push(name),
+    };
+    const request = new Request("https://portal.example/api/user/login", {
+      method: "POST",
+      headers: {
+        Origin: options.origin ?? "https://portal.example",
+        "X-Forwarded-For": options.client ?? randomUUID(),
+      },
+      body: options.body ?? new URLSearchParams({ username, password }),
+    });
+    const response = await loginPost({
+      request,
+      cookies,
+      redirect: (location, status) =>
+        new Response(null, { status, headers: { Location: location } }),
+    });
+    return { response, cookies, values, deleted };
+  }
+  for (const [username, password, destination, cookie] of [
+    ["staff-test", "test-only", "/orders", USER_SESSION_COOKIE],
+    ["admin-test", "admin-only", "/admin", SESSION_COOKIE_NAME],
+  ]) {
+    const result = await submit(username, password);
+    assert.equal(result.response.status, 303);
+    assert.equal(result.response.headers.get("location"), destination);
+    assert.deepEqual([...result.values.keys()], [cookie]);
+    assert.deepEqual(result.deleted, [
+      SESSION_COOKIE_NAME,
+      ROTATED_SECRET_COOKIE_NAME,
+      USER_SESSION_COOKIE,
+    ]);
+    assert.equal(result.values.get(cookie).settings.secure, true);
+    assert.equal(result.values.get(cookie).settings.httpOnly, true);
+    assert.equal(
+      getUser(result.cookies),
+      cookie === USER_SESSION_COOKIE ? username : null,
+    );
+    assert.equal(
+      verifySessionToken(result.values.get(cookie).value),
+      cookie === SESSION_COOKIE_NAME,
+    );
+  }
+  const invalid = await submit("admin-test", "wrong");
+  assert.equal(
+    invalid.response.headers.get("location"),
+    "/login?error=invalid",
+  );
+  assert.equal(invalid.values.size, 0);
+  assert.equal(
+    (
+      await submit("admin-test", "admin-only", {
+        origin: "https://other.example",
+      })
+    ).response.status,
+    403,
+  );
+  assert.equal(
+    (await submit("", "", { body: "not a form" })).response.status,
+    400,
+  );
+  assert.equal(
+    (await submit("x".repeat(101), "test-only")).response.headers.get(
+      "location",
+    ),
+    "/login?error=invalid",
+  );
+  const client = randomUUID();
+  for (let attempt = 0; attempt < 5; attempt++)
+    await submit(attempt % 2 ? "staff-test" : "admin-test", "wrong", {
+      client,
+    });
+  for (const [username, password] of [
+    ["admin-test", "admin-only"],
+    ["staff-test", "test-only"],
+  ]) {
+    const blocked = await submit(username, password, { client });
+    assert.equal(
+      blocked.response.headers.get("location"),
+      "/login?error=ratelimited",
+    );
+    assert.equal(blocked.values.size, 0);
+  }
+  process.env.USER_PORTAL_USERNAME = "admin-test";
+  process.env.USER_PORTAL_PASSWORD = "admin-only";
+  assert.equal(
+    (await submit("admin-test", "admin-only")).response.headers.get("location"),
+    "/orders",
+  );
+  delete process.env.USER_SESSION_SECRET;
+  assert.equal(
+    (await submit("admin-test", "admin-only")).response.headers.get("location"),
+    "/admin",
+  );
+  delete process.env.ADMIN_SESSION_SECRET;
+  assert.equal(
+    (await submit("admin-test", "admin-only")).response.headers.get("location"),
+    "/login?error=invalid",
+  );
+});
+
 function mockSql(context, handler) {
   const events = [];
   const Transaction = class {

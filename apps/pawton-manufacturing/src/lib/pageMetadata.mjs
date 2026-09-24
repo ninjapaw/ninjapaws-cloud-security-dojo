@@ -20,11 +20,14 @@ export function pageMetadata(
 ) {
   const path = pathname.replace(/\/$/, "") || "/";
   const publicPage = Object.hasOwn(descriptions, path);
+  const loginPage = path === "/login" || path === "/admin/login";
   const managerPage =
-    path === "/login" || path === "/orders" || path.startsWith("/orders/");
+    path === "/orders" || path.startsWith("/orders/");
   const description =
     descriptions[path] ??
-    (managerPage
+    (loginPage
+      ? "Manager and administrator login for the Pawton Manufacturing training environment."
+      : managerPage
       ? "Authorized manager access to customer-order management in the Pawton Manufacturing training environment."
       : "Restricted administrator access to the Pawton Manufacturing cloud-security training environment.");
   const host = (
@@ -39,7 +42,7 @@ export function pageMetadata(
     /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host);
   const origin = validHost ? `https://${host}` : null;
   return {
-    title: `${publicPage ? title : managerPage ? "Order management" : "Administration"} — ${SITE_NAME}`,
+    title: `${publicPage ? title : loginPage ? "Login" : managerPage ? "Order management" : "Administration"} — ${SITE_NAME}`,
     description,
     robots: ROBOTS_POLICY,
     canonical:

@@ -69,6 +69,8 @@ test("page metadata uses configured canonical origins and route-specific descrip
 });
 
 test("private page metadata excludes order identifiers and user-provided titles", () => {
+  assert.equal(pageMetadata("/login").title, "Login — Pawton Manufacturing");
+  assert.match(pageMetadata("/login").description, /Manager and administrator/);
   for (const path of [
     "/login",
     "/orders",

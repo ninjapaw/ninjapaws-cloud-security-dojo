@@ -179,8 +179,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
           {staffUsername ? <>
             <span class="user-chip" title={`Manager: ${staffUsername}`}>{staffUsername}</span>
             <form class="logout-form" method="post" action="/api/user/logout"><button class="nav-action" type="submit">Sign out</button></form>
-          </> : <a href="/login">Log in as manager</a>}
-          <a href="/admin/login">Admin</a>
+          </> : <a href="/login">Login</a>}
         </>
       )}
     </nav>
