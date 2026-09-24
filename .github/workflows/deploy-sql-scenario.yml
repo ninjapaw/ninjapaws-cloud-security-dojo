@@ -8,7 +8,7 @@ on:
         required: false
         default: deploy
         type: choice
-        options: [plan, doctor, deploy, uninstall]
+        options: [plan, doctor, deploy, domain, uninstall]
       environment:
         description: Target environment
         required: false
@@ -52,7 +52,7 @@ jobs:
 
   defender-posture:
     name: Defender posture audit
-    if: inputs.stage != 'plan' && inputs.stage != 'uninstall'
+    if: inputs.stage != 'plan' && inputs.stage != 'uninstall' && inputs.stage != 'domain'
     needs: sql-scenario
     permissions:
       contents: read

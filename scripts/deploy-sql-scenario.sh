@@ -25,6 +25,9 @@ RESOURCE_GROUP=""
 VM_NAME=""
 WEB_APP_NAME=""
 WEB_APP_HOSTNAME=""
+WEB_APP_CUSTOM_DOMAIN="${PORTAL_CUSTOM_DOMAIN:-}"
+MANAGE_CUSTOM_DOMAIN="${MANAGE_CUSTOM_DOMAIN:-}"
+CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
 KEY_VAULT_NAME=""
 SQL_PUBLIC_IP=""
 ADMIN_USERNAME="${SQL_VM_ADMIN_USERNAME:-ninjapawsadmin}"
@@ -86,6 +89,7 @@ Commands:
   plan       Show what would be deployed without contacting Azure.
   doctor     Read-only Azure preflight checks (login, subscription, quota).
   deploy     Provision the VM, SQL Server, Defender plans, and seed the database.
+    domain     Configure only the portal Cloudflare DNS, custom hostname, and HTTPS.
   uninstall  Delete the resource group created for this scenario.
 
 Options:
@@ -95,6 +99,9 @@ Options:
   --resource-group <name>    Override the resource group name
   --vm-name <name>           Override the VM name
   --web-app-name <name>      Override the Pawton Manufacturing Web App name
+    --custom-domain <host>     Override the portal custom hostname (no scheme/path)
+    --cloudflare-zone-id <id>  Cloudflare zone ID; token is an environment secret
+    --manage-custom-domain    Configure DNS and HTTPS after a full deployment
   --admin-username <name>    Windows admin username (default: ninjapawsadmin)
   --defaults                 Accepted for CLI consistency with deploy.sh; this script has no
                               interactive setting prompts to skip. Use --yes to also skip the
@@ -108,13 +115,16 @@ EOF
 
 while (($# > 0)); do
     case "$1" in
-        plan|doctor|deploy|uninstall) COMMAND="$1"; shift ;;
+        plan|doctor|deploy|domain|uninstall) COMMAND="$1"; shift ;;
         --environment) ENVIRONMENT="$2"; shift 2 ;;
         --subscription) SUBSCRIPTION_ID="$2"; shift 2 ;;
         --location) LOCATION="$2"; shift 2 ;;
         --resource-group) RESOURCE_GROUP="$2"; shift 2 ;;
         --vm-name) VM_NAME="$2"; shift 2 ;;
         --web-app-name) WEB_APP_NAME="$2"; shift 2 ;;
+        --custom-domain) WEB_APP_CUSTOM_DOMAIN="$2"; shift 2 ;;
+        --cloudflare-zone-id) CLOUDFLARE_ZONE_ID="$2"; shift 2 ;;
+        --manage-custom-domain) MANAGE_CUSTOM_DOMAIN=true; shift ;;
         --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
         --defaults) shift ;;
         --yes) ASSUME_YES=true; shift ;;
@@ -145,9 +155,21 @@ DEFENDER_SERVERS_SUBPLAN="${DEFENDER_SERVERS_SUBPLAN:-P2}"
 DEFENDER_SQL_PLAN="$(config_lookup sqlScenario.defender.sqlPlan)"
 DEFENDER_SQL_PLAN="${DEFENDER_SQL_PLAN:-SqlServerVirtualMachines}"
 DEPLOY_WEB_APP="$(config_setting deployWebApp true)"
+ENABLE_SQL_DEMO_ACTIONS="$(config_setting enableSqlDemoActions true)"
+ENABLE_SQL_SHELL_ATTACK_TESTS="$(config_setting enableSqlShellAttackTests true)"
+PORTAL_TIME_ZONE="$(config_setting portalTimeZone America/New_York)"
 WEB_APP_NAME="${WEB_APP_NAME:-$(config_setting webAppName "ninjapaws-pawton-${ENVIRONMENT}")}"
 WEB_APP_PLAN_SKU="$(config_setting webAppPlanSku B1)"
+WEB_APP_CUSTOM_DOMAIN="${WEB_APP_CUSTOM_DOMAIN:-$(config_setting webAppCustomDomain '')}"
+MANAGE_CUSTOM_DOMAIN="${MANAGE_CUSTOM_DOMAIN:-$(config_setting manageCustomDomain false)}"
+CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-$(config_setting cloudflareZoneId '')}"
+[[ "$MANAGE_CUSTOM_DOMAIN" == true || "$MANAGE_CUSTOM_DOMAIN" == false ]] || fail 'manageCustomDomain must be true or false.'
+if [[ -n "$WEB_APP_CUSTOM_DOMAIN" ]]; then
+    PAWTON_DOMAIN="$WEB_APP_CUSTOM_DOMAIN" "$NODE_COMMAND" scripts/configure-pawton-dns.mjs validate || fail 'Invalid portal custom domain.'
+fi
 ADMIN_PORTAL_USERNAME="$(config_setting adminPortalUsername "dojo-admin")"
+USER_PORTAL_USERNAME="${USER_PORTAL_USERNAME:-$(config_setting userPortalUsername 'dojo-manager')}"
+[[ "$USER_PORTAL_USERNAME" =~ ^[A-Za-z0-9_.@-]{1,100}$ ]] || fail 'userPortalUsername must contain 1-100 letters, digits, dots, underscores, @ signs, or hyphens.'
 CENTRAL_WORKSPACE_RESOURCE_GROUP="$(config_setting centralWorkspaceResourceGroup "NP-Sentinel-CentralUS")"
 CENTRAL_WORKSPACE_NAME="$(config_setting centralWorkspaceName "log-np-sentinel-centralus")"
 CENTRAL_WORKSPACE_RETENTION_DAYS="$(config_setting workspaceRetentionDays 30)"
@@ -192,26 +214,6 @@ mask_identifier() {
         printf '%s' "${value:-not recorded}"
     else
         printf '%s...%s' "${value:0:4}" "${value: -4}"
-    fi
-}
-
-native_path() {
-    if command -v cygpath >/dev/null 2>&1; then
-        cygpath -w "$1"
-    elif command -v wslpath >/dev/null 2>&1; then
-        wslpath -w "$1"
-    else
-        printf '%s' "$1"
-    fi
-}
-
-report_url() {
-    local native
-    native="$(native_path "$1")"
-    if [[ "$native" == *:\\* ]]; then
-        printf 'file:///%s' "${native//\\//}"
-    else
-        printf 'file://%s' "$native"
     fi
 }
 
@@ -516,6 +518,8 @@ ${BLUE}Sentinel workspace:${NC} $CENTRAL_WORKSPACE_NAME (resource group $CENTRAL
 ${BLUE}Bootstrap script:${NC} $BOOTSTRAP_SCRIPT_URL
 ${BLUE}Pawton Manufacturing Web App:${NC} $WEB_APP_NAME ($WEB_APP_PLAN_SKU, deployWebApp=$DEPLOY_WEB_APP)
 ${BLUE}Web App network path:${NC} private regional VNet integration to the SQL VM subnet
+${BLUE}Portal custom domain:${NC} ${WEB_APP_CUSTOM_DOMAIN:-not configured} (manageCustomDomain=$MANAGE_CUSTOM_DOMAIN, Cloudflare DNS-only)
+${BLUE}Manager sign-in:${NC} $USER_PORTAL_USERNAME (password and session key generated during deploy, stored in Key Vault)
 
 EOF
 }
@@ -618,10 +622,13 @@ read_output() {
 
 run_deployment() {
     local admin_password sql_app_login_password admin_portal_password admin_session_secret sql_admin_ops_password sql_sa_login_password sql_sa_login_username
+    local user_portal_password user_session_secret
     local deployment_name output_json vm_principal_id creds_dir creds_file expected_key_vault_name
     admin_password="$(generate_password)"
     sql_app_login_password="$(generate_password)"
     admin_portal_password="$(generate_password)"
+    user_portal_password="$(generate_password)"
+    user_session_secret="$("$NODE_COMMAND" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
     sql_admin_ops_password="$(generate_password)"
     sql_sa_login_password="$(generate_password)"
     expected_key_vault_name="$(printf '%s' "${VM_NAME}kv" | tr '[:upper:]' '[:lower:]' | tr -d '-' | cut -c1-24)"
@@ -639,12 +646,17 @@ run_deployment() {
                      deployBastion="$DEPLOY_BASTION" autoAllowBastionRdp="$AUTO_ALLOW_BASTION_RDP" \
                      allowPublicSqlAccess="$ALLOW_PUBLIC_SQL_ACCESS" \
                      allowPublicKeyVaultAccess="$ALLOW_PUBLIC_KEY_VAULT_ACCESS" \
-                     deployWebApp="$DEPLOY_WEB_APP" webAppName="$WEB_APP_NAME" \
+                     deployWebApp="$DEPLOY_WEB_APP" enableSqlDemoActions="$ENABLE_SQL_DEMO_ACTIONS" webAppName="$WEB_APP_NAME" \
+                     enableSqlShellAttackTests="$ENABLE_SQL_SHELL_ATTACK_TESTS" \
+                     portalTimeZone="$PORTAL_TIME_ZONE" \
+                     webAppCustomDomain="$WEB_APP_CUSTOM_DOMAIN" \
                      webAppPlanSku="$WEB_APP_PLAN_SKU" sqlAppLoginPassword="$sql_app_login_password" \
                      centralWorkspaceResourceGroup="$CENTRAL_WORKSPACE_RESOURCE_GROUP" \
                      centralWorkspaceName="$CENTRAL_WORKSPACE_NAME" \
                      adminPortalUsername="$ADMIN_PORTAL_USERNAME" adminPortalPassword="$admin_portal_password" \
                      adminSessionSecret="$admin_session_secret" sqlAdminOpsPassword="$sql_admin_ops_password" \
+                     userPortalUsername="$USER_PORTAL_USERNAME" userPortalPassword="$user_portal_password" \
+                     userSessionSecret="$user_session_secret" \
                      sqlSaLoginUsername="$sql_sa_login_username" sqlSaLoginPassword="$sql_sa_login_password"
     )
     # Safety check: run what-if with ResourceIdOnly format to suppress property diffs that could expose
@@ -662,6 +674,7 @@ run_deployment() {
         --query "properties.outputs" -o json)" || fail "Bicep deployment failed. Re-run with 'az deployment group create' directly for full diagnostics."
     # Clear the deployment parameters from the environment to avoid keeping sensitive values in memory longer than needed.
     unset deployment_parameters
+    unset user_portal_password user_session_secret
     ok "Infrastructure deployed."
     update_status "Infrastructure deployed" "Bicep deployment finished. Capturing outputs and credentials." 42
 
@@ -714,6 +727,9 @@ run_deployment() {
     record_check "Admin portal credentials saved locally" pass "Written to $admin_portal_creds_file (not committed; output/ is gitignored). This account can enable/disable/rotate the sa login from the dashboard -- delete this file when the exercise ends."
 
     if [[ -n "$KEY_VAULT_NAME" ]]; then
+        if [[ "$DEPLOY_WEB_APP" == true ]]; then
+            record_check "Manager credentials stored in Key Vault" pass "Secrets 'user-portal-username', 'user-portal-password', and 'user-session-secret' in $KEY_VAULT_NAME. Sign in at /login; retrieve credentials using authorized Key Vault access. No local manager credential file is created."
+        fi
         record_check "futon_app SQL login password stored in Key Vault" pass "Secret 'sql-app-login-password' in $KEY_VAULT_NAME; retrieve with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name sql-app-login-password'."
         record_check "VM admin credentials stored in Key Vault" pass "Secrets 'vm-admin-username' and 'vm-admin-password' in $KEY_VAULT_NAME; retrieve them with 'az keyvault secret show --vault-name $KEY_VAULT_NAME --name <secret-name>'."
         record_check "Built-in SQL administrator credentials stored in Key Vault" pass "Secrets 'sql-sa-login-username' and 'sql-sa-login-password' in $KEY_VAULT_NAME; the portal updates them after a rename or password rotation."
@@ -755,6 +771,13 @@ run_deployment() {
 
     if [[ "$DEPLOY_WEB_APP" == true && -n "$WEB_APP_NAME" ]]; then
         deploy_web_app_code
+        if [[ "$MANAGE_CUSTOM_DOMAIN" == true ]]; then
+            run_custom_domain
+            WEB_APP_HOSTNAME="$WEB_APP_CUSTOM_DOMAIN"
+            record_check "Portal custom domain HTTPS" pass "Verified https://$WEB_APP_CUSTOM_DOMAIN/status using Cloudflare DNS-only and an App Service managed certificate."
+        elif [[ -n "$WEB_APP_CUSTOM_DOMAIN" ]]; then
+            record_check "Portal custom domain HTTPS" unknown "Configured $WEB_APP_CUSTOM_DOMAIN; DNS/TLS automation is opt-in. Run the domain command after provisioning Cloudflare credentials."
+        fi
     else
         record_check "Pawton Manufacturing dashboard deployed" not_applicable "Disabled by configuration (deployWebApp=$DEPLOY_WEB_APP)."
     fi
@@ -899,6 +922,17 @@ run_verification() {
         record_check "Built-in SQL administrator credentials retrievable from Key Vault" pass "Secrets 'sql-sa-login-username' and 'sql-sa-login-password' exist in $KEY_VAULT_NAME."
     else
         record_check "Built-in SQL administrator credentials retrievable from Key Vault" unknown "Could not confirm the built-in SQL administrator secrets in ${KEY_VAULT_NAME:-the Key Vault}."
+    fi
+
+    if [[ "$DEPLOY_WEB_APP" == true ]]; then
+        local manager_secret_count
+        manager_secret_count="$(az keyvault secret list --vault-name "$KEY_VAULT_NAME" \
+            --query "length([?(name=='user-portal-username' || name=='user-portal-password' || name=='user-session-secret') && attributes.enabled])" -o tsv 2>/dev/null || true)"
+        if [[ "$manager_secret_count" == 3 ]]; then
+            record_check "Manager credential secret metadata verified" pass "All three manager secrets exist and are enabled in $KEY_VAULT_NAME. Values were not read or logged by this check."
+        else
+            record_check "Manager credential secret metadata verified" unknown "Could not confirm all enabled manager secrets in $KEY_VAULT_NAME. Verify Key Vault access and deployment results."
+        fi
     fi
 
     # Defender for App Service is a subscription-wide plan, so this Web App is covered by the
@@ -1115,7 +1149,19 @@ HTML
     ok "Report written to $out_file"
 }
 
+run_custom_domain() {
+    local args=(deploy --environment "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" --web-app-name "$WEB_APP_NAME" --custom-domain "$WEB_APP_CUSTOM_DOMAIN")
+    [[ "$DEPLOY_WEB_APP" == true && -n "$WEB_APP_CUSTOM_DOMAIN" ]] || fail 'Domain setup requires deployWebApp=true and webAppCustomDomain.'
+    [[ -z "$SUBSCRIPTION_ID" ]] || args+=(--subscription "$SUBSCRIPTION_ID")
+    [[ -z "$CLOUDFLARE_ZONE_ID" ]] || args+=(--cloudflare-zone-id "$CLOUDFLARE_ZONE_ID")
+    [[ "$ASSUME_YES" != true ]] || args+=(--yes)
+    bash "$SCRIPT_DIR/deploy-pawton-domain.sh" "${args[@]}" || fail 'Custom domain setup is incomplete. Fix the reported DNS/TLS condition and rerun the domain command; do not rerun SQL bootstrap just for DNS.'
+}
+
 cmd_deploy() {
+    if [[ "$MANAGE_CUSTOM_DOMAIN" == true ]]; then
+        [[ "$DEPLOY_WEB_APP" == true && -n "$WEB_APP_CUSTOM_DOMAIN" && -n "$CLOUDFLARE_ZONE_ID" && -n "${CLOUDFLARE_API_TOKEN:-}" ]] || fail 'Automatic domain setup requires deployWebApp, custom domain, Cloudflare zone ID, and CLOUDFLARE_API_TOKEN.'
+    fi
     require_login
     initialize_status_report
     update_status "Reviewing plan" "Resolved Scenario 2 settings and waiting for deployment confirmation." 12
@@ -1139,6 +1185,9 @@ cmd_deploy() {
 }
 
 cmd_uninstall() {
+    if [[ -n "$WEB_APP_CUSTOM_DOMAIN" ]]; then
+        warn "Cloudflare DNS is not deleted by uninstall. Remove or repoint the CNAME for $WEB_APP_CUSTOM_DOMAIN before deleting the Web App; retain the ownership TXT until migration is complete."
+    fi
     require_login
     initialize_status_report
     update_status "Confirming uninstall" "Preparing to delete the Scenario 2 resource group." 20
@@ -1164,6 +1213,7 @@ case "$COMMAND" in
     plan) cmd_plan ;;
     doctor) cmd_doctor ;;
     deploy) cmd_deploy ;;
+    domain) run_custom_domain ;;
     uninstall) cmd_uninstall ;;
     *) usage; exit 1 ;;
 esac

@@ -1,15 +1,20 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { isAuthenticated } from '../lib/adminAuth.mjs';
+import { formatTimestamp, getPortalTimeZone } from '../lib/timeZone.mjs';
+import { GET as getStatus } from './api/status.js';
+
+const portalTimeZone = getPortalTimeZone();
 
 Astro.response.headers.set('Cache-Control', 'no-store');
 let status = null;
 let error = null;
 try {
-  const response = await fetch(new URL('/api/status', Astro.url), { headers: { accept: 'application/json' } });
+  const response = await getStatus();
   if (!response.ok) throw new Error(`Status endpoint returned HTTP ${response.status}.`);
   status = await response.json();
 } catch {
-  error = 'The live status endpoint could not be read. Try refreshing in a moment.';
+  error = 'Live status could not be checked. Try refreshing in a moment.';
 }
 const connected = status?.db_connectivity === 'connected';
 ---
@@ -26,10 +31,10 @@ const connected = status?.db_connectivity === 'connected';
       <div>
         <p class="eyebrow">{status.site}</p>
         <h2>{connected ? 'Operational' : status.db_connectivity === 'not_configured' ? 'Configuration required' : 'Database unavailable'}</h2>
-        <p>Last checked <time datetime={status.generated_at}>{new Date(status.generated_at).toLocaleString()}</time>.</p>
+        <p>Last checked <time datetime={status.generated_at}>{formatTimestamp(status.generated_at, portalTimeZone)}</time> ({portalTimeZone}).</p>
       </div>
       <span class:list={['status-pill', connected ? 'status-pill--ok' : 'status-pill--warn']}>
-        {connected ? 'All core checks passing' : 'Needs attention'}
+        {connected ? 'Database check passing' : 'Needs attention'}
       </span>
     </section>
 
@@ -38,8 +43,8 @@ const connected = status?.db_connectivity === 'connected';
       <div class="grid">
         <article class="card"><div class="label">Database</div><div class="value">{status.db_connectivity === 'connected' ? 'Connected' : status.db_connectivity.replaceAll('_', ' ')}</div><p>{status.sample_database}</p></article>
         <article class="card"><div class="label">Sample records</div><div class="value">{status.sample_item_count ?? '—'}</div><p>Items available from the live sample database.</p></article>
-        <article class="card"><div class="label">Network path</div><div class="value">Private VNet</div><p>{status.network.connection}</p></article>
-        <article class="card"><div class="label">Public database endpoint</div><div class="value">{status.network.public_database_endpoint ? 'Enabled' : 'Not used by app'}</div><p>Application traffic uses the private connection path.</p></article>
+        <article class="card"><div class="label">Configured network path</div><div class="value">Private VNet</div><p>{status.network.connection}. Configuration only; not an independent network check.</p></article>
+        <article class="card"><div class="label">Public database exposure</div><div class="value">Not verified</div><p>Check the VM network settings in Azure. Private application connectivity does not rule out a separate public SQL endpoint.</p></article>
       </div>
     </section>
 
@@ -53,5 +58,5 @@ const connected = status?.db_connectivity === 'connected';
     </section>
   </>}
 
-  <div class="actions"><a class="pill" href="/status">Refresh status</a><a href="/api/status">View JSON evidence</a></div>
+  <div class="actions"><a class="pill" href="/status">Refresh status</a>{isAuthenticated(Astro.cookies) && <a href="/api/status">View JSON evidence</a>}</div>
 </Layout>

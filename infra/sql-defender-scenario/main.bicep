@@ -54,8 +54,20 @@ param allowPublicKeyVaultAccess bool = true
 @description('Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection.')
 param deployWebApp bool = true
 
+@description('Enable fixed local SQL Audit probes and bounded direct SQL attack tests in the Pawton Manufacturing portal. Separate from the SQL Server xp_cmdshell setting.')
+param enableSqlDemoActions bool = true
+
+@description('Lab-only: configure SQL Server xp_cmdshell at bootstrap. Enables operating-system commands through privileged SQL sessions. Admin changes persist until bootstrap runs again. Set false to disable shell access.')
+param enableSqlShellAttackTests bool = true
+
+@description('IANA timezone for portal event and status display. Eastern time observes EST/EDT; use Etc/GMT+5 for fixed EST. Stored audit timestamps remain UTC.')
+param portalTimeZone string = 'America/New_York'
+
 @description('Name of the Linux Web App hosting the Pawton Manufacturing dashboard.')
 param webAppName string = '${vmName}-web'
+
+@description('Optional public portal hostname, without scheme or path. DNS and TLS are provisioned separately after the Web App exists.')
+param webAppCustomDomain string = ''
 
 @description('App Service plan SKU for the dashboard Web App.')
 param webAppPlanSku string = 'B1'
@@ -74,6 +86,21 @@ param adminPortalPassword string
 @secure()
 @description('HMAC signing key for the admin portal session cookie. No default; the deploy script generates a random value per run.')
 param adminSessionSecret string
+
+@minLength(1)
+@maxLength(100)
+@description('Non-admin manager username for customer-order management. Keep stable to retain ownership of existing orders.')
+param userPortalUsername string = 'dojo-manager'
+
+@secure()
+@minLength(16)
+@description('Manager sign-in password. Generated on full deployment and stored in Key Vault; separate from administrator and SQL credentials.')
+param userPortalPassword string
+
+@secure()
+@minLength(64)
+@description('Manager session-signing key. Generated independently from the admin key and stored in Key Vault.')
+param userSessionSecret string
 
 @secure()
 @description('Password for the dojo_admin_portal_svc SQL login the admin portal uses to enable/disable/rotate the sa login. This login is granted CONTROL SERVER (the only permission SQL Server accepts for altering sa) -- functionally equivalent to sysadmin. Handing a public-facing Web App this credential is itself the anti-pattern this scenario demonstrates; see README.md. No default; the deploy script generates a random value per run.')
@@ -493,7 +520,7 @@ resource bootstrapExtension 'Microsoft.Compute/virtualMachines/extensions@2024-1
       // neither cmd.exe nor Win32 argv parsing (which powershell.exe uses) treats a single quote
       // as a quote character, so wrapping the value in '...' would pass the literal quote
       // characters through as part of the argument instead of stripping them.
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)} -AdminOpsLoginPasswordBase64 ${base64(sqlAdminOpsPassword)} -SaLoginPasswordBase64 ${base64(sqlSaLoginPassword)}'
+      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 ${base64(sqlAppLoginPassword)} -AdminOpsLoginPasswordBase64 ${base64(sqlAdminOpsPassword)} -SaLoginPasswordBase64 ${base64(sqlSaLoginPassword)} -EnableSqlShellAttackTests ${enableSqlShellAttackTests ? 'true' : 'false'}'
     }
   }
   dependsOn: [
@@ -657,6 +684,30 @@ resource adminSessionSecretSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01'
   }
 }
 
+resource userPortalUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (deployWebApp) {
+  parent: keyVault
+  name: 'user-portal-username'
+  properties: {
+    value: userPortalUsername
+  }
+}
+
+resource userPortalPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (deployWebApp) {
+  parent: keyVault
+  name: 'user-portal-password'
+  properties: {
+    value: userPortalPassword
+  }
+}
+
+resource userSessionSecretSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (deployWebApp) {
+  parent: keyVault
+  name: 'user-session-secret'
+  properties: {
+    value: userSessionSecret
+  }
+}
+
 resource sqlAdminOpsPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   parent: keyVault
   name: 'sql-admin-ops-password'
@@ -724,6 +775,24 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
           value: resourceId('Microsoft.Compute/virtualMachines', vmName)
         }
         {
+          // Keep the portal behavior explicit and deployment-controlled rather than relying on
+          // the application's default when a setting is absent.
+          name: 'ENABLE_SQL_DEMO_ACTIONS'
+          value: enableSqlDemoActions ? 'true' : 'false'
+        }
+        {
+          name: 'SQL_SHELL_ATTACK_TESTS_ENABLED'
+          value: enableSqlShellAttackTests ? 'true' : 'false'
+        }
+        {
+          name: 'PORTAL_TIME_ZONE'
+          value: portalTimeZone
+        }
+        {
+          name: 'PORTAL_CUSTOM_DOMAIN'
+          value: webAppCustomDomain
+        }
+        {
           name: 'AZURE_SUBSCRIPTION_ID'
           value: subscription().subscriptionId
         }
@@ -754,6 +823,18 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = if (deployWebApp) {
         {
           name: 'ADMIN_SESSION_SECRET'
           value: adminSessionSecret
+        }
+        {
+          name: 'USER_PORTAL_USERNAME'
+          value: userPortalUsername
+        }
+        {
+          name: 'USER_PORTAL_PASSWORD'
+          value: userPortalPassword
+        }
+        {
+          name: 'USER_SESSION_SECRET'
+          value: userSessionSecret
         }
         {
           name: 'SQL_ADMIN_LOGIN'
@@ -849,6 +930,28 @@ module webAppLogAnalyticsReader 'modules/log-analytics-reader.bicep' = if (deplo
     workspaceName: centralWorkspaceName
     principalId: webApp!.identity.principalId
     roleAssignmentNameSuffix: webAppName
+  }
+}
+
+// Pricing is subscription-scoped, so assign the application only the Defender read role it needs
+// for live status. This module intentionally has no write permission for plans or simulations.
+module webAppDefenderStatusReader 'modules/defender-status-reader.bicep' = if (deployWebApp) {
+  name: '${deployment().name}-defender-reader'
+  scope: subscription()
+  params: {
+    principalId: webApp!.identity.principalId
+    roleAssignmentNameSuffix: webAppName
+  }
+}
+
+// Extension metadata is a Compute management-plane read scoped to this VM only.
+resource webAppVmReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWebApp) {
+  scope: vm
+  name: guid(vm.id, webAppName, 'reader')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
+    principalId: webApp!.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 

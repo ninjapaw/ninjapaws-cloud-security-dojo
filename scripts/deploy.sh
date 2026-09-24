@@ -422,10 +422,6 @@ confirm() {
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]] || fail "Operation cancelled."
 }
 
-html_escape() {
-        printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
-}
-
 mask_identifier() {
     local value="${1:-}"
     if [[ "$value" == "current Azure subscription" ]]; then
@@ -624,27 +620,6 @@ open_status_html() {
 mark_status_html_opened() {
     [[ -n "$STATUS_OPEN_MARKER" ]] || return 0
     printf '%s\n' "$1" > "$STATUS_OPEN_MARKER" 2>/dev/null || true
-}
-
-# The browser needs a host-native path: MSYS and WSL paths are not valid file:// URLs on Windows.
-native_path() {
-    if command -v cygpath >/dev/null 2>&1; then
-        cygpath -w "$1"
-    elif command -v wslpath >/dev/null 2>&1; then
-        wslpath -w "$1"
-    else
-        printf '%s' "$1"
-    fi
-}
-
-report_url() {
-    local native
-    native="$(native_path "$1")"
-    if [[ "$native" == *:\\* ]]; then
-        printf 'file:///%s' "${native//\\//}"
-    else
-        printf 'file://%s' "$native"
-    fi
 }
 
 print_report_link() {

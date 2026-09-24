@@ -1,0 +1,4 @@
+# Crawling is allowed so crawlers can observe the noindex response directives.
+# This training application is not intended for search indexing.
+User-agent: *
+Allow: /

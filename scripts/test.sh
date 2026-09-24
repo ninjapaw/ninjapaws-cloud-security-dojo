@@ -6,34 +6,11 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-AZURE_REPO_ROOT="$REPO_ROOT"
-AZURE_CLI_BIN="${AZURE_CLI_BIN:-az}"
-if command -v wslpath >/dev/null 2>&1; then
-    AZURE_REPO_ROOT="$(wslpath -w "$REPO_ROOT")"
-fi
-for azure_cli_dir in "/mnt/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin" "/c/Program Files/Microsoft SDKs/Azure/CLI2/wbin"; do
-    if [[ ! -x "$azure_cli_dir/az.cmd" && -f "$azure_cli_dir/az.cmd" ]]; then
-        export PATH="$azure_cli_dir:$PATH"
-        break
-    fi
-done
-if command -v cmd.exe >/dev/null 2>&1; then
-    windows_az_path="$(MSYS2_ARG_CONV_EXCL='/c' cmd.exe /c where az 2>/dev/null | tr -d '\r' | head -n 1 || true)"
-    if [[ -n "$windows_az_path" ]]; then
-        if command -v wslpath >/dev/null 2>&1; then
-            AZURE_CLI_BIN="$(wslpath -u "$windows_az_path")"
-        elif command -v cygpath >/dev/null 2>&1; then
-            AZURE_CLI_BIN="$(cygpath -u "$windows_az_path")"
-        else
-            AZURE_CLI_BIN="$windows_az_path"
-        fi
-        azure_cli_dir="$(dirname "$AZURE_CLI_BIN")"
-        export PATH="$azure_cli_dir:$PATH"
-    fi
-fi
+cd "$REPO_ROOT"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 SKIP_AZURE=false
 SKIP_REPORT=false
-NODE_COMMAND=""
 
 usage() {
     cat <<'EOF'
@@ -60,15 +37,7 @@ for command_name in bash git; do
     command -v "$command_name" >/dev/null 2>&1 || { echo "ERROR: '$command_name' is required." >&2; exit 1; }
 done
 command -v tee >/dev/null 2>&1 || { echo "ERROR: 'tee' is required." >&2; exit 1; }
-if command -v node >/dev/null 2>&1; then
-    NODE_COMMAND=node
-elif command -v node.exe >/dev/null 2>&1; then
-    NODE_COMMAND=node.exe
-elif [[ -x /mnt/c/Program\ Files/nodejs/node.exe ]]; then
-    NODE_COMMAND='/mnt/c/Program Files/nodejs/node.exe'
-elif [[ -x /c/Program\ Files/nodejs/node.exe ]]; then
-    NODE_COMMAND='/c/Program Files/nodejs/node.exe'
-else
+if ! command -v "$NODE_COMMAND" >/dev/null 2>&1; then
     echo "ERROR: Node.js is required for ARM JSON checks." >&2
     exit 1
 fi
@@ -76,6 +45,7 @@ fi
 echo "Checking Bash syntax..."
 bash -n "$REPO_ROOT/scripts/deploy.sh"
 bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
+bash -n "$REPO_ROOT/scripts/deploy-pawton-domain.sh"
 bash -n "$REPO_ROOT/scripts/deploy-sentinel-sql.sh"
 bash -n "$REPO_ROOT/scripts/lib/common.sh"
 bash -n "$REPO_ROOT/scripts/manage.sh"
@@ -87,7 +57,17 @@ echo "Checking Node.js runtime syntax..."
 (
     cd "$REPO_ROOT"
     "$NODE_COMMAND" --check src/app.js
+    "$NODE_COMMAND" --test tests/*.test.js
     "$NODE_COMMAND" scripts/test-sentinel-sql.mjs
+    "$NODE_COMMAND" --test scripts/test-pawton-domain.mjs
+)
+
+echo "Checking shared report helpers..."
+(
+    [[ "$(html_escape '<&>')" == '&lt;&amp;&gt;' ]]
+    native_path() { printf '%s' "$1"; }
+    [[ "$(report_url /tmp/report.html)" == 'file:///tmp/report.html' ]]
+    [[ "$(report_url 'C:\Dojo\report.html')" == 'file:///C:/Dojo/report.html' ]]
 )
 
 contains_text() {
@@ -164,7 +144,8 @@ file_contains "$REPO_ROOT/scripts/verify.sh" 'expected_version="1.30.3"'
 file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg-query -W nginx'
 file_contains "$REPO_ROOT/scripts/verify.sh" 'dpkg -l | grep nginx'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'scripts/verify.sh'
-file_contains "$REPO_ROOT/REPRO.md" 'Defender Inventory detects nginx 1.30.3'
+file_contains "$REPO_ROOT/README.md" '### Reproduction and evidence'
+file_contains "$REPO_ROOT/README.md" 'An inventory entry alone is not proof of a vulnerability finding.'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'msedge.exe microsoft-edge microsoft-edge-dev edge'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'DEPLOY_BROWSER:-${BROWSER:-}'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'Azure login was not completed. The read-only wizard stopped before inspecting Azure.'

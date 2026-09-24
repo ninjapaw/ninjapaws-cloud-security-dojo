@@ -2,8 +2,12 @@
 const { title = 'Overview' } = Astro.props;
 const DEFAULT_THEME = 'dark';
 import { getAuthenticatedUsername } from '../lib/adminAuth.mjs';
+import { getUser } from '../lib/userAuth.mjs';
+import { pageMetadata, SITE_NAME } from '../lib/pageMetadata.mjs';
 
 const adminUsername = getAuthenticatedUsername(Astro.cookies);
+const staffUsername = getUser(Astro.cookies);
+const metadata = pageMetadata(Astro.url.pathname, title);
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 ---
 <!doctype html>
@@ -11,7 +15,37 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title} — Pawton Manufacturing</title>
+  <title>{metadata.title}</title>
+  <meta name="description" content={metadata.description} />
+  <meta name="robots" content={metadata.robots} />
+  <meta name="application-name" content={SITE_NAME} />
+  <meta name="author" content="Ninja Paws" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="theme-color" content="#111827" id="theme-color" />
+  {metadata.canonical && <link rel="canonical" href={metadata.canonical} />}
+  {metadata.social && <>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content={metadata.title} />
+    <meta property="og:description" content={metadata.description} />
+    {metadata.canonical && <meta property="og:url" content={metadata.canonical} />}
+    <meta name="twitter:card" content={metadata.socialImage ? 'summary_large_image' : 'summary'} />
+    <meta name="twitter:title" content={metadata.title} />
+    <meta name="twitter:description" content={metadata.description} />
+    {metadata.socialImage && <>
+      <meta property="og:image" content={metadata.socialImage} />
+      <meta property="og:image:type" content="image/png" />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      <meta property="og:image:alt" content="Pawton Manufacturing paw-and-gear logo. Independent cloud-security training lab." />
+      <meta name="twitter:image" content={metadata.socialImage} />
+      <meta name="twitter:image:alt" content="Pawton Manufacturing paw-and-gear logo. Independent cloud-security training lab." />
+    </>}
+  </>}
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32" />
+  <link rel="icon" type="image/svg+xml" href="/pawton-mark.svg" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
   <style is:global>
     /* Keep the portal shell visually aligned with the M365 Profiles Fluent palette while leaving
        the data pages free to focus on their SQL-backed content. */
@@ -78,9 +112,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     body > header { position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
     .header-inner { max-width: 1180px; min-height: 60px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 24px; }
     .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
-    .brand-mark { display: grid; grid-template-columns: 9px 9px; grid-template-rows: 9px 9px; gap: 2px; }
-    .brand-mark span:nth-child(1) { background: #f25022; } .brand-mark span:nth-child(2) { background: #7fba00; }
-    .brand-mark span:nth-child(3) { background: #00a4ef; } .brand-mark span:nth-child(4) { background: #ffb900; }
+    .brand-mark { display: block; width: 32px; height: 32px; flex: 0 0 32px; }
     nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
     nav a, .theme-toggle { color: var(--text-soft); text-decoration: none; font-size: 14px; font-weight: 500; border: 0; background: transparent; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
     nav a:hover, nav a.active, .theme-toggle:hover { color: var(--link); background: var(--blue-tint); text-decoration: none; }
@@ -123,16 +155,17 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
 <body>
   <header>
     <div class="header-inner">
-    <a class="brand" href="/" aria-label="Pawton Manufacturing home"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><span>Pawton Manufacturing</span></a>
+    <a class="brand" href="/" aria-label="Pawton Manufacturing home"><img class="brand-mark" src="/pawton-mark.svg" width="32" height="32" alt="" /><span>Pawton Manufacturing</span></a>
     <nav>
       <a href="/">Overview</a>
       <a href="/inventory">Inventory</a>
       <a href="/sales">Sales</a>
+      <a href="/orders">Manage orders</a>
       <a href="/production">Production</a>
       <a href="/status">Status</a>
-      <a href="/users">Users</a>
       {adminUsername ? (
         <>
+          <a href="/users">SQL logins</a>
           <a href="/admin">Security lab</a>
           <a href="/admin/schema">Schema</a>
           <a href="/admin/auditing">Auditing</a>
@@ -142,7 +175,13 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
           </form>
         </>
       ) : (
-        <a href="/admin">Admin</a>
+        <>
+          {staffUsername ? <>
+            <span class="user-chip" title={`Manager: ${staffUsername}`}>{staffUsername}</span>
+            <form class="logout-form" method="post" action="/api/user/logout"><button class="nav-action" type="submit">Sign out</button></form>
+          </> : <a href="/login">Log in as manager</a>}
+          <a href="/admin/login">Admin</a>
+        </>
       )}
     </nav>
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
@@ -161,9 +200,12 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
       const savedTheme = localStorage.getItem(themeKey);
       document.documentElement.dataset.theme = ['light', 'dark'].includes(savedTheme) ? savedTheme : defaultTheme;
     } catch { document.documentElement.dataset.theme = defaultTheme; }
+    const updateThemeColor = () => document.getElementById('theme-color')?.setAttribute('content', document.documentElement.dataset.theme === 'dark' ? '#111827' : '#f8f9fb');
+    updateThemeColor();
     document.getElementById('theme-toggle')?.addEventListener('click', () => {
       const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = theme;
+      updateThemeColor();
       try { localStorage.setItem(themeKey, theme); } catch {}
     });
     const path = window.location.pathname.replace(/\/$/, '') || '/';

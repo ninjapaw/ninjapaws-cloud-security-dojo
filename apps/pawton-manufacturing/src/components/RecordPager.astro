@@ -1,0 +1,93 @@
+---
+interface Props {
+  target: string;
+  total: number;
+  pageSize?: number;
+  start?: number;
+  server?: boolean;
+  windowEnd?: string;
+}
+const { target, total, pageSize = 25, start = 0, server = false, windowEnd = '' } = Astro.props;
+const lastStart = Math.max(0, Math.floor((total - 1) / pageSize) * pageSize);
+const link = (record: number) => {
+  const url = new URL(Astro.url);
+  url.searchParams.set('record', String(record));
+  url.searchParams.set('until', windowEnd);
+  url.hash = target;
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+const controls = [
+  { action: 'first', label: 'First page', symbol: '\u21E4', record: 1, disabled: start === 0 },
+  { action: 'previous', label: 'Previous page', symbol: '\u2190', record: Math.max(1, start - pageSize + 1), disabled: start === 0 },
+  { action: 'next', label: 'Next page', symbol: '\u2192', record: start + pageSize + 1, disabled: start >= lastStart },
+  { action: 'last', label: 'Last page', symbol: '\u21E5', record: lastStart + 1, disabled: start >= lastStart },
+];
+---
+<record-pager data-target={target} data-total={total} data-size={pageSize} data-server={String(server)}>
+  <nav aria-label={`${target} record pages`}>
+    <span class="record-range" role="status" aria-live="polite">{total ? start + 1 : 0}–{Math.min(start + pageSize, total)} of {total} records</span>
+    <div class="page-arrows">
+      {controls.map(control => server ? (
+        <a href={control.disabled ? undefined : link(control.record)} aria-label={control.label} title={control.label} aria-disabled={control.disabled ? 'true' : undefined} aria-controls={target}>{control.symbol}</a>
+      ) : (
+        <button type="button" data-page-action={control.action} aria-label={control.label} title={control.label} aria-controls={target} disabled={control.disabled}>{control.symbol}</button>
+      ))}
+    </div>
+    <form method="get" action={`#${target}`}>
+      {server && <input type="hidden" name="until" value={windowEnd} />}
+      <label>Go to record<input type="number" name="record" min="1" max={Math.max(1, total)} step="1" value={total ? start + 1 : 1} required disabled={!total} aria-controls={target} /></label>
+      <button type="submit" title="Go to record" aria-label="Go to record" disabled={!total}>{'\u21B5'}</button>
+    </form>
+  </nav>
+</record-pager>
+
+<style>
+  record-pager { display: block; margin-block: 1rem; }
+  nav { display: flex; align-items: center; gap: 0.75rem; margin: 0; flex-wrap: wrap; }
+  .record-range { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .page-arrows, form { display: flex; gap: 0.4rem; align-items: center; margin: 0; }
+  button, .page-arrows a { display: inline-flex; justify-content: center; align-items: center; width: 36px; height: 36px; padding: 0; font-size: 20px; border-radius: 4px; }
+  .page-arrows a { color: var(--text); border: 1px solid var(--border); text-decoration: none; }
+  [aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+  label { flex-direction: row; align-items: center; gap: 0.5rem; }
+  input[type="number"] { width: 90px; height: 36px; padding: 0.4rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; }
+</style>
+
+<script>
+  class RecordPager extends HTMLElement {
+    connectedCallback() {
+      if (this.dataset.server === 'true' || this.dataset.ready) return;
+      this.dataset.ready = 'true';
+      const target = document.getElementById(this.dataset.target!);
+      if (!target) return;
+      const rows = Array.from(target.querySelectorAll<HTMLElement>('[data-record]'));
+      const size = Number(this.dataset.size);
+      const last = Math.max(0, Math.floor((rows.length - 1) / size) * size);
+      const input = this.querySelector<HTMLInputElement>('input[name="record"]')!;
+      const range = this.querySelector<HTMLElement>('.record-range')!;
+      let start = 0;
+      const show = (requested: number) => {
+        start = Math.max(0, Math.min(last, Math.floor(requested / size) * size));
+        rows.forEach((row, index) => { row.hidden = index < start || index >= start + size; });
+        range.textContent = `${rows.length ? start + 1 : 0}–${Math.min(start + size, rows.length)} of ${rows.length} records`;
+        input.value = String(rows.length ? start + 1 : 1);
+        this.querySelectorAll<HTMLButtonElement>('[data-page-action]').forEach(button => {
+          button.disabled = ['first', 'previous'].includes(button.dataset.pageAction!) ? start === 0 : start >= last;
+        });
+      };
+      this.querySelectorAll<HTMLButtonElement>('[data-page-action]').forEach(button => button.addEventListener('click', () => {
+        const action = button.dataset.pageAction;
+        show(action === 'first' ? 0 : action === 'previous' ? start - size : action === 'next' ? start + size : last);
+        if (button.disabled) input.focus();
+      }));
+      this.querySelector('form')!.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!input.reportValidity()) return;
+        show(Number(input.value) - 1);
+        target.scrollIntoView({ block: 'center' });
+      });
+      show(0);
+    }
+  }
+  if (!customElements.get('record-pager')) customElements.define('record-pager', RecordPager);
+</script>

@@ -1,0 +1,22 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getUser, isUserLoginConfigured } from '../lib/userAuth.mjs';
+if (getUser(Astro.cookies)) return Astro.redirect('/orders');
+const configured = isUserLoginConfigured();
+const messages: Record<string, string> = {
+  invalid: 'Invalid username or password.',
+  ratelimited: 'Too many attempts. Try again in 15 minutes.',
+};
+const message = messages[Astro.url.searchParams.get('error') ?? ''];
+---
+<Layout title="Manager sign-in">
+  <header class="page-header"><p class="eyebrow">Order management</p><h1>Log in as manager</h1><p>Manage customer orders.</p></header>
+  {!configured && <div class="warn">Manager sign-in has not been configured for this environment.</div>}
+  {message && <div class="warn" role="alert">{message}</div>}
+  <form class="stack" method="post" action="/api/user/login">
+    <label>Username<input type="text" name="username" autocomplete="username" maxlength="100" required disabled={!configured} /></label>
+    <label>Password<input type="password" name="password" autocomplete="current-password" maxlength="1024" required disabled={!configured} /></label>
+    <div class="actions"><button type="submit" disabled={!configured}>Log in as manager</button></div>
+  </form>
+  <p><a href="/admin/login">Administrator sign-in</a></p>
+</Layout>

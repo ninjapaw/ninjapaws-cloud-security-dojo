@@ -1,9 +1,13 @@
 ---
 import Layout from '../../layouts/Layout.astro';
+import RecordPager from '../../components/RecordPager.astro';
 import { isAuthenticated } from '../../lib/adminAuth.mjs';
 import { getDefenderStatus } from '../../lib/defenderStatus.mjs';
-import { probes, simulations, alertSimulationDocs, alertReferenceDocs } from '../../lib/securityLab.mjs';
+import { probes, alertReferenceDocs, isSqlDemoActionsEnabled } from '../../lib/securityLab.mjs';
 import { isAuditLogConfigured, getRecentSaAuditEvents } from '../../lib/auditLog.mjs';
+import { sqlAttackRunner, attackScenarios } from '../../lib/sqlAttackLab.mjs';
+import { getSqlShellStatus } from '../../lib/adminDb.mjs';
+import { formatTimestamp, getPortalTimeZone } from '../../lib/timeZone.mjs';
 
 if (!isAuthenticated(Astro.cookies)) {
   return Astro.redirect('/admin/login');
@@ -11,18 +15,38 @@ if (!isAuthenticated(Astro.cookies)) {
 
 Astro.response.headers.set('Cache-Control', 'no-store');
 const defender = await getDefenderStatus();
-const demosEnabled = process.env.ENABLE_SQL_DEMO_ACTIONS === 'true';
+const portalTimeZone = getPortalTimeZone();
+const demosEnabled = isSqlDemoActionsEnabled();
+const simulationAvailability: { ids: string[]; reason: string | null } = await sqlAttackRunner.availability();
+const sqlShellDeploymentDefault = process.env.SQL_SHELL_ATTACK_TESTS_ENABLED !== 'false';
+let sqlShellEnabled: boolean | null = null;
+try { sqlShellEnabled = (await getSqlShellStatus()).enabled; } catch { }
+const sqlShellMessages: Record<string, string> = {
+  enabled: 'SQL shell access enabled and verified.',
+  disabled: 'SQL shell access disabled and verified.',
+  error: 'SQL shell change could not be verified. Check the live state and SQL administrator permissions.',
+};
+const sqlShellMessage = sqlShellMessages[Astro.url.searchParams.get('shell') ?? ''];
 
 // Independent confirmation, separate from the SQL connection the actions above used: did the
 // action actually reach the Windows Application log and get forwarded to Log Analytics? Ingestion
 // typically takes a few minutes, so a just-performed action may not appear yet on this page load.
-let auditEvents: Array<{ TimeGenerated: string; EventID: number; ActionId: string | null; LoginName: string | null; ClientIp: string | null; Success: boolean | null; Summary: string; RenderedDescription: string; Computer: string; EventLog: string; Source: string; EventLevelName: string }> = [];
+let auditEvents: Array<{ TimeGenerated: string; EventID: number; ActionId: string | null; Operation: string; LoginName: string | null; TargetLogin: string | null; ClientIp: string | null; Success: boolean | null; Summary: string; RenderedDescription: string; Computer: string; EventLog: string; Source: string; EventLevelName: string }> = [];
 let auditError = null;
+let auditTotal = 0;
+let auditStart = 0;
+let auditWindowEnd = '';
 let auditConfigured = isAuditLogConfigured();
 if (auditConfigured) {
   try {
-    const auditResult = await getRecentSaAuditEvents(30);
+    const auditResult = await getRecentSaAuditEvents(30, 25, {
+      record: Astro.url.searchParams.get('record') ?? '1',
+      until: Astro.url.searchParams.get('until') ?? '',
+    });
     auditEvents = auditResult.events;
+    auditTotal = auditResult.total;
+    auditStart = auditResult.start;
+    auditWindowEnd = auditResult.windowEnd;
   } catch (err) {
     auditError = err instanceof Error ? err.message : 'Audit query unavailable.';
   }
@@ -34,22 +58,46 @@ if (auditConfigured) {
   </header>
   <div class="banner"><strong>Deliberately privileged demo.</strong> This portal holds a SQL administration credential. Do not expose it to untrusted users or treat it as a production administration pattern.</div>
   <section class="section"><div class="section-header"><h2>Live protection observations</h2><a href="/admin">Refresh status</a></div>
-    <p>Checked <time datetime={defender.checkedAt}>{defender.checkedAt}</time>. Azure reads use the app identity when deployed; no cloud write permission is requested.</p>
+    <p>Checked <time datetime={defender.checkedAt}>{formatTimestamp(defender.checkedAt, portalTimeZone)}</time>. These status checks use read-only Azure queries through the app identity.</p>
     <div class="grid">{defender.observations.map((observation) => <article class="card"><h3>{observation.label}</h3><span class="badge">{observation.state}</span><p>{observation.detail}</p></article>)}</div>
-    <p><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open target in Azure</a></p>
     <p>Unavailable means unverified, not disabled. Subscription pricing and extension provisioning alone do not prove end-to-end detection health.</p>
   </section>
-  <section class="section"><h2>Local audit exercises</h2><p>Fixed SQL probes against this configured instance. They generate database activity, not guaranteed Defender alerts. Each run has an evidence marker and a 60-second cooldown.</p>
-    {!demosEnabled && <div class="warn">Local exercises are disabled. An operator must set ENABLE_SQL_DEMO_ACTIONS=true on the server to opt in.</div>}
+  <section class="section" id="sql-shell-settings"><h2>Admin settings</h2>
+    <p>Display timezone: <strong>{portalTimeZone}</strong></p>
+    <h3>SQL shell access (xp_cmdshell)</h3>
+    <p>Live state: <strong>{sqlShellEnabled === null ? 'Unavailable' : sqlShellEnabled ? 'Enabled' : 'Disabled'}</strong>. Deployment default: <strong>{sqlShellDeploymentDefault ? 'Enabled' : 'Disabled'}</strong>.</p>
+    <div class="warn">Lab-only setting. SQL shell access permits operating-system commands with the SQL execution identity's privileges. Disabling it blocks new shell calls but does not stop commands already running or disable Defender.</div>
+    {sqlShellMessage && <p role="status">{sqlShellMessage}</p>}
+    {sqlShellEnabled === null && <p>SQL status could not be read. Setting changes are unavailable until the administrator connection is restored.</p>}
+    <form class="stack" method="post" action="/api/admin/sql-shell">
+      <label class="confirmation"><input type="checkbox" role="switch" name="enabled" value="true" checked={sqlShellEnabled === true} disabled={sqlShellEnabled === null} />Enable SQL shell access</label>
+      <label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={sqlShellEnabled === null} />I authorize this server-wide lab setting change</label>
+      <div class="actions"><button type="submit" disabled={sqlShellEnabled === null}>Apply setting</button></div>
+    </form>
+    <p>Admin changes persist in SQL Server. A subsequent bootstrap run reapplies the deployment variable <code>enableSqlShellAttackTests</code>.</p>
+  </section>
+  <section class="section"><h2>Local SQL audit samples</h2><p>Run fixed, safe sample scripts against this configured instance. They generate audit evidence, not guaranteed Defender alerts. Each run has an evidence marker and a 60-second cooldown.</p>
+    {!demosEnabled && <div class="warn">Local exercises are disabled. Set ENABLE_SQL_DEMO_ACTIONS=false to turn them off explicitly.</div>}
     <div class="grid">{probes.map((probe) => <article class="card"><h3>{probe.name}</h3><p>{probe.description}</p><form class="probe-form" method="post" action="/api/admin/probe">
       <input type="hidden" name="probe" value={probe.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!demosEnabled} />I authorize this demo</label>
-      <button type="submit" disabled={!demosEnabled}>Run exercise</button><p class="probe-result" role="status" aria-live="polite"></p>
+      <button type="submit" disabled={!demosEnabled}>Run sample</button><p class="probe-result" role="status" aria-live="polite"></p>
     </form></article>)}</div>
+    <details><summary>Sample SQL</summary><p>The portal generates a unique run ID in place of <code>&lt;run-id&gt;</code> and enforces the same fixed statements shown here.</p>{probes.map((probe) => <div><h3>{probe.name}</h3><pre><code>{probe.script}</code></pre></div>)}</details>
   </section>
-  <section class="section"><div class="section-header"><h2>Defender alert simulations</h2><a href={alertSimulationDocs} target="_blank" rel="noopener noreferrer">Microsoft simulation guide</a></div>
-    <p>Microsoft's simulator injects test telemetry using the Sql-SimulateAlert VM extension, without executing malicious payloads. Launch Azure, open the SQL VM's Security &gt; Microsoft Defender for Cloud &gt; Security Alerts &gt; Simulate Alerts, then select a scenario. These links do not trigger an attack from this portal.</p>
-    <div class="grid">{simulations.map((scenario) => <article class="card"><h3>{scenario.name}</h3><p>{scenario.description}</p><p class="muted">{scenario.evidence}</p><a href={defender.target.portal} target="_blank" rel="noopener noreferrer">Open Azure for this simulation</a></article>)}</div>
-    <p>Requires the SQL on Machines plan, a protected machine, and Azure permissions to deploy VM extensions. Use test credentials only. Allow several minutes, then verify the alert on the target resource. <a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">Documented SQL alerts</a>.</p>
+  <section class="section"><div class="section-header"><h2>Defender for SQL attack tests</h2><a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">SQL alert reference</a></div>
+    <p>Direct, bounded activity against the configured lab SQL Server. Results distinguish execution from SQL blocking; Defender detection is not guaranteed. Anomaly detections depend on learned behavior. External-source tests only print a URL and do not reproduce a download.</p>
+    {simulationAvailability.reason && <div class="warn">{simulationAvailability.reason}</div>}
+    <div class="grid">{attackScenarios.map((scenario) => <article class="card"><h3>{scenario.name}</h3><p>{scenario.description}</p><p class="muted">{scenario.evidence}</p>
+    <form class="defender-simulation-form" method="post" action="/api/admin/defender-simulation">
+      <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!simulationAvailability.ids.includes(scenario.id)} />I authorize this lab test</label>
+      <button type="submit" disabled={!simulationAvailability.ids.includes(scenario.id)}>Run attack test</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>
+      {!simulationAvailability.ids.includes(scenario.id) && <p class="muted">SQL connection unavailable or lab tests disabled.</p>}
+    </form>
+    <details><summary>Audit-only sample</summary><form class="simulation-sample-form" method="post" action="/api/admin/simulation-sample">
+      <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!demosEnabled} />I authorize this sample</label>
+      <button type="submit" disabled={!demosEnabled}>Run audit sample</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>
+    </form></details></article>)}</div>
+    <p>Audit-only samples produce SQL Audit evidence, not Defender alerts. A matching Sentinel training incident is separate from a Defender for SQL alert. <a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">Documented SQL alerts</a>.</p>
   </section>
   <section class="section"><h2>Compare protection states</h2><p>Defender for SQL detects suspicious activity and assesses vulnerabilities. It is not a general-purpose query-blocking firewall. SQL permissions, password policy, encryption, and SQL Audit remain separate controls.</p>
     <p>Plan changes can affect other SQL machines and billing. Disable or re-enable protection only through Azure's authenticated environment settings after confirming scope, recording the baseline, and arranging restoration. This portal deliberately has no subscription-wide off switch.</p>
@@ -58,13 +106,14 @@ if (auditConfigured) {
     <a href="https://portal.azure.com/#view/Microsoft_Azure_Security/SecurityMenuBlade/~/environmentSettings" target="_blank" rel="noopener noreferrer">Review Defender environment settings</a>
   </section>
 
-  <h2>Windows Event confirmation</h2>
+  <h2 id="windows-events">Windows Event confirmation</h2>
   {!defender.target.vmId && <div class="warn">No VM scope is configured. These are workspace-wide SQL events and may belong to other machines.</div>}
   <p><a class="pill" href="/admin/auditing">View SQL auditing configuration</a></p>
   <p>
     Independent confirmation that admin portal actions actually reached the Windows Application
     log and were forwarded to the configured Log Analytics workspace, queried live with this Web
-    App's own read-only managed identity (no stored credential). Ingestion can take a few minutes,
+    App's own read-only managed identity (no stored credential). Login enablement and disablement
+    are identified from the SQL Audit action and statement. Ingestion can take a few minutes,
     so a just-performed action may not appear on this page load yet -- refresh to check again.
   </p>
   {!auditConfigured && (
@@ -72,21 +121,24 @@ if (auditConfigured) {
   )}
   {auditError && <div class="warn">Could not query Log Analytics: {auditError}</div>}
   {auditConfigured && !auditError && auditEvents.length === 0 && (
-    <div class="warn">No matching Windows events in the last 30 minutes yet.</div>
+    <div class="warn">No matching Windows events in this 30-minute window.</div>
   )}
+  {auditWindowEnd && <p>30-minute window ending {formatTimestamp(auditWindowEnd, portalTimeZone)}. <a href="/admin#windows-events">Refresh events</a></p>}
   {/* Keep a separate Event Viewer-style view so operators can inspect the forwarded Windows record itself. */}
   {auditEvents.length > 0 && (
-    <div class="table-shell" tabindex="0" role="region" aria-label="Forwarded audit events"><table>
+    <div class="table-shell" tabindex="0" role="region" aria-label="Forwarded audit events"><table id="audit-event-table">
       <thead>
-        <tr><th>Time</th><th>Event ID</th><th>Action ID</th><th>Principal</th><th>Client</th><th>Result</th><th>Summary</th></tr>
+        <tr><th>Time ({portalTimeZone})</th><th>Event ID</th><th>Action ID</th><th>Operation</th><th>Actor</th><th>Target login</th><th>Client</th><th>Result</th><th>Summary</th></tr>
       </thead>
       <tbody>
         {auditEvents.map((event) => (
           <tr>
-            <td>{new Date(event.TimeGenerated).toISOString()}</td>
+            <td><time datetime={event.TimeGenerated}>{formatTimestamp(event.TimeGenerated, portalTimeZone)}</time></td>
             <td>{event.EventID}</td>
             <td>{event.ActionId ?? 'n/a'}</td>
+            <td>{event.Operation}</td>
             <td>{event.LoginName ?? 'n/a'}</td>
+            <td>{event.TargetLogin ?? 'n/a'}</td>
             <td>{event.ClientIp ?? 'n/a'}</td>
             <td>{event.Success === true ? 'success' : event.Success === false ? 'failed' : 'unknown'}</td>
             <td>
@@ -102,7 +154,7 @@ if (auditConfigured) {
   )}
 
   {auditEvents.length > 0 && (
-    <section>
+    <section id="audit-event-records">
       <h3>Forwarded Windows event records</h3>
       <p>
         These fields mirror the Windows Event Viewer record collected from the SQL VM's Application
@@ -111,7 +163,7 @@ if (auditConfigured) {
       {auditEvents.map((event) => (
         <details>
           <summary>
-            {event.Computer ?? 'Unknown computer'} -- Event ID {event.EventID} -- {new Date(event.TimeGenerated).toISOString()}
+            {event.Computer ?? 'Unknown computer'} -- {event.Operation} -- {formatTimestamp(event.TimeGenerated, portalTimeZone)}
           </summary>
           <dl>
             <dt>Log</dt><dd>{event.EventLog ?? 'Application'}</dd>
@@ -119,31 +171,33 @@ if (auditConfigured) {
             <dt>Level</dt><dd>{event.EventLevelName ?? 'n/a'}</dd>
             <dt>Computer</dt><dd>{event.Computer ?? 'n/a'}</dd>
             <dt>Event ID</dt><dd>{event.EventID}</dd>
-            <dt>Time generated</dt><dd>{new Date(event.TimeGenerated).toISOString()}</dd>
+            <dt>Time generated ({portalTimeZone})</dt><dd><time datetime={event.TimeGenerated}>{formatTimestamp(event.TimeGenerated, portalTimeZone)}</time></dd>
           </dl>
           <pre style="white-space: pre-wrap; word-break: break-word;">{event.RenderedDescription}</pre>
         </details>
       ))}
     </section>
   )}
+  {auditConfigured && !auditError && <RecordPager target="windows-events" total={auditTotal} start={auditStart} windowEnd={auditWindowEnd} server />}
 </Layout>
 
 <script>
-  document.querySelectorAll<HTMLFormElement>('.probe-form').forEach((form) => {
+  document.querySelectorAll<HTMLFormElement>('.probe-form, .simulation-sample-form, .defender-simulation-form').forEach((form) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const button = form.querySelector<HTMLButtonElement>('button')!;
-      const output = form.querySelector<HTMLElement>('.probe-result')!;
+      const output = form.querySelector<HTMLElement>('.probe-result, .simulation-sample-result')!;
+      const fallbackMessage = form.matches('.probe-form') ? 'Exercise failed.' : 'Request failed.';
       button.disabled = true;
       output.textContent = 'Running...';
       try {
         const response = await fetch(form.action, { method: 'POST', body: new FormData(form) });
         if (response.status === 401) throw new Error('Session expired. Sign in again.');
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Exercise failed.');
+        if (!response.ok) throw new Error(result.error || fallbackMessage);
         output.textContent = `${result.outcome} Run ID: ${result.runId}`;
       } catch (error) {
-        output.textContent = error instanceof Error ? error.message : 'Exercise failed.';
+        output.textContent = error instanceof Error ? error.message : fallbackMessage;
       } finally { button.disabled = false; }
     });
   });

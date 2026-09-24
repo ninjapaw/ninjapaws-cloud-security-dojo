@@ -69,6 +69,10 @@ jobs:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PORTAL_CUSTOM_DOMAIN: ${{ vars.PORTAL_CUSTOM_DOMAIN }}
+      MANAGE_CUSTOM_DOMAIN: ${{ vars.MANAGE_CUSTOM_DOMAIN }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      USER_PORTAL_USERNAME: ${{ vars.USER_PORTAL_USERNAME }}
 
     steps:
       - name: 🥷 Checkout repository
@@ -77,7 +81,7 @@ jobs:
       - name: 🧭 Validate scenario lifecycle inputs
         run: |
           case "$SCENARIO_STAGE" in
-            plan|doctor|deploy|verify|uninstall) ;;
+            plan|doctor|deploy|domain|verify|uninstall) ;;
             *)
               echo "::error title=Unsupported lifecycle stage::Stage '$SCENARIO_STAGE' is not supported by the reusable scenario lifecycle workflow."
               exit 1
@@ -119,6 +123,8 @@ jobs:
           subscription-id: ${{ env.SUBSCRIPTION_ID }}
 
       - name: 🧭 Run scenario lifecycle
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           args=(
             "$SCENARIO_STAGE"

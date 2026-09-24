@@ -9,7 +9,6 @@ const app = express();
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT) || 3000;
 const DEFAULT_NGINX_VERSION = "1.30.3";
-const DEFAULT_VULNERABILITY_STATUS = "vulnerable";
 const CVE_ID = "CVE-2026-42533";
 const VULNERABILITY_DESCRIPTION =
   "NGINX map directive and regex matching heap buffer overflow";
@@ -41,11 +40,7 @@ function getRuntimeVerification() {
   }
 }
 
-function getVulnerabilityStatus(runtimeVerification) {
-  const configuredStatus = String(process.env.VULNERABILITY_STATUS ?? "")
-    .trim()
-    .toLowerCase();
-
+function getVulnerabilityStatus(runtimeVerification, configuredStatus) {
   if (runtimeVerification.vulnerability_detected === true) return "vulnerable";
   if (runtimeVerification.scenario_config_state === "remediated")
     return "remediated";
@@ -55,12 +50,14 @@ function getVulnerabilityStatus(runtimeVerification) {
   return "not_detected";
 }
 
-function getRuntimeStatus() {
-  const runtimeVerification = getRuntimeVerification();
+function getRuntimeStatus(runtimeVerification = getRuntimeVerification()) {
   const configuredStatus = String(process.env.VULNERABILITY_STATUS ?? "")
     .trim()
     .toLowerCase();
-  const vulnerabilityStatus = getVulnerabilityStatus(runtimeVerification);
+  const vulnerabilityStatus = getVulnerabilityStatus(
+    runtimeVerification,
+    configuredStatus,
+  );
   const vulnerabilityDetected =
     runtimeVerification.vulnerability_detected === true ||
     (configuredStatus === "vulnerable" && vulnerabilityStatus === "vulnerable");
@@ -128,7 +125,6 @@ function getDefenderMonitoring() {
   };
 }
 
-// Health check endpoint
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
@@ -160,11 +156,10 @@ app.get("/evidence", evidenceRateLimit, (req, res) => {
   }
 });
 
-// API status endpoint
 app.get("/api/status", evidenceRateLimit, (req, res) => {
-  const { nginxVersion, vulnerabilityStatus, vulnerabilityDetected } =
-    getRuntimeStatus();
   const runtimeVerification = getRuntimeVerification();
+  const { nginxVersion, vulnerabilityStatus, vulnerabilityDetected } =
+    getRuntimeStatus(runtimeVerification);
 
   res.json({
     environment: "Ninja Paws Cloud Security Dojo",
@@ -189,7 +184,6 @@ app.get("/api/status", evidenceRateLimit, (req, res) => {
   });
 });
 
-// Home endpoint
 app.get("/", (req, res) => {
   const { nginxVersion, vulnerabilityStatus, defenderEnabled } =
     getRuntimeStatus();

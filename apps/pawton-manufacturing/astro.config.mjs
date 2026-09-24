@@ -1,6 +1,21 @@
 import { defineConfig } from "astro/config";
 import node from "@astrojs/node";
 
+const customDomain = (process.env.PORTAL_CUSTOM_DOMAIN ?? "")
+  .trim()
+  .toLowerCase();
+if (
+  customDomain &&
+  (customDomain.length > 253 ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(
+      customDomain,
+    ))
+) {
+  throw new Error(
+    "PORTAL_CUSTOM_DOMAIN must be a hostname without a scheme, port, path, or wildcard.",
+  );
+}
+
 // SSR is required: every page reads live data from the Scenario 2 SQL Server VM,
 // so this cannot be a static build like the other Astro sites in this workspace.
 export default defineConfig({
@@ -16,6 +31,7 @@ export default defineConfig({
     allowedDomains: [
       { hostname: "localhost" },
       { hostname: "127.0.0.1" },
+      ...(customDomain ? [{ hostname: customDomain, protocol: "https" }] : []),
       ...(process.env.WEBSITE_HOSTNAME
         ? [{ hostname: process.env.WEBSITE_HOSTNAME, protocol: "https" }]
         : []),

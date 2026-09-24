@@ -42,17 +42,32 @@ function extractField(renderedDescription, fieldName) {
   return raw.length > 0 ? raw : null;
 }
 
+function getAuditOperation({ ActionId, Statement, EventID }) {
+  if (ActionId === "LGEA") return "Login enabled";
+  if (ActionId === "LGDA") return "Login disabled";
+  if (ActionId === "PWR") return "Login password changed";
+  if (ActionId === "AUSC") return "Audit configuration changed";
+  if (
+    /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+ENABLE\b/i.test(Statement)
+  )
+    return "Login enabled";
+  if (
+    /^ALTER\s+LOGIN\s+(?:\[(?:[^\]]|\]\])+\]|\S+)\s+DISABLE\b/i.test(Statement)
+  )
+    return "Login disabled";
+  if (/^ALTER\s+LOGIN\s+.*?\s+WITH\s+PASSWORD\b/i.test(Statement))
+    return "Login password changed";
+  if (/^ALTER\s+LOGIN\s+.*?\s+WITH\s+NAME\b/i.test(Statement))
+    return "Login renamed";
+  if (/^(CREATE|ALTER|DROP)\s+(SERVER|DATABASE)\s+AUDIT\b/i.test(Statement))
+    return "Audit configuration changed";
+  if (ActionId === "LGIS" || EventID === 18453 || EventID === 18454)
+    return "Login succeeded";
+  if (ActionId === "LGIF" || EventID === 18456) return "Login failed";
+  return "Other SQL audit";
+}
+
 function formatAuditSummary(event) {
-  const actionId =
-    event.ActionId ?? extractField(event.RenderedDescription, "action_id");
-  const loginName =
-    extractField(event.RenderedDescription, "server_principal_name") ||
-    extractField(event.RenderedDescription, "target_server_principal_name") ||
-    extractField(event.RenderedDescription, "session_server_principal_name");
-  const clientIp =
-    extractField(event.RenderedDescription, "client_ip") ||
-    extractField(event.RenderedDescription, "address");
-  const databaseName = extractField(event.RenderedDescription, "database_name");
   const status =
     event.Success === true
       ? "success"
@@ -61,10 +76,10 @@ function formatAuditSummary(event) {
         : "unknown";
 
   const summaryParts = [];
-  if (actionId) summaryParts.push(actionId);
-  if (loginName) summaryParts.push(loginName);
-  if (databaseName) summaryParts.push(databaseName);
-  if (clientIp) summaryParts.push(clientIp);
+  summaryParts.push(event.Operation);
+  if (event.TargetLogin) summaryParts.push(`target: ${event.TargetLogin}`);
+  else if (event.LoginName) summaryParts.push(event.LoginName);
+  if (event.ClientIp) summaryParts.push(event.ClientIp);
   summaryParts.push(status);
   return summaryParts.join(" • ");
 }
@@ -77,15 +92,32 @@ export function parseAuditEvent(event) {
   const parsed = {
     ...event,
     ActionId: extractField(event.RenderedDescription, "action_id"),
+    Statement: extractField(event.RenderedDescription, "statement"),
     Success: succeeded === "true" ? true : succeeded === "false" ? false : null,
     LoginName:
       extractField(event.RenderedDescription, "server_principal_name") ||
       extractField(event.RenderedDescription, "target_server_principal_name") ||
       extractField(event.RenderedDescription, "session_server_principal_name"),
+    TargetLogin: extractField(
+      event.RenderedDescription,
+      "target_server_principal_name",
+    ),
     ClientIp:
       extractField(event.RenderedDescription, "client_ip") ||
       extractField(event.RenderedDescription, "address"),
   };
+  parsed.Operation = getAuditOperation(parsed);
+  if (
+    !parsed.TargetLogin &&
+    [
+      "Login enabled",
+      "Login disabled",
+      "Login password changed",
+      "Login renamed",
+    ].includes(parsed.Operation)
+  ) {
+    parsed.TargetLogin = extractField(event.RenderedDescription, "object_name");
+  }
   parsed.Summary = formatAuditSummary(parsed);
   return parsed;
 }
@@ -94,33 +126,78 @@ export function parseAuditEvent(event) {
 // and the login audit event stream. Keep KQL deliberately schema-light: the Event table varies
 // slightly between AMA deployments, while the JavaScript parser below can safely handle the raw
 // RenderedDescription field without asking Kusto to evaluate a large set of regex expressions.
-export async function getRecentSaAuditEvents(minutesAgo = 15, take = 20) {
+export async function getRecentSaAuditEvents(
+  minutesAgo = 15,
+  take = 25,
+  { record = "1", until = "", client = null } = {},
+) {
+  const minutes =
+    Number.isInteger(minutesAgo) && minutesAgo > 0 && minutesAgo <= 1440
+      ? minutesAgo
+      : 15;
+  const pageSize =
+    Number.isInteger(take) && take > 0 && take <= 100 ? take : 25;
+  const requestedRecord = Number(record);
+  const safeRecord =
+    Number.isSafeInteger(requestedRecord) && requestedRecord > 0
+      ? requestedRecord
+      : 1;
+  const requestedEnd = Date.parse(until);
+  const endTime = new Date(
+    Number.isFinite(requestedEnd)
+      ? Math.min(requestedEnd, Date.now())
+      : Date.now(),
+  );
+  const startTime = new Date(endTime.getTime() - minutes * 60000);
+  const windowEnd = endTime.toISOString();
   if (!isAuditLogConfigured()) {
-    return { configured: false, events: [] };
+    return { configured: false, events: [], total: 0, start: 0, windowEnd };
   }
   const workspaceId = process.env.LOG_ANALYTICS_WORKSPACE_ID;
   const vmId = defenderTarget().vmId;
+  // Freeze event and ingestion time together so late arrivals do not shift subsequent pages.
   const kustoQuery = `
     Event
-    | where TimeGenerated > ago(${minutesAgo}m)
+    | where TimeGenerated > datetime(${startTime.toISOString()}) and TimeGenerated <= datetime(${windowEnd})
+    | where ingestion_time() <= datetime(${windowEnd})
     ${vmId ? `| where _ResourceId =~ '${vmId.replaceAll("'", "''")}'` : ""}
     | where EventLog == 'Application'
     | where Source == 'MSSQLSERVER'
     | where EventID in (33205, 18453, 18454, 18456)
     | project TimeGenerated, EventLog, Source, EventID, EventLevelName, Computer, RenderedDescription
-    | order by TimeGenerated desc
-    | take ${take}
   `;
-  const result = await getClient().queryWorkspace(workspaceId, kustoQuery, {
-    // Use an explicit ISO 8601 interval so the request remains compatible across SDK releases.
-    duration: "PT1H",
-  });
-  if (result.status === LogsQueryResultStatus.Success) {
-    const table = result.tables[0];
-    const events = table ? tableToObjects(table).map(parseAuditEvent) : [];
-    return { configured: true, events };
-  }
-  throw new Error(
-    result.partialError?.message ?? "Log Analytics query failed.",
+  const queryClient = client ?? getClient();
+  const runQuery = async (queryText) => {
+    const result = await queryClient.queryWorkspace(workspaceId, queryText, {
+      startTime,
+      endTime,
+    });
+    if (result.status !== LogsQueryResultStatus.Success) {
+      throw new Error(
+        result.partialError?.message ?? "Log Analytics query failed.",
+      );
+    }
+    return result.tables[0] ? tableToObjects(result.tables[0]) : [];
+  };
+  const counts = await runQuery(`${kustoQuery}\n| count`);
+  const total = Number(counts[0]?.Count ?? 0);
+  const lastStart = Math.max(0, Math.floor((total - 1) / pageSize) * pageSize);
+  const start = Math.min(
+    lastStart,
+    Math.floor((safeRecord - 1) / pageSize) * pageSize,
   );
+  const rows = total
+    ? await runQuery(`${kustoQuery}
+    | order by TimeGenerated desc, Computer asc, EventID asc, RenderedDescription asc
+    | serialize RowNumber = row_number()
+    | where RowNumber > ${start} and RowNumber <= ${start + pageSize}
+    | project-away RowNumber`)
+    : [];
+  return {
+    configured: true,
+    events: rows.map(parseAuditEvent),
+    total,
+    start,
+    windowEnd,
+  };
 }

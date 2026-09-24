@@ -88,7 +88,7 @@ DEPLOYMENT_NAME="dojo-sql-sentinel-${ENVIRONMENT}"
 
 printf 'Sentinel mode: %s\nWorkspace: %s / %s\nSQL VM: %s / %s\nAnalytics enabled: %s\n' \
     "$SENTINEL_MODE" "$WORKSPACE_GROUP" "$WORKSPACE_NAME" "$VM_GROUP" "$VM_NAME" "$ENABLE_ANALYTICS"
-printf '%s\n' 'Content: DojoSqlAudit parser, four analytics rules, login-change hunt, ingestion-health query.'
+printf '%s\n' 'Content: DojoSqlAudit parser, ten analytics rules, login-change hunt, ingestion-health query.'
 printf '%s\n' 'Unchanged: workspace ingestion/retention, Sentinel onboarding, AMA/DCR, SQL state, Key Vault.'
 [[ "$COMMAND" != plan ]] || exit 0
 
@@ -119,7 +119,7 @@ if [[ "$COMMAND" == verify ]]; then
     deployed_vm="$(az deployment group show --subscription "$SUBSCRIPTION_ID" -g "$WORKSPACE_GROUP" -n "$DEPLOYMENT_NAME" --query properties.outputs.monitoredSqlVm.value -o tsv)"
     [[ "$deployed_vm" == "$SQL_VM_ID" ]] || fail 'Recorded deployment targets a different SQL VM.'
     rule_ids="$(az deployment group show --subscription "$SUBSCRIPTION_ID" -g "$WORKSPACE_GROUP" -n "$DEPLOYMENT_NAME" --query 'properties.outputs.ruleIds.value[]' -o tsv)"
-    [[ "$(printf '%s\n' "$rule_ids" | wc -l | tr -d ' ')" == 4 ]] || fail 'Expected four deployed rule IDs.'
+    [[ "$(printf '%s\n' "$rule_ids" | wc -l | tr -d ' ')" == 10 ]] || fail 'Expected ten deployed rule IDs.'
     while IFS= read -r rule_id; do
         az rest --method get --url "${ARM_ENDPOINT%/}${rule_id}?api-version=2025-09-01" --query 'properties.{Rule:displayName,Enabled:enabled,Frequency:queryFrequency}' -o table
     done <<< "$rule_ids"

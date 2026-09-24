@@ -1,0 +1,24 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import RecordPager from '../../components/RecordPager.astro';
+import { getUser } from '../../lib/userAuth.mjs';
+import { orders } from '../../lib/orders.mjs';
+const username = getUser(Astro.cookies);
+if (!username) return Astro.redirect('/login');
+interface CustomerOrder { SalesOrderID: number; OrderNumber: string; CustomerName: string; RequestedDeliveryDate: Date | string | null; Status: string; TotalAmount: number }
+let rows: CustomerOrder[] = [];
+let unavailable = false;
+try { rows = await orders.list(username); } catch { unavailable = true; }
+---
+<Layout title="Manage orders">
+  <header class="page-header"><p class="eyebrow">Manager workspace</p><h1>Manage orders</h1><p>Orders created by {username}.</p></header>
+  <div class="actions"><a class="pill" href="/orders/new">New customer order</a></div>
+  {unavailable ? <div class="warn">Orders are unavailable. Check the application database connection.</div> : <section class="section">
+    {!rows.length ? <p>No orders yet.</p> : <>
+      <div class="table-shell" id="customer-orders" tabindex="0" role="region" aria-label="Customer orders"><table>
+        <thead><tr><th>Order</th><th>Customer</th><th>Requested delivery</th><th>Status</th><th>Total</th><th>Action</th></tr></thead>
+        <tbody>{rows.map((order: CustomerOrder, index: number) => <tr data-record hidden={index >= 25}><td><a href={`/orders/${order.SalesOrderID}`}>{order.OrderNumber}</a></td><td>{order.CustomerName}</td><td>{order.RequestedDeliveryDate ? new Date(order.RequestedDeliveryDate).toISOString().slice(0, 10) : 'Not set'}</td><td>{order.Status}</td><td>{Number(order.TotalAmount).toFixed(2)}</td><td><a href={`/orders/${order.SalesOrderID}`} aria-label={`${order.Status === 'Draft' ? 'Edit draft' : 'View order'} ${order.OrderNumber}`}>{order.Status === 'Draft' ? 'Edit draft' : 'View order'}</a></td></tr>)}</tbody>
+      </table></div><RecordPager target="customer-orders" total={rows.length} />
+    </>}
+  </section>}
+</Layout>

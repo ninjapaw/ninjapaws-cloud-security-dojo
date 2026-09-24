@@ -95,10 +95,17 @@
     "allowPublicSqlAccess": "false",
     "allowPublicKeyVaultAccess": "true",
     "deployWebApp": "true",
+    "enableSqlDemoActions": "true",
+    "enableSqlShellAttackTests": "true",
+    "portalTimeZone": "America/New_York",
     "webAppPlanSku": "B1",
+    "webAppCustomDomain": "",
+    "manageCustomDomain": "false",
+    "cloudflareZoneId": "",
     "adminPortalUsername": "dojo-admin",
+    "userPortalUsername": "dojo-manager",
     "workspaceRetentionDays": "30",
-    "sentinelMode": "new",
+    "sentinelMode": "existing",
     "sentinelResourceGroup": "",
     "sentinelWorkspaceName": "",
     "centralWorkspaceResourceGroup": "NP-Sentinel-CentralUS",
@@ -125,7 +132,8 @@
       "sqlVmName": "ninjapaws-sql-vm-dev",
       "allowPublicSqlAccess": "true",
       "allowPublicKeyVaultAccess": "true",
-      "webAppName": "ninjapaws-pawton-dev"
+      "webAppName": "ninjapaws-pawton-dev",
+      "webAppCustomDomain": "pawton.ninjapaws.org"
     },
     "prod": {
       "branch": "main",

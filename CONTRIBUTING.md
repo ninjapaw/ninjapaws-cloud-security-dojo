@@ -4,12 +4,15 @@ Ninja Paw is an independent community project maintained by Dr Bill Mcilhargey. 
 
 ## Development
 
-Use Node.js 20+, Docker, Docker Compose, and Bash. Run the shared checks before opening a pull request:
+Use the Node.js version in `.node-version`, the npm version in `package.json`, Docker, Docker Compose, and Bash. Run the shared checks before opening a pull request:
 
 ```bash
 npm ci
+npm ci --prefix apps/pawton-manufacturing
 npm test
 bash scripts/test.sh --skip-azure
+npm test --prefix apps/pawton-manufacturing
+npm run build --prefix apps/pawton-manufacturing
 ```
 
 Do not commit `.env` files, secrets, customer data, production credentials, generated Azure deployment output, or private infrastructure details.

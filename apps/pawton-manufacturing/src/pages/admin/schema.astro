@@ -1,5 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
+import RecordPager from '../../components/RecordPager.astro';
 import { isAuthenticated } from '../../lib/adminAuth.mjs';
 import { query } from '../../lib/db.mjs';
 if (!isAuthenticated(Astro.cookies)) return Astro.redirect('/admin/login');
@@ -8,7 +9,7 @@ let objects: Array<Record<string, string | number | boolean | null>> = [];
 let users: Array<Record<string, string | null>> = [];
 let error = false;
 try {
-  objects = await query(`SELECT TOP (500) s.name AS SchemaName, o.name AS ObjectName, o.type_desc AS ObjectType,
+  objects = await query(`SELECT s.name AS SchemaName, o.name AS ObjectName, o.type_desc AS ObjectType,
     c.name AS ColumnName, t.name AS DataType, c.max_length AS MaxLength, c.is_nullable AS Nullable
     FROM sys.objects o JOIN sys.schemas s ON o.schema_id = s.schema_id
     LEFT JOIN sys.columns c ON c.object_id = o.object_id
@@ -24,12 +25,13 @@ try {
 <Layout title="Schema">
   <header class="page-header"><p class="eyebrow">Read-only inspection</p><h1>Database schema</h1><p>Tables, views, columns, and database roles visible to the application connection. Metadata visibility is permission-filtered; this is not a complete server inventory.</p></header>
   {error ? <div class="warn">Database metadata could not be read. Verify connectivity and permissions.</div> : <>
-    <section class="section"><div class="section-header"><h2>Tables and views</h2><span>Up to 500 columns</span></div>
-      <div class="table-shell" tabindex="0" role="region" aria-label="Schema columns"><table><thead><tr><th>Schema</th><th>Object</th><th>Type</th><th>Column</th><th>Data type</th><th>Nullable</th></tr></thead>
-        <tbody>{objects.map((entry) => <tr><td>{entry.SchemaName}</td><td>{entry.ObjectName}</td><td>{entry.ObjectType}</td><td>{entry.ColumnName}</td><td>{entry.DataType}</td><td>{entry.Nullable ? 'Yes' : 'No'}</td></tr>)}</tbody>
+    <section class="section"><div class="section-header"><h2>Tables and views</h2><span>{objects.length} columns</span></div>
+      <div class="table-shell" id="schema-records" tabindex="0" role="region" aria-label="Schema columns"><table><thead><tr><th>Schema</th><th>Object</th><th>Type</th><th>Column</th><th>Data type</th><th>Nullable</th></tr></thead>
+        <tbody>{objects.map((entry, index) => <tr data-record hidden={index >= 25}><td>{entry.SchemaName}</td><td>{entry.ObjectName}</td><td>{entry.ObjectType}</td><td>{entry.ColumnName}</td><td>{entry.DataType}</td><td>{entry.Nullable ? 'Yes' : 'No'}</td></tr>)}</tbody>
       </table></div>
+      <RecordPager target="schema-records" total={objects.length} />
       {objects.length === 0 && <p>No visible objects.</p>}
     </section>
-    <section class="section"><h2>Database users and roles</h2><div class="table-shell" tabindex="0" role="region" aria-label="Database users"><table><thead><tr><th>User</th><th>Type</th><th>Role</th></tr></thead><tbody>{users.map((entry) => <tr><td>{entry.UserName}</td><td>{entry.Type}</td><td>{entry.RoleName || 'public (implicit)'}</td></tr>)}</tbody></table></div></section>
+    <section class="section"><h2>Database users and roles</h2><div class="table-shell" id="database-user-records" tabindex="0" role="region" aria-label="Database users"><table><thead><tr><th>User</th><th>Type</th><th>Role</th></tr></thead><tbody>{users.map((entry, index) => <tr data-record hidden={index >= 25}><td>{entry.UserName}</td><td>{entry.Type}</td><td>{entry.RoleName || 'public (implicit)'}</td></tr>)}</tbody></table></div><RecordPager target="database-user-records" total={users.length} /></section>
   </>}
 </Layout>

@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "8521773654695630786"
+      "version": "0.46.1.21595",
+      "templateHash": "17963223735527939481"
     }
   },
   "parameters": {
@@ -121,11 +121,39 @@
         "description": "Deploy the Pawton Manufacturing dashboard: a Node.js/Astro Web App that reads the restored sample data over a private VNet connection."
       }
     },
+    "enableSqlDemoActions": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable fixed local SQL Audit probes and bounded direct SQL attack tests in the Pawton Manufacturing portal. Separate from the SQL Server xp_cmdshell setting."
+      }
+    },
+    "enableSqlShellAttackTests": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Lab-only: configure SQL Server xp_cmdshell at bootstrap. Enables operating-system commands through privileged SQL sessions. Admin changes persist until bootstrap runs again. Set false to disable shell access."
+      }
+    },
+    "portalTimeZone": {
+      "type": "string",
+      "defaultValue": "America/New_York",
+      "metadata": {
+        "description": "IANA timezone for portal event and status display. Eastern time observes EST/EDT; use Etc/GMT+5 for fixed EST. Stored audit timestamps remain UTC."
+      }
+    },
     "webAppName": {
       "type": "string",
       "defaultValue": "[format('{0}-web', parameters('vmName'))]",
       "metadata": {
         "description": "Name of the Linux Web App hosting the Pawton Manufacturing dashboard."
+      }
+    },
+    "webAppCustomDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional public portal hostname, without scheme or path. DNS and TLS are provisioned separately after the Web App exists."
       }
     },
     "webAppPlanSku": {
@@ -158,6 +186,29 @@
       "type": "securestring",
       "metadata": {
         "description": "HMAC signing key for the admin portal session cookie. No default; the deploy script generates a random value per run."
+      }
+    },
+    "userPortalUsername": {
+      "type": "string",
+      "defaultValue": "dojo-manager",
+      "minLength": 1,
+      "maxLength": 100,
+      "metadata": {
+        "description": "Non-admin manager username for customer-order management. Keep stable to retain ownership of existing orders."
+      }
+    },
+    "userPortalPassword": {
+      "type": "securestring",
+      "minLength": 16,
+      "metadata": {
+        "description": "Manager sign-in password. Generated on full deployment and stored in Key Vault; separate from administrator and SQL credentials."
+      }
+    },
+    "userSessionSecret": {
+      "type": "securestring",
+      "minLength": 64,
+      "metadata": {
+        "description": "Manager session-signing key. Generated independently from the admin key and stored in Key Vault."
       }
     },
     "sqlAdminOpsPassword": {
@@ -507,7 +558,7 @@
           ]
         },
         "protectedSettings": {
-          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 {0} -AdminOpsLoginPasswordBase64 {1} -SaLoginPasswordBase64 {2}', base64(parameters('sqlAppLoginPassword')), base64(parameters('sqlAdminOpsPassword')), base64(parameters('sqlSaLoginPassword')))]"
+          "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -File Setup-FutonManufacturing.ps1 -AppLoginPasswordBase64 {0} -AdminOpsLoginPasswordBase64 {1} -SaLoginPasswordBase64 {2} -EnableSqlShellAttackTests {3}', base64(parameters('sqlAppLoginPassword')), base64(parameters('sqlAdminOpsPassword')), base64(parameters('sqlSaLoginPassword')), if(parameters('enableSqlShellAttackTests'), 'true', 'false'))]"
         }
       },
       "dependsOn": [
@@ -672,6 +723,42 @@
       ]
     },
     {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'user-portal-username')]",
+      "properties": {
+        "value": "[parameters('userPortalUsername')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'user-portal-password')]",
+      "properties": {
+        "value": "[parameters('userPortalPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'user-session-secret')]",
+      "properties": {
+        "value": "[parameters('userSessionSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultResourceName'))]"
+      ]
+    },
+    {
       "type": "Microsoft.KeyVault/vaults/secrets",
       "apiVersion": "2024-11-01",
       "name": "[format('{0}/{1}', variables('keyVaultResourceName'), 'sql-admin-ops-password')]",
@@ -749,6 +836,22 @@
               "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
             },
             {
+              "name": "ENABLE_SQL_DEMO_ACTIONS",
+              "value": "[if(parameters('enableSqlDemoActions'), 'true', 'false')]"
+            },
+            {
+              "name": "SQL_SHELL_ATTACK_TESTS_ENABLED",
+              "value": "[if(parameters('enableSqlShellAttackTests'), 'true', 'false')]"
+            },
+            {
+              "name": "PORTAL_TIME_ZONE",
+              "value": "[parameters('portalTimeZone')]"
+            },
+            {
+              "name": "PORTAL_CUSTOM_DOMAIN",
+              "value": "[parameters('webAppCustomDomain')]"
+            },
+            {
               "name": "AZURE_SUBSCRIPTION_ID",
               "value": "[subscription().subscriptionId]"
             },
@@ -775,6 +878,18 @@
             {
               "name": "ADMIN_SESSION_SECRET",
               "value": "[parameters('adminSessionSecret')]"
+            },
+            {
+              "name": "USER_PORTAL_USERNAME",
+              "value": "[parameters('userPortalUsername')]"
+            },
+            {
+              "name": "USER_PORTAL_PASSWORD",
+              "value": "[parameters('userPortalPassword')]"
+            },
+            {
+              "name": "USER_SESSION_SECRET",
+              "value": "[parameters('userSessionSecret')]"
             },
             {
               "name": "SQL_ADMIN_LOGIN",
@@ -868,6 +983,22 @@
     },
     {
       "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+      "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), parameters('webAppName'), 'reader')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2025-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[format('{0}-law-reader', deployment().name)]",
@@ -894,8 +1025,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "15956539522724902991"
+              "version": "0.46.1.21595",
+              "templateHash": "15908715972857772588"
             }
           },
           "parameters": {
@@ -926,6 +1057,68 @@
               "name": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName')), parameters('roleAssignmentNameSuffix'), 'logAnalyticsReader')]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployWebApp')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('{0}-defender-reader', deployment().name)]",
+      "subscriptionId": "[subscription().subscriptionId]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2025-03-01', 'full').identity.principalId]"
+          },
+          "roleAssignmentNameSuffix": {
+            "value": "[parameters('webAppName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "11464247775530913802"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the Web App system-assigned managed identity."
+              }
+            },
+            "roleAssignmentNameSuffix": {
+              "type": "string",
+              "metadata": {
+                "description": "A stable, unique suffix for the role assignment name (for example, the Web App name)."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('roleAssignmentNameSuffix'), 'securityReader')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '39bc4728-0917-49c7-9d2c-d95423bc2eb4')]",
                 "principalId": "[parameters('principalId')]",
                 "principalType": "ServicePrincipal"
               }

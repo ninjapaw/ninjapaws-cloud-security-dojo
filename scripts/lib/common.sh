@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 
-# Shared helpers for the Ninja Paws Cloud Security Dojo deploy scripts. Sourced by
-# scripts/deploy.sh and scripts/deploy-sql-scenario.sh so Azure CLI path resolution,
-# color codes, and config-file lookups are defined exactly once instead of duplicated
-# per-scenario. Callers must set REPO_ROOT before sourcing this file; config_lookup and
-# config_scenario_ids additionally require CONFIG_FILE to be set before they are called.
+# Callers set REPO_ROOT before sourcing and CONFIG_FILE before config lookups.
 
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
@@ -121,6 +117,26 @@ config_scenario_ids() {
 
 html_escape() {
     printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    elif command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+report_url() {
+    local native
+    native="$(native_path "$1")"
+    if [[ "$native" == *:\\* ]]; then
+        printf 'file:///%s' "${native//\\//}"
+    else
+        printf 'file://%s' "$native"
+    fi
 }
 
 project_meta() {

@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import RecordPager from '../components/RecordPager.astro';
 import { isAuthenticated, ROTATED_SECRET_COOKIE_NAME } from '../lib/adminAuth.mjs';
 import { listSqlLogins, loginRestriction } from '../lib/adminDb.mjs';
 import { isAdminSecretsConfigured } from '../lib/adminSecrets.mjs';
@@ -60,11 +61,11 @@ const vaultConfigured = isAdminSecretsConfigured();
       {!vaultConfigured && <p class="warn">Key Vault is not configured. Rename and rotation are unavailable.</p>}
     </section>}
     <section class="section"><div class="section-header"><h2>Server login inventory</h2><span>{logins.length} identities</span></div>
-      <div class="table-shell" tabindex="0" role="region" aria-label="SQL login inventory"><table>
+      <div class="table-shell" id="login-records" tabindex="0" role="region" aria-label="SQL login inventory"><table>
         <thead><tr><th scope="col">Login</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Management</th></tr></thead>
-        <tbody>{logins.map((login) => {
+        <tbody>{logins.map((login, index) => {
           const restriction = loginRestriction(login);
-          return <tr><td>{login.name}</td><td>{login.type_desc.replaceAll('_', ' ')}</td><td>{login.is_disabled ? 'Disabled' : 'Enabled'}</td><td>
+          return <tr data-record hidden={index >= 25}><td>{login.name}</td><td>{login.type_desc.replaceAll('_', ' ')}</td><td>{login.is_disabled ? 'Disabled' : 'Enabled'}</td><td>
             {restriction ? <span>{restriction}</span> : <form class="row-actions" method="post" action="/api/admin/users/action">
               <input type="hidden" name="principalId" value={login.principal_id} />
               <label>Action for {login.name}<select name="action">
@@ -77,6 +78,7 @@ const vaultConfigured = isAdminSecretsConfigured();
           </td></tr>;
         })}</tbody>
       </table></div>
+      <RecordPager target="login-records" total={logins.length} />
     </section>
     <section class="section"><h2>Disposable test identity</h2><p><code>dojo_demo_reader</code> has a strong generated password and no application database user. Existing identities are never overwritten.</p>
       <form method="post" action="/api/admin/users/action"><input type="hidden" name="action" value="create-demo" />

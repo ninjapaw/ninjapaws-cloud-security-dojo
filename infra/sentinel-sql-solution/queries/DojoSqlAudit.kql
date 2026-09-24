@@ -12,6 +12,9 @@ Event
     ClientAddress = trim(@"\s+", extract(@"(?:^|\s)client_ip:([\s\S]*?)\s+permission_bitmask:", 1, RenderedDescription)),
     ApplicationName = trim(@"\s+", extract(@"(?:^|\s)application_name:([\s\S]*?)\s+connection_id:", 1, RenderedDescription)),
     Statement = trim(@"\s+", extract(@"(?:^|\s)statement:([\s\S]*?)\s+additional_information:", 1, RenderedDescription)),
+    ObjectName = trim(@"\s+", extract(@"(?:^|\s)object_name:([\s\S]*?)\s+statement:", 1, RenderedDescription)),
+    SimulationTheme = extract(@"dojo-simulation-sample:([a-z-]+):", 1, RenderedDescription),
+    SimulationRunId = extract(@"dojo-simulation-sample:[a-z-]+:([0-9a-f-]{36})", 1, RenderedDescription),
     Succeeded = tobool(extract(@"(?:^|\s)succeeded:(true|false)", 1, RenderedDescription)),
     SequenceGroup = extract(@"(?:^|\s)sequence_group_id:([^\s]*)", 1, RenderedDescription),
     SequenceNumber = toint(extract(@"(?:^|\s)sequence_number:(\d+)", 1, RenderedDescription))
@@ -31,6 +34,7 @@ Event
     ActionId == "LGIS" or EventID in (18453, 18454), "Login succeeded",
     ActionId == "LGIF" or EventID == 18456, "Login failed",
     "Other SQL audit")
+| extend TargetLogin = iff(isempty(TargetLogin) and Operation in ("Login enabled", "Login disabled", "Login password changed", "Login renamed"), ObjectName, TargetLogin)
 | extend IsBuiltInAdmin = TargetSid in~ ("01", "0x01") or (isempty(TargetSid) and TargetLogin =~ "sa"),
     IsBuiltInAdminActor = ActorSid in~ ("01", "0x01") or (isempty(ActorSid) and Actor =~ "sa"),
     Outcome = case(Succeeded == true, "Succeeded", Succeeded == false, "Failed", "Unknown"),
@@ -38,4 +42,4 @@ Event
 | summarize arg_max(IngestedAt, *) by EventKey
 | project TimeGenerated, AuditTime, IngestedAt, Computer, Source, EventID, ActionId, Operation,
     Actor, TargetLogin, IsBuiltInAdmin, IsBuiltInAdminActor, ClientAddress, ApplicationName,
-    Succeeded, Outcome, SequenceGroup, SequenceNumber, EventKey, _ResourceId
+    SimulationTheme, SimulationRunId, Succeeded, Outcome, SequenceGroup, SequenceNumber, EventKey, _ResourceId

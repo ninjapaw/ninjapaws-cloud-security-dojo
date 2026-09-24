@@ -14,7 +14,7 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node src/app.js",
-    "test": "node --check src/app.js",
+    "test": "node --check src/app.js && node --test tests/*.test.js",
     "test:repo": "bash scripts/test.sh --skip-azure",
     "test:e2e": "playwright test",
     "report": "python3 -m http.server 8000 --directory output",
@@ -30,6 +30,8 @@
     "sentinel:deploy": "bash scripts/deploy-sentinel-sql.sh deploy --environment dev",
     "sentinel:verify": "bash scripts/deploy-sentinel-sql.sh verify --environment dev",
     "test:sentinel": "node scripts/test-sentinel-sql.mjs",
+    "test:domain": "node --test scripts/test-pawton-domain.mjs",
+    "domain:plan": "bash scripts/deploy-pawton-domain.sh plan --environment dev",
     "deploy:sql:dev": "bash scripts/deploy-sql-scenario.sh deploy --environment dev --yes",
     "deploy:sql:uninstall": "bash scripts/deploy-sql-scenario.sh uninstall --environment dev --yes"
   },

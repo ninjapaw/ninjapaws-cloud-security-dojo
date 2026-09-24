@@ -7,6 +7,7 @@ import {
   clearLoginFailures,
   SESSION_COOKIE_NAME,
 } from "../../../lib/adminAuth.mjs";
+import { USER_SESSION_COOKIE } from "../../../lib/userAuth.mjs";
 
 export async function POST({ request, cookies, redirect }) {
   if (isLoginRateLimited(request)) {
@@ -23,6 +24,7 @@ export async function POST({ request, cookies, redirect }) {
   }
 
   clearLoginFailures(request);
+  cookies.delete(USER_SESSION_COOKIE, { path: "/" });
   cookies.set(SESSION_COOKIE_NAME, createSessionToken(), sessionCookieOptions);
   return redirect("/admin", 303);
 }

@@ -1,40 +1,12 @@
 import sql from "mssql";
+import { readSqlConfig } from "./sqlConfig.mjs";
 
-// Separate connection pool from lib/db.mjs on purpose: that pool authenticates as the
-// least-privilege futon_app login and must never be granted server-level permissions. This pool
-// authenticates as dojo_admin_portal_svc, which SQL Server requires to hold CONTROL SERVER before
-// it will let anything alter the sa login -- effectively sysadmin. Keeping the two pools distinct
-// means a bug in the read-only dashboard code path can never accidentally reach this credential.
 let adminPoolPromise;
 
-const DEFAULT_SQL_TIMEOUT_MS = 5000;
 const BUILT_IN_ADMIN_SID = "0x01";
 
-function readTimeout(name) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SQL_TIMEOUT_MS;
-}
-
 function readAdminConfig() {
-  const { SQL_SERVER_HOST, SQL_ADMIN_LOGIN, SQL_ADMIN_LOGIN_PASSWORD } =
-    process.env;
-  if (!SQL_SERVER_HOST || !SQL_ADMIN_LOGIN || !SQL_ADMIN_LOGIN_PASSWORD) {
-    return null;
-  }
-  return {
-    server: SQL_SERVER_HOST,
-    database: "master",
-    user: SQL_ADMIN_LOGIN,
-    password: SQL_ADMIN_LOGIN_PASSWORD,
-    port: 1433,
-    options: {
-      encrypt: true,
-      trustServerCertificate: true,
-    },
-    connectionTimeout: readTimeout("SQL_CONNECT_TIMEOUT_MS"),
-    requestTimeout: readTimeout("SQL_REQUEST_TIMEOUT_MS"),
-    pool: { max: 2, min: 0, idleTimeoutMillis: 30000 },
-  };
+  return readSqlConfig({ privileged: true });
 }
 
 export function isAdminDbConfigured() {
@@ -49,11 +21,6 @@ async function getAdminPool() {
         "SQL_SERVER_HOST, SQL_ADMIN_LOGIN, and SQL_ADMIN_LOGIN_PASSWORD must be set.",
       );
     }
-    // sql.connect() (used by lib/db.mjs for the futon_app pool) manages a single global,
-    // process-wide connection singleton in the mssql package: once db.mjs has called it, a later
-    // sql.connect(adminConfig) call silently returns that SAME pool instead of authenticating with
-    // these admin credentials, so every "admin" query would actually run as futon_app and fail
-    // with a permission error. new sql.ConnectionPool(config) creates a genuinely separate pool.
     adminPoolPromise = new sql.ConnectionPool(config).connect().catch((err) => {
       adminPoolPromise = undefined;
       throw err;
@@ -69,6 +36,69 @@ function quoteIdentifier(identifier) {
     );
   }
   return `[${identifier}]`;
+}
+
+export async function getSqlShellStatus() {
+  const pool = await getAdminPool();
+  const result = await pool
+    .request()
+    .query(
+      "SELECT CAST(value_in_use AS bit) AS enabled FROM sys.configurations WHERE name = 'xp_cmdshell';",
+    );
+  if (!result.recordset?.length)
+    throw new Error("SQL shell status unavailable.");
+  return { enabled: Boolean(result.recordset[0].enabled) };
+}
+
+export async function setSqlShellEnabled(
+  enabled,
+  createPool = () => {
+    const config = readAdminConfig();
+    if (!config) throw new Error("Admin SQL connection is not configured.");
+    return new sql.ConnectionPool(config);
+  },
+) {
+  if (typeof enabled !== "boolean")
+    throw new Error("SQL shell setting must be a boolean.");
+  const pool = createPool();
+  try {
+    await pool.connect();
+    const result = await pool.request().input("enabled", sql.Bit, enabled)
+      .query(`
+SET NOCOUNT ON;
+DECLARE @lockResult int;
+EXEC @lockResult = sys.sp_getapplock @Resource = N'Dojo.SqlShellConfiguration', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0;
+IF @lockResult < 0 THROW 51000, 'SQL shell configuration is busy.', 1;
+DECLARE @advanced int = (SELECT CAST(value_in_use AS int) FROM sys.configurations WHERE name = 'show advanced options');
+BEGIN TRY
+  IF EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'xp_cmdshell' AND (CAST(value_in_use AS int) <> @enabled OR CAST(value AS int) <> @enabled))
+  BEGIN
+    IF @advanced = 0 BEGIN EXEC sys.sp_configure 'show advanced options', 1; RECONFIGURE; END;
+    EXEC sys.sp_configure 'xp_cmdshell', @enabled;
+    RECONFIGURE;
+    IF @advanced = 0 BEGIN EXEC sys.sp_configure 'show advanced options', 0; RECONFIGURE; END;
+  END;
+  IF NOT EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'xp_cmdshell' AND CAST(value_in_use AS int) = @enabled)
+    THROW 51001, 'SQL shell setting verification failed.', 1;
+  SELECT CAST(value_in_use AS bit) AS enabled FROM sys.configurations WHERE name = 'xp_cmdshell';
+  EXEC sys.sp_releaseapplock @Resource = N'Dojo.SqlShellConfiguration', @LockOwner = 'Session';
+END TRY
+BEGIN CATCH
+  IF @advanced = 0 AND EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'show advanced options' AND CAST(value_in_use AS int) = 1)
+  BEGIN EXEC sys.sp_configure 'show advanced options', 0; RECONFIGURE; END;
+  EXEC sys.sp_releaseapplock @Resource = N'Dojo.SqlShellConfiguration', @LockOwner = 'Session';
+  THROW;
+END CATCH;
+`);
+    if (
+      !result.recordset?.length ||
+      Boolean(result.recordset[0].enabled) !== enabled
+    )
+      throw new Error("SQL shell setting verification failed.");
+    return { enabled };
+  } finally {
+    await pool.close();
+  }
 }
 
 async function getBuiltInAdminLogin() {
@@ -132,8 +162,6 @@ export async function rotateSaPassword(newPassword) {
       user: currentLogin.name,
       password: newPassword,
       database: "master",
-      connectionTimeout: readTimeout("SQL_CONNECT_TIMEOUT_MS"),
-      requestTimeout: readTimeout("SQL_REQUEST_TIMEOUT_MS"),
     };
     const verifyPool = new sql.ConnectionPool(verifyConfig);
     try {

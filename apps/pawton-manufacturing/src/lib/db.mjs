@@ -1,60 +1,20 @@
 import sql from "mssql";
+import { readSqlConfig } from "./sqlConfig.mjs";
 
 let poolPromise;
 
-const DEFAULT_SQL_TIMEOUT_MS = 5000;
-
-function readTimeout(name) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SQL_TIMEOUT_MS;
-}
-
-function readConfig() {
-  const {
-    SQL_SERVER_HOST,
-    SQL_DATABASE = "FutonManufacturing",
-    SQL_APP_LOGIN = "futon_app",
-    SQL_APP_LOGIN_PASSWORD,
-  } = process.env;
-
-  if (!SQL_SERVER_HOST || !SQL_APP_LOGIN_PASSWORD) {
-    return null;
-  }
-
-  return {
-    server: SQL_SERVER_HOST,
-    database: SQL_DATABASE,
-    user: SQL_APP_LOGIN,
-    password: SQL_APP_LOGIN_PASSWORD,
-    port: 1433,
-    options: {
-      // The VM presents a self-signed certificate on its private, VNet-only endpoint;
-      // encryption stays required (the VM forces it), only public CA trust is relaxed.
-      encrypt: true,
-      trustServerCertificate: true,
-    },
-    connectionTimeout: readTimeout("SQL_CONNECT_TIMEOUT_MS"),
-    requestTimeout: readTimeout("SQL_REQUEST_TIMEOUT_MS"),
-    pool: { max: 5, min: 0, idleTimeoutMillis: 30000 },
-  };
-}
-
 export function isDatabaseConfigured() {
-  return readConfig() !== null;
+  return readSqlConfig() !== null;
 }
 
 export async function getPool() {
   if (!poolPromise) {
-    const config = readConfig();
+    const config = readSqlConfig();
     if (!config) {
       throw new Error(
         "SQL_SERVER_HOST and SQL_APP_LOGIN_PASSWORD must be set.",
       );
     }
-    // new sql.ConnectionPool(...), not sql.connect(...): the latter is a global, process-wide
-    // singleton in the mssql package, and lib/adminDb.mjs needs its own independent pool
-    // authenticated with different (admin) credentials -- sharing the global pool would silently
-    // make admin queries run as this login instead. See adminDb.mjs for the full explanation.
     poolPromise = new sql.ConnectionPool(config).connect().catch((err) => {
       poolPromise = undefined;
       throw err;

@@ -23,7 +23,64 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' existin
 var parserQuery = loadTextContent('queries/DojoSqlAudit.kql')
 var queryPrefix = 'let DojoSqlAuditInline = (VmResourceId:string) {\n${parserQuery}\n};\nDojoSqlAuditInline(base64_decode_tostring(\'${base64(sqlVmResourceId)}\'))\n'
 
-var detections = [
+var simulationDetections = [
+  {
+    key: 'simulation-brute-force'
+    theme: 'brute-force'
+    displayName: 'Dojo SQL - safe brute force simulation evidence'
+    description: 'A portal-triggered, read-only SQL Audit sample marked as the brute force training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not perform authentication attacks.'
+    severity: 'Low'
+    tactics: ['CredentialAccess']
+    techniques: ['T1110']
+  }
+  {
+    key: 'simulation-suspicious-app'
+    theme: 'suspicious-app'
+    displayName: 'Dojo SQL - safe suspicious application simulation evidence'
+    description: 'A portal-triggered SQL Audit sample marked as the suspicious application training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not run harmful software.'
+    severity: 'Low'
+    tactics: ['Execution']
+    techniques: ['T1059']
+  }
+  {
+    key: 'simulation-sql-injection'
+    theme: 'sql-injection'
+    displayName: 'Dojo SQL - safe SQL injection simulation evidence'
+    description: 'A portal-triggered parameterized SQL Audit sample marked as the SQL injection training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not exploit injection.'
+    severity: 'Low'
+    tactics: ['InitialAccess']
+    techniques: ['T1190']
+  }
+  {
+    key: 'simulation-principal-anomaly'
+    theme: 'principal-anomaly'
+    displayName: 'Dojo SQL - safe principal anomaly simulation evidence'
+    description: 'A portal-triggered SQL Audit sample marked as the principal anomaly training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not alter principals.'
+    severity: 'Low'
+    tactics: ['Persistence']
+    techniques: ['T1098']
+  }
+  {
+    key: 'simulation-external-source'
+    theme: 'external-source'
+    displayName: 'Dojo SQL - safe external source simulation evidence'
+    description: 'A portal-triggered SQL Audit sample marked as the external source training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not access external sources.'
+    severity: 'Low'
+    tactics: ['CommandAndControl']
+    techniques: ['T1105']
+  }
+  {
+    key: 'simulation-obfuscated-shell'
+    theme: 'obfuscated-shell'
+    displayName: 'Dojo SQL - safe obfuscated shell simulation evidence'
+    description: 'A portal-triggered SQL Audit sample marked as the obfuscated shell training theme. This is a Sentinel training incident, not a Defender for Cloud alert and does not run shell or encoded commands.'
+    severity: 'Low'
+    tactics: ['DefenseEvasion']
+    techniques: ['T1027']
+  }
+]
+
+var staticDetections = [
   {
     key: 'login-changes'
     displayName: 'Dojo SQL - login enabled, disabled, renamed or password changed'
@@ -79,6 +136,18 @@ var detections = [
   }
 ]
 
+var simulationRuleDetections = [for simulation in simulationDetections: {
+    key: simulation.key
+    displayName: simulation.displayName
+    description: simulation.description
+    severity: simulation.severity
+    tactics: simulation.tactics
+    techniques: simulation.techniques
+    filter: '| where TimeGenerated > ago(1h) and IngestedAt > ago(5m)\n| where EventID == 33205 and SimulationTheme == \'${simulation.theme}\'\n'
+  }]
+
+var detections = concat(staticDetections, simulationRuleDetections)
+
 resource parser 'Microsoft.OperationalInsights/workspaces/savedSearches@2025-07-01' = {
   parent: workspace
   name: 'DojoSqlAudit'
@@ -88,7 +157,7 @@ resource parser 'Microsoft.OperationalInsights/workspaces/savedSearches@2025-07-
     functionAlias: 'DojoSqlAudit'
     functionParameters: 'VmResourceId:string'
     query: loadTextContent('queries/DojoSqlAudit.kql')
-    version: 1
+    version: 2
   }
 }
 
@@ -112,8 +181,12 @@ resource analytics 'Microsoft.SecurityInsights/alertRules@2025-09-01' = [for det
     suppressionDuration: 'PT5M'
     tactics: detection.tactics
     techniques: detection.techniques
+    alertDetailsOverride: detection.key == 'login-changes' ? {
+      alertDisplayNameFormat: 'Dojo SQL - {{Operation}}: {{TargetLogin}} ({{Outcome}})'
+      alertDescriptionFormat: 'SQL login change on {{Computer}} by {{Actor}}. Built-in administrator target: {{IsBuiltInAdmin}}. Review the outcome; failed attempts do not confirm a state change.'
+    } : null
     eventGroupingSettings: {
-      aggregationKind: 'SingleAlert'
+      aggregationKind: detection.key == 'login-changes' ? 'AlertPerResult' : 'SingleAlert'
     }
     incidentConfiguration: {
       createIncident: true
@@ -121,7 +194,9 @@ resource analytics 'Microsoft.SecurityInsights/alertRules@2025-09-01' = [for det
         enabled: true
         reopenClosedIncident: false
         lookbackDuration: 'PT1H'
-        matchingMethod: 'AllEntities'
+        matchingMethod: detection.key == 'login-changes' ? 'Selected' : 'AllEntities'
+        groupByEntities: detection.key == 'login-changes' ? ['Host', 'Account', 'AzureResource'] : null
+        groupByAlertDetails: detection.key == 'login-changes' ? ['DisplayName'] : null
       }
     }
     entityMappings: [
@@ -162,7 +237,7 @@ resource hunt 'Microsoft.OperationalInsights/workspaces/savedSearches@2025-07-01
     category: 'Hunting Queries'
     displayName: 'Dojo SQL - login change timeline (${last(split(sqlVmResourceId, '/'))})'
     query: '${queryPrefix}${huntFilter}'
-    version: 1
+    version: 2
     tags: [{ name: 'tactics', value: 'Persistence' }]
   }
 }
@@ -180,7 +255,7 @@ resource health 'Microsoft.OperationalInsights/workspaces/savedSearches@2025-07-
     category: 'Dojo SQL'
     displayName: 'Dojo SQL - ingestion health (${last(split(sqlVmResourceId, '/'))})'
     query: '${queryPrefix}${healthFilter}'
-    version: 1
+    version: 2
   }
 }
 

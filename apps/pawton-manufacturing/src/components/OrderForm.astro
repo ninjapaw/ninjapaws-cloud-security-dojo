@@ -1,0 +1,108 @@
+---
+import { randomUUID } from 'node:crypto';
+interface Props {
+  catalog: { customers: Array<{ CustomerID: number; CustomerName: string }>; warehouses: Array<{ WarehouseID: number; WarehouseName: string }>; items: Array<{ ItemID: number; ItemName: string; ListPrice: number }> };
+  order?: { SalesOrderID: number; CustomerID: number; WarehouseID: number; RequestedDeliveryDate: Date | string; Notes: string | null; Revision: string; lines: Array<{ ItemID: number; Quantity: number }> };
+}
+const { catalog, order } = Astro.props;
+const lines = order?.lines ?? [{ ItemID: 0, Quantity: 1 }];
+const date = order?.RequestedDeliveryDate ? new Date(order.RequestedDeliveryDate).toISOString().slice(0, 10) : '';
+---
+<form class="order-form" method="post" action="/api/orders" data-order-form>
+  <input type="hidden" name="action" value="save" />
+  <input type="hidden" name="requestId" value={randomUUID()} />
+  {order && <><input type="hidden" name="orderId" value={order.SalesOrderID} /><input type="hidden" name="revision" value={order.Revision} /></>}
+  <div class="order-fields">
+    <label>Customer<select name="customerId" required><option value="">Select customer</option>{catalog.customers.map(customer => <option value={customer.CustomerID} selected={order?.CustomerID === customer.CustomerID}>{customer.CustomerName}</option>)}</select></label>
+    <label>Warehouse<select name="warehouseId" required><option value="">Select warehouse</option>{catalog.warehouses.map(warehouse => <option value={warehouse.WarehouseID} selected={order?.WarehouseID === warehouse.WarehouseID}>{warehouse.WarehouseName}</option>)}</select></label>
+    <label>Requested delivery<input type="date" name="deliveryDate" min="2000-01-01" max="2099-12-31" value={date} required /></label>
+  </div>
+  <h2>Order lines</h2>
+  <div data-order-lines>
+    {lines.map(line => <div class="order-line" data-order-line>
+      <label>Product<select name="itemId" required><option value="" data-price="0">Select product</option>{catalog.items.map(item => <option value={item.ItemID} data-price={item.ListPrice} selected={line.ItemID === item.ItemID}>{item.ItemName} ({Number(item.ListPrice).toFixed(2)})</option>)}</select></label>
+      <label>Quantity<input type="number" name="quantity" min="1" max="10000" step="1" value={line.Quantity} required /></label>
+      <div class="line-value"><span>Line total</span><output data-line-total>0.00</output></div>
+      <button class="secondary remove-line" type="button" data-remove-line title="Remove item" aria-label="Remove item">{'\u00D7'}</button>
+    </div>)}
+  </div>
+  <div class="actions"><button type="button" class="secondary" data-add-line>Add item</button></div>
+  <p class="order-total">Order total: <output data-order-total>0.00</output></p>
+  <p class="muted">Current catalog prices. Tax and shipping are not calculated. Saving a draft does not reserve inventory.</p>
+  <label>Notes<textarea name="notes" maxlength="1000" rows="3">{order?.Notes ?? ''}</textarea></label>
+  <p data-order-error role="alert"></p>
+  <div class="actions"><button type="submit">{order ? 'Save draft' : 'Create draft'}</button><a href="/orders">Back to orders</a></div>
+</form>
+
+<style>
+  .order-form { max-width: 100%; }
+  .order-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+  .order-line { display: grid; grid-template-columns: minmax(160px, 1fr) 100px 110px 36px; align-items: end; gap: 12px; border-bottom: 1px solid var(--border); padding-block: 12px; }
+  input, textarea, select { width: 100%; min-width: 0; padding: 9px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
+  select { text-overflow: ellipsis; }
+  .line-value { display: flex; flex-direction: column; font-size: 13px; }
+  output { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .line-value output { padding-block: 9px; }
+  .remove-line { width: 36px; height: 36px; padding: 0; font-size: 22px; }
+  .order-total { font-size: 18px; font-weight: 600; }
+  [data-order-error] { color: var(--text); }
+  @media (max-width: 600px) { .order-line { grid-template-columns: minmax(0, 1fr) 100px; } }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLFormElement>('[data-order-form]').forEach(form => {
+    const container = form.querySelector<HTMLElement>('[data-order-lines]')!;
+    const add = form.querySelector<HTMLButtonElement>('[data-add-line]')!;
+    const update = () => {
+      const rows = container.querySelectorAll<HTMLElement>('[data-order-line]');
+      let total = 0;
+      rows.forEach(row => {
+        const product = row.querySelector<HTMLSelectElement>('select')!;
+        const quantity = row.querySelector<HTMLInputElement>('input')!;
+        const amount = Number(product.selectedOptions[0]?.dataset.price ?? 0) * Number(quantity.value || 0);
+        const value = Number.isFinite(amount) ? amount : 0;
+        row.querySelector<HTMLOutputElement>('[data-line-total]')!.value = value.toFixed(2);
+        row.querySelector<HTMLButtonElement>('[data-remove-line]')!.disabled = rows.length === 1;
+        total += value;
+      });
+      form.querySelector<HTMLOutputElement>('[data-order-total]')!.value = total.toFixed(2);
+      add.disabled = rows.length >= 20;
+    };
+    add.addEventListener('click', () => {
+      if (container.children.length >= 20) return;
+      const row = container.firstElementChild!.cloneNode(true) as HTMLElement;
+      row.querySelector<HTMLSelectElement>('select')!.value = '';
+      row.querySelector<HTMLInputElement>('input')!.value = '1';
+      container.append(row);
+      update();
+      row.querySelector<HTMLSelectElement>('select')!.focus();
+    });
+    container.addEventListener('click', event => {
+      const button = (event.target as HTMLElement).closest('[data-remove-line]');
+      if (!button || container.children.length <= 1) return;
+      button.closest('[data-order-line]')!.remove();
+      update();
+      add.focus();
+    });
+    form.addEventListener('input', update);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+      const error = form.querySelector<HTMLElement>('[data-order-error]')!;
+      button.disabled = true;
+      error.textContent = '';
+      try {
+        const response = await fetch(form.getAttribute('action')!, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
+        if (response.status === 401) throw new Error('Session expired. Sign in again before saving.');
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Order service did not respond. Retry using this form.');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Order could not be saved.');
+        window.location.assign(result.location);
+      } catch (failure) {
+        error.textContent = failure instanceof Error ? failure.message : 'Order could not be saved. Retry using this form.';
+        button.disabled = false;
+      }
+    });
+    update();
+  });
+</script>

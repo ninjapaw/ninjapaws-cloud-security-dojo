@@ -36,6 +36,9 @@ export async function GET() {
 
   return new Response(JSON.stringify(payload, null, 2), {
     status: 200,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
   });
 }

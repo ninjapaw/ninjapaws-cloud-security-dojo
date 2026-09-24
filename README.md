@@ -8,11 +8,37 @@
 
 A defensive cloud-security training environment demonstrating container vulnerability detection, remediation, validation, and Azure deployment.
 
+Use only an isolated, authorized training environment. This repository intentionally includes vulnerable software and privileged SQL operations. Azure resources and Defender/Sentinel plans can incur charges. Never use real customer data or expose the lab to untrusted users.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [NGINX scenario](#defender-for-cloud---scenario-1)
+- [SQL Server scenario](#defender-for-cloud---scenario-2)
+- [Portal setup and configuration](#portal-setup-and-configuration)
+- [Demo walkthrough](#demo-walkthrough)
+- [Configuration](#configuration)
+- [Azure deployment](#azure-deployment)
+- [Validation and workflows](#workflows)
+- [Contributing](CONTRIBUTING.md), [security reporting](SECURITY.md), and [disclaimer](DISCLAIMER.md)
+
 ## Defender for Cloud - Scenario 1
 
 **NGINX CVE Detection and Remediation** is the default scenario. It deploys the intentionally affected NGINX `1.30.3` workload and advisory-relevant `map`/regex configuration to Azure App Service with Azure Container Registry, Defender for App Service, Defender for Containers, and Defender CSPM coverage. The demo proves the running package and configuration, reviews Defender findings, then swaps to fixed NGINX `1.30.4` with the affected configuration removed.
 
-Scenarios are registered in `config/deploy.config.json`. Select the default explicitly with `--scenario defender-cloud-scenario-1`, or use `--all-scenarios` as the future expansion point when additional scenario definitions are registered. Each future scenario should declare its own advisory, affected/fixed versions, workloads, image/build inputs, and verification checks.
+Scenarios are registered in `config/deploy.config.json`. Select this scenario with `--scenario defender-cloud-scenario-1`. Scenario 2 uses the separate SQL lifecycle described below.
+
+### Reproduction and evidence
+
+The reproduction tests whether Defender inventory identifies NGINX `1.30.3` and separately whether it associates [CVE-2026-42533](https://my.f5.com/manage/s/article/K000162097). An inventory entry alone is not proof of a vulnerability finding.
+
+1. Build and run the training container using the [demo walkthrough](#demo-walkthrough).
+2. Capture `/evidence` and the output of `scripts/verify.sh`. Build-time package evidence is preserved under `/opt` in the image.
+3. Deploy the image to ACR and allow Defender assessment to complete.
+4. Check the software inventory for NGINX `1.30.3`, then inspect the vulnerability findings separately.
+5. Record the image digest, assessment time, inventory version, and whether the CVE was reported. Repeat after remediation.
+
+Expected inventory: NGINX `1.30.3`. Actual findings depend on the assessment and must be recorded during your run; this repository does not claim a guaranteed Defender alert or CVE association.
 
 ## Defender for Cloud - Scenario 2
 
@@ -42,25 +68,28 @@ Security posture baked into the infrastructure:
 
 Scenario 2 also deploys **Pawton Manufacturing** ("paw" + "futon" — the fictional futon manufacturer behind the sample data), a small Astro/Node.js dashboard at `apps/pawton-manufacturing/` that reads the restored Futon Manufacturing data live: item/warehouse/customer counts, inventory valuation, sales by channel, and production order status. It exists to make Scenario 2 tangible with a real, running application instead of only infrastructure evidence, and it extends the story to a workload type Scenario 1 doesn't cover on its own:
 
-- It runs on its own Azure App Service for Linux (Node 20), which **Microsoft Defender for App Service already protects** the moment that plan is Standard at subscription scope — the same plan Scenario 1 requests. No extra Defender activation is needed for this Web App; the deployment report includes a check that confirms the subscription-wide plan already covers it.
+- It runs on its own Azure App Service for Linux (Node 24), which **Microsoft Defender for App Service already protects** the moment that plan is Standard at subscription scope — the same plan Scenario 1 requests. No extra Defender activation is needed for this Web App; the deployment report includes a check that confirms the subscription-wide plan already covers it.
 - It reaches SQL Server through **regional VNet integration** into the same VNet as the SQL VM; the NSG allows the Web App subnet and the configured public TCP 1433 endpoint.
-- It authenticates with the same least-privilege `futon_app` SQL login the bootstrap script creates, using a password shared through an **Azure Key Vault** secret (an App Service Key Vault reference), never a plaintext app setting.
+- It authenticates with the same `futon_app` SQL login the bootstrap script creates. The training template stores the password in **Azure Key Vault** and supplies it directly as a protected App Service setting, not a Key Vault reference. This deliberate lab configuration is not a production secret-delivery recommendation.
 - Together with Scenario 1, this now demonstrates Defender for App Service, Defender for Containers, Defender CSPM, Defender for Servers Plan 2, and Defender for SQL side by side, backed by running (not simulated) workloads.
 
-Deployment code is zip-deployed from `apps/pawton-manufacturing/` after the Bicep infrastructure finishes; Azure's Oryx build service runs `npm install`/`npm run build` remotely, so no local Node toolchain is required to deploy it. See `apps/pawton-manufacturing/README.md` for local development.
+The deployment script uploads the portal source after infrastructure provisioning and uses Azure's remote build service. See [portal setup and configuration](#portal-setup-and-configuration) for local development and prebuilt deployment requirements.
 
 ### Admin portal: a deliberate anti-pattern, not a template
 
+Scenario 2 defaults `xp_cmdshell` to enabled for shell attack exercises. Set `sqlScenario.enableSqlShellAttackTests` to `"false"` in [deployment configuration](config/deploy.config.json) for a shell-disabled bootstrap. **Admin settings > SQL shell access** provides a confirmed on/off switch and live SQL status. Admin changes persist until bootstrap runs again with the deployment default. If status is unavailable, the control is disabled. Disabling shell access blocks new calls but does not stop already-running commands or turn off Defender.
+
+Scenario 2 displays event, log, and status timestamps in Eastern time by default. See [display timezone](#display-timezone) to change it.
+
 The portal now separates `/users` (SQL login management), `/admin` (security lab and live protection observations), `/admin/schema` (read-only database inspection), and `/admin/auditing` (audit setup and verification). The signed-in username and Logout control remain in the header.
 
-Local audit probes are disabled unless `ENABLE_SQL_DEMO_ACTIONS=true`. They use fixed SQL and a cooldown; the data-change probe always rolls back. Microsoft's six [supported SQL alert simulations](https://learn.microsoft.com/azure/defender-for-cloud/simulate-alerts-sql-machines) are launched through Azure's authenticated simulator, not arbitrary attack payloads. Defender for SQL detects threats; it is not a query firewall. On/off comparisons remain explicitly scoped Azure operations, not a subscription-wide portal toggle. Live plan and extension reads use managed identity and report missing permission as unavailable, not disabled. See [portal configuration and guardrails](apps/pawton-manufacturing/README.md#security-lab).
+Local audit probes and direct SQL tests require configured connections and remain enabled unless `ENABLE_SQL_DEMO_ACTIONS=false`. They use fixed repository-owned scripts, not a simulator extension. SQL authorization, SQL auditing, and Defender detection are separate: a successful action is not proof of ingestion or an alert. See [direct SQL attack tests](#direct-sql-attack-tests) for each test's boundaries.
 
 General user actions exclude system, Windows, privileged, and application identities. Blank passwords are never allowed for the built-in administrator (SID `0x01`); the optional `ALLOW_DEMO_BLANK_PASSWORDS=true` setting only enables clearing isolated, unprivileged `dojo_demo_` logins with no application database user mappings. This is an intentional training weakness, not a production feature. No demo, account change, or protection change runs automatically on page load.
 
 Pawton Manufacturing's `/users` tab, gated behind the admin login form, lets an authenticated operator **enable, disable, rename, and rotate the password of the SQL Server built-in administrator login** directly from the Web App. Read this section fully before enabling it anywhere you care about.
 
-- **Why this needs sysadmin-equivalent access.** SQL Server rejects `ALTER LOGIN [sa] ...` from any principal holding only `ALTER ANY LOGIN` — verified live against this scenario's own VM (`Msg 15151: Cannot alter the login 'sa'...`). Managing `sa` specifically requires `CONTROL SERVER`, which is functionally equivalent to sysadmin. The admin portal's SQL login, `dojo_admin_portal_svc`, is granted exactly that.
-- **This is the point.** A public-facing Web App holding a sysadmin-equivalent database credential is a textbook Defender for Cloud/Sentinel "attack path" finding: compromise the app (or its admin credentials, or its Key Vault-sourced app settings) and you compromise the entire SQL Server instance. This scenario ships the feature specifically so it exists to be _found_ — by Defender for Cloud's attack path analysis, by Defender for SQL's behavioral detections, and by anyone reviewing this repo's Key Vault secrets or Web App configuration. **Do not copy this pattern into a production application.**
+- **Privilege risk.** The admin portal's SQL login, `dojo_admin_portal_svc`, holds `CONTROL SERVER` to manage the built-in administrator. Compromise of the app or its credentials can compromise the SQL instance. This is an intentional training anti-pattern, not a guaranteed Defender finding. **Do not copy it into production.**
 - **Credential lifecycle.** The deployment generates the built-in SQL administrator password, applies it during VM bootstrap, and stores it in Key Vault as `sql-sa-login-password`; its initial name is stored as `sql-sa-login-username`. The portal detects the built-in administrator by SQL Server's fixed SID rather than assuming its name remains `sa`, so it can display the current name, enable/disable it, rotate its password, and rename it. Password rotation and rename create a new Key Vault secret version after the SQL operation succeeds. A redeploy preserves the stored current name rather than reverting a prior rename, but intentionally rotates the password again.
 - **What's protected regardless.** Sign-in requires a random, per-deployment `ADMIN_PORTAL_USERNAME`/`ADMIN_PORTAL_PASSWORD` (Key Vault secrets `admin-portal-username`/`admin-portal-password`, generated fresh by `scripts/deploy-sql-scenario.sh` on every deploy). The session cookie is HMAC-signed (`ADMIN_SESSION_SECRET`), `HttpOnly`, `Secure`, `SameSite=Strict`, and expires after 15 minutes. Login attempts are rate-limited per client. The Web App uses its system-assigned managed identity and the Key Vault Secrets Officer role to update the two built-in-administrator secrets; this wider vault access is another deliberate dojo anti-pattern. A rotated password is shown exactly once in the session and retained in Key Vault, not in application settings.
 - **Audit coverage.** `SERVER_PRINCIPAL_CHANGE_GROUP` covers login enable/disable and rename operations; `LOGIN_CHANGE_PASSWORD_GROUP` covers password changes; the database specification covers `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. The bootstrap configures these for the Windows Application log and the AMA/DCR path to the resolved Sentinel workspace. SQL command success alone does not prove that auditing or forwarding worked: confirm Event ID 33205 with the matching target, operation, outcome and time. A SQL password-change event does not prove that Key Vault was updated.
@@ -85,7 +114,7 @@ The VM Bastion credentials are also stored in the Scenario 2 Key Vault as `vm-ad
 
 Scenario 2 uses one stable Key Vault per environment. Redeployments update the existing `sql-app-login-password`, `vm-admin-username`, and `vm-admin-password` secrets instead of creating another vault. Public SQL access is configured per environment with `allowPublicSqlAccess`; it is disabled by default, enabled for the isolated `dev` training environment, and disabled for `prod`.
 
-Key Vault internet access is configured with `allowPublicKeyVaultAccess`, defaulting to `true`; it is enabled for `dev` and disabled for `prod`. When enabled, the template adds the subscription policy's documented `SecurityControl=Ignore` tag so `KeyVault_PublicNetwork_Modify` does not force the vault back to private-only access. Verify the effective `publicNetworkAccess` value after deployment.
+Key Vault internet access is configured with `allowPublicKeyVaultAccess`, defaulting to `true`; it is enabled for `dev` and disabled for `prod`. The template also includes a lab-specific policy-exception tag when public access is enabled. Review this against your organization's policies and verify the effective `publicNetworkAccess` value after deployment; a tag is not a universal policy exemption.
 
 The generated deployment report includes the public SQL endpoint and port (`<public-ip>:1433`) for SQL clients. This broad inbound access is intended for the isolated training environment; restrict the NSG source to a known CIDR before using this pattern elsewhere.
 
@@ -123,6 +152,8 @@ The package deploys:
 
 Rules run every five minutes with a one-hour event lookback and a five-minute ingestion window for individual changes. Events delayed beyond that lookback require hunting; the burst rule intentionally uses a 15-minute event window. Exact duplicate collected records are collapsed, but differing SQL audit sequence groups are retained as distinct evidence. Continued failed-login bursts may re-alert; matching incidents are grouped for one hour. Expected bootstrap and portal operations can trigger these training detections. Raw descriptions and statements are excluded from rule results/custom details so potential password literals are not copied into incidents. The source `Event` records remain available to authorized investigators.
 
+Login changes generate per-result alerts named by operation, target, and outcome, for example **Dojo SQL - Login enabled: sa (Succeeded)**. Incident grouping also matches that title, keeping enable, disable, and password-change outcomes separate. SQL Audit action `LGEA` identifies enablement; `LGDA` identifies disablement. When SQL leaves the target principal blank, login-change parsing uses `object_name`. SID `0x01` identifies the built-in administrator even after rename; without a SID only the name `sa` provides a fallback, so a renamed administrator cannot be identified conclusively from that record alone. A failed enable attempt remains labeled **Failed**, not a confirmed state change. Deploy the updated Sentinel content to apply these alert settings; existing incidents are not renamed and old events are not replayed. At high event volumes, Sentinel's per-run alert limits can still aggregate excess results.
+
 ```bash
 bash scripts/deploy-sentinel-sql.sh plan --environment dev
 bash scripts/deploy-sentinel-sql.sh doctor --environment dev
@@ -145,35 +176,149 @@ For a controlled end-to-end exercise, use the isolated demo portal to change the
 
 References: [SQL Server audit action groups](https://learn.microsoft.com/sql/relational-databases/security/auditing/sql-server-audit-action-groups-and-actions) and [Sentinel scheduled rule resource schema](https://learn.microsoft.com/azure/templates/microsoft.securityinsights/2025-09-01/alertrules).
 
-## What It Demonstrates
+## Portal setup and configuration
 
-- Node.js and Express application with NGINX reverse proxy
-- Docker and Docker Compose local execution
-- GitHub Actions validation, promotion, release, and deployment
-- Azure Container Registry and App Service for Linux containers
-- Bicep infrastructure with managed identity and ACR pull access
-- Microsoft Defender for Cloud integration points
+Pawton Manufacturing is the Scenario 2 Astro/Node.js app. From the repository root:
 
-## Pawprint Integration Contract
+```bash
+npm ci --prefix apps/pawton-manufacturing
+npm run dev --prefix apps/pawton-manufacturing
+```
 
-This repository is intentionally wired to the shared [Pawprint](https://github.com/ninjapaw/pawprint) governance surface so deployment policy and validation behavior stay consistent across Ninja Paws projects.
+Without SQL connection settings, pages report the database as unconfigured. Supply credentials through your process environment or an approved secret provider, not source control or shell commands retained in history. The deployed app uses private VNet connectivity to SQL; public SQL exposure is controlled separately.
 
-- Infrastructure validation consumes `ninjapaw/pawprint/.github/workflows/kit-bicep-validate.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5`, which owns Bicep compilation, linting and committed-ARM drift detection for `infra/**`.
-- Dev-to-main promotion consumes `ninjapaw/pawprint/.github/workflows/kit-promote.yml@3e261301bb1a70bcd25f3891117c16ebd8065ca5`.
-- Defender posture checks consume `ninjapaw/pawprint/.github/workflows/kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6`. The kit owns subscription-scoped Defender plan, extension, GitHub connector, and GHAS state audits, including Defender for Servers (with sub-plan) and Defender for SQL for Scenario 2.
-- `bicepconfig.json` mirrors the Pawprint linter ruleset so local builds and the shared validator agree, including `use-recent-api-versions`.
-- Repository-specific checks stay local (`scripts/test.sh`, Docker/runtime checks, scenario CVE evidence), while cross-repo guardrails are centralized in Pawprint.
+### Portal environment variables
 
-This repository pins mature shared kits to immutable commit SHAs so behavior is deterministic and reviewable. New shared kits may temporarily track Pawprint `dev` while both repositories are advanced together.
-When Pawprint publishes stable release tags for these kits, migrate this pin to the corresponding tagged release.
-When adopting new shared controls, prefer Pawprint reusable workflows first, then add only dojo-specific checks locally.
-The default training state intentionally uses NGINX `1.30.3`, which is in the affected NGINX Open Source range for the real [CVE-2026-42533 F5 advisory](https://my.f5.com/manage/s/article/K000162097). The advisory identifies NGINX Open Source `1.30.0-1.30.3` as vulnerable and `1.30.4` as fixed. The application reports `vulnerable` only when runtime evidence confirms both an affected NGINX version and the affected map/regex configuration; it does not use the scenario label as proof. Do not expose the training deployment to untrusted users or use it with real data.
+| Variable                                           | Default or requirement            | Purpose                                                                        |
+| -------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| `SQL_SERVER_HOST`                                  | Required for database access      | SQL VM host/private IP                                                         |
+| `SQL_DATABASE`                                     | `FutonManufacturing`              | Application database                                                           |
+| `SQL_APP_LOGIN`                                    | `futon_app`                       | Application SQL identity                                                       |
+| `SQL_APP_LOGIN_PASSWORD`                           | Required for database access      | Application password                                                           |
+| `SQL_ADMIN_LOGIN`                                  | Required for admin SQL operations | Privileged identity; deployment supplies `dojo_admin_portal_svc`               |
+| `SQL_ADMIN_LOGIN_PASSWORD`                         | Required for admin SQL operations | Privileged SQL password                                                        |
+| `ADMIN_PORTAL_USERNAME`, `ADMIN_PORTAL_PASSWORD`   | Required for sign-in              | Operator credentials                                                           |
+| `ADMIN_SESSION_SECRET`                             | Required for sign-in              | HMAC session-signing secret                                                    |
+| `SQL_CONNECT_TIMEOUT_MS`, `SQL_REQUEST_TIMEOUT_MS` | `5000`                            | Positive connection/query timeouts; invalid values use the default             |
+| `LOG_ANALYTICS_WORKSPACE_ID`                       | Optional workspace GUID           | Enables forwarded-event confirmation                                           |
+| `SQL_VM_RESOURCE_ID`                               | Set by deployment                 | Fixed VM scope for evidence and extension reads                                |
+| `AZURE_SUBSCRIPTION_ID`                            | Set by deployment                 | Read-only Defender plan queries; may fall back to App Service metadata         |
+| `ENABLE_SQL_DEMO_ACTIONS`                          | Enabled unless `false`            | Controls audit samples and direct SQL tests                                    |
+| `ALLOW_DEMO_BLANK_PASSWORDS`                       | `false`                           | Opt-in password clearing for restricted `dojo_demo_` accounts only             |
+| `SQL_SHELL_ATTACK_TESTS_ENABLED`                   | `true`                            | Displays the bootstrap default; changing this alone does not change SQL Server |
+| `PORTAL_TIME_ZONE`                                 | `America/New_York`                | Human-readable event and status timezone                                       |
 
-For a customer-facing, self-guided run-through, use the demo walkthrough in this README. It covers baseline deployment, evidence review, Defender coverage, patched-state redeployment, before/after interpretation, and cleanup.
+The app and admin connection pools remain separate. Encryption is required; the lab trusts the VM's self-signed certificate. Admin operations use a deliberately privileged identity. The managed identity needs read access to Defender plans, VM extensions, and the configured workspace; missing access is reported as unavailable, not healthy.
+
+For a prebuilt Linux deployment, set `WEBSITE_HOSTNAME` during the build so Astro trusts the deployed host for same-origin requests, and include Linux production dependencies. Source packages require remote build automation; prebuilt packages do not. Match App Service's build settings to the package type. Do not disable CSRF checks to bypass a hostname mismatch.
+
+### Custom domain and Cloudflare
+
+The portal supports an optional custom subdomain through the same deployment configuration. Dev defaults to `pawton.ninjapaws.org`; prod has no custom hostname until you configure one. Never point the same hostname at both environments.
+
+| Configuration key                                                             | Environment override   | Default                                         |
+| ----------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------- |
+| `environments.<env>.webAppCustomDomain` (or `sqlScenario.webAppCustomDomain`) | `PORTAL_CUSTOM_DOMAIN` | `pawton.ninjapaws.org` for dev; otherwise blank |
+| `sqlScenario.manageCustomDomain`                                              | `MANAGE_CUSTOM_DOMAIN` | `false`                                         |
+| `sqlScenario.cloudflareZoneId`                                                | `CLOUDFLARE_ZONE_ID`   | Blank                                           |
+
+Per-environment values override `sqlScenario` values. CLI options `--custom-domain`, `--cloudflare-zone-id`, and `--manage-custom-domain` override configuration for a run. Set the Cloudflare zone ID from your zone overview. Supply `CLOUDFLARE_API_TOKEN` as an environment secret with **Zone Read** and **DNS Edit** scoped only to that zone. Do not put the token in JSON, command arguments, the portal's app settings, or Bicep parameters. In GitHub Actions, use Environment variables for the three overrides above and an Environment secret named `CLOUDFLARE_API_TOKEN`.
+
+The domain lifecycle uses Cloudflare's API for DNS and [custom-domain.bicep](infra/sql-defender-scenario/custom-domain.bicep) for Azure hostname/certificate resources:
+
+1. Read the existing Web App's default hostname and domain-verification ID.
+2. Create missing `asuid.<hostname>` TXT and direct CNAME records. Matching records are preserved; conflicting records stop deployment before DNS writes.
+3. Verify public DNS, add the hostname if absent, then issue an App Service managed certificate and bind SNI HTTPS. Existing non-managed TLS bindings are not replaced automatically.
+4. Check the HTTPS Status page with certificate validation enabled. DNS propagation or certificate issuance can require a rerun; partial setup is safe to resume.
+
+This path requires **Cloudflare DNS-only (grey cloud), with CNAME flattening off**. Keep that setting for managed certificate renewal. It does not enable Cloudflare's proxy/WAF, change zone-wide TLS settings, or bypass certificate verification. For orange-cloud proxying, use a separately reviewed origin-certificate/renewal design and Full (strict) TLS, not Flexible mode. A missing public CNAME is not proof the site is down: existing proxy or flattened configurations must be reviewed before adoption. Apex domains and wildcards are not supported by this helper; hostnames are limited to 64 characters by the managed-certificate path. Review public reachability and CAA restrictions before issuance.
+
+```bash
+# Offline plan; no credentials or network access required.
+bash scripts/deploy-pawton-domain.sh plan --environment dev
+# Read-only Azure, Cloudflare, DNS, and HTTPS checks.
+bash scripts/deploy-pawton-domain.sh check --environment dev
+# DNS and HTTPS only: does not redeploy the VM, rotate passwords, or rebuild the portal.
+bash scripts/deploy-sql-scenario.sh domain --environment dev
+```
+
+Set `manageCustomDomain` to `true` (or pass `--manage-custom-domain`) to run this step after the portal deploys during the full SQL scenario lifecycle. The existing SQL deployment workflow also offers a `domain` stage, which skips the subscription-wide Defender posture job. Domain writes require the matching `dev`/`main` branch, Azure resource permissions for the app/certificate/deployment, and explicit confirmation (`--yes` for automation).
+
+The main Bicep template writes `PORTAL_CUSTOM_DOMAIN` to the Web App. Astro must see it **at build time** for same-origin manager/admin sign-in; for prebuilt artifacts, supply both `PORTAL_CUSTOM_DOMAIN` and `WEBSITE_HOSTNAME` while building. A domain-only run does not rebuild an existing artifact. The default `azurewebsites.net` host remains supported. Host-only session cookies are not shared between the two domains, so sign in again after switching hosts.
+
+Uninstall does not delete external Cloudflare records. Remove or repoint the CNAME before deleting the app to avoid a dangling DNS record; retain the ownership TXT until the migration is complete. Setting the hostname blank or disabling automation does not remove existing bindings. Local checks: `npm run test:domain` and `bash scripts/deploy-pawton-domain.sh plan`.
+
+References: [App Service custom domains](https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain), [managed certificate requirements](https://learn.microsoft.com/azure/app-service/configure-ssl-certificate), and [Cloudflare DNS API](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/).
+
+### Display timezone
+
+Set `sqlScenario.portalTimeZone` in [deployment configuration](config/deploy.config.json), or change the running app's `PORTAL_TIME_ZONE` setting and restart. `America/New_York` observes EST in winter and EDT in summer; use `Etc/GMT+5` for fixed EST year-round, `UTC`, or another IANA timezone. Keep deployment configuration aligned with runtime changes.
+
+Admin event tables, expanded Windows records, protection checks, and System status use the selected timezone. Blank/invalid zones fall back to Eastern time; malformed timestamps display `Unavailable`. Stored UTC timestamps, API ISO values, raw log descriptions, sorting, and relative query windows are unchanged. No SQL/VM timezone change or app rebuild is needed.
+
+### Portal routes
+
+The shared page head includes route descriptions, application identity, favicons, theme color, and Open Graph/Twitter previews with a static Pawton image. Public-page canonical URLs use the configured `PORTAL_CUSTOM_DOMAIN`, falling back to `WEBSITE_HOSTNAME`; local previews omit them. Query strings and private order identifiers are never included. Login, order-management, and admin pages use generic metadata without social-preview tags.
+
+This intentionally vulnerable lab sends `noindex, nofollow, noarchive` in HTML metadata and `X-Robots-Tag` response headers. Crawling is allowed so search engines can read those directives; no search sitemap is published. These are crawler preferences, not access controls: authentication still protects restricted pages. Dynamic responses also set a strict-origin referrer policy and disable MIME sniffing.
+
+| Route                                      | Purpose                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------- |
+| `/`, `/inventory`, `/sales`, `/production` | Live sample-data reports                                                    |
+| `/health`, `/api/status`, `/status`        | Health, JSON evidence, and human-readable system status                     |
+| `/admin/login`, `/users`                   | Operator sign-in and authenticated SQL login management                     |
+| `/admin`                                   | Security observations, lab tests, SQL shell setting, and event confirmation |
+| `/admin/schema`, `/admin/auditing`         | Authenticated schema and audit inspection                                   |
+
+Record tables show 25 rows per page with bottom first/previous/next/last arrows and a **Go to record** number field. Inventory, Sales, Production, Users, and Schema include all rows visible to their existing report queries, without the former 25/500-row cutoffs. These sample-database tables are loaded once per page request and paged in the browser; Sales remains an aggregate report. Windows events use counted server-side pages with no 100-event cutoff within the fixed 30-minute window. **Refresh events** starts a new window; summary and raw-record views use the same page. Permissions and login-action confirmations are unchanged.
+
+### Staff order management
+
+The portal labels this non-admin role **Manager**: select **Log in as manager**, then use **Manage orders** to create an order, edit a draft, or view a confirmed/cancelled order. This label does not grant access to other users' orders or SQL administration; the existing staff credential settings below still apply.
+
+Staff use `/login` and `/orders`; administrator sign-in remains at `/admin/login`. A full SQL scenario deployment generates a manager password and independent 256-bit session key. Bicep stores them with the username in the scenario's Key Vault as `user-portal-username`, `user-portal-password`, and `user-session-secret`, and supplies the same values to `USER_PORTAL_USERNAME`, `USER_PORTAL_PASSWORD`, and `USER_SESSION_SECRET` on the Web App. This follows the existing lab's protected app-setting pattern, not live Key Vault references: editing a vault secret alone does not update the running app. No manager password or signing key is printed, placed in a deployment output, or saved to a local credential file.
+
+The username defaults to `dojo-manager`. Override it with `sqlScenario.userPortalUsername`, `environments.<env>.userPortalUsername`, or the `USER_PORTAL_USERNAME` environment/GitHub Environment variable (1-100 letters, digits, dots, underscores, @ signs, or hyphens). Keep it stable because order ownership uses this username. Each full deployment rotates the manager password and session key, invalidating existing sessions; retrieve the current username/password from Key Vault using an authorized identity. Domain-only deployment does not rotate credentials. When `deployWebApp=false`, the three manager secrets are not provisioned. Direct Bicep callers must provide the secure `userPortalPassword` and `userSessionSecret` parameters.
+
+For local development, supply the three `USER_*` settings through a local secret provider. There is no default password, public registration, or SQL-login-based sign-in. This lab version provides one configured manager identity; use an organizational identity provider before supporting multiple people in production.
+
+Staff can create customer-order drafts, edit their own drafts, and explicitly confirm or cancel a saved draft. Orders appear under **Orders** with record navigation and line-item details. Prices and totals are calculated from the server's current catalog, not browser-submitted prices. Tax, shipping, discounts, payments, stock reservations, and production release are outside this workflow. Existing sample orders and orders owned by another username are not editable through the staff interface.
+
+Writes use the existing application SQL connection and sales-order tables, never the privileged admin connection. Draft writes are transactional, duplicate create submissions reuse the order number, and stale draft revisions are rejected. Confirmation does not manufacture goods or move inventory. No schema migration is required for the upstream Futon Manufacturing schema.
+
+Staff and administrators have different signed cookies. Signing in to one role clears the other role's cookie. Staff sessions expire after 15 minutes and become invalid when staff credentials change; changing the configured username also changes which orders are visible. SQL login administration, security exercises, and admin evidence controls remain administrator-only. A business order write can produce SQL Audit records but is not a guaranteed security alert.
+
+### Direct SQL attack tests
+
+All tests require a signed admin session, same-origin POST, and explicit confirmation. The CLI uses the same fixed catalog and environment configuration. It accepts no arbitrary SQL, commands, credentials, or targets. Each runner enforces a process-local 60-second cooldown; do not use concurrent CLI instances or multiple app instances to bypass it.
+
+| Test ID             | Activity and limits                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `brute-force`       | Twelve failed logins for a random nonexistent identity; no real-account guessing                       |
+| `suspicious-app`    | Read-only metadata query with client name `sqlmap`; no external attack tool                            |
+| `sql-injection`     | Fixed tautology/UNION against synthetic inline rows; no business-data extraction                       |
+| `principal-anomaly` | Temporary user without login, sample SELECT grant, impersonation, and rollback; no committed principal |
+| `external-source`   | SQL shell prints an `example.invalid` URL; no network request or download                              |
+| `obfuscated-shell`  | Encoded PowerShell prints only a run marker; no persistence or downloaded script                       |
+
+The principal and shell tests use admin credentials. Shell tests require `xp_cmdshell` already enabled and return `state: blocked` otherwise; the runner never enables it. Every connection is closed after execution. The external-source test is a limited probe, not a reproduction of a download. None guarantees a Defender alert, particularly baseline-dependent anomaly detections.
+
+```bash
+node scripts/run-sql-attack-test.mjs --audit
+node scripts/run-sql-attack-test.mjs --run suspicious-app --confirm isolated-lab
+```
+
+`--audit` and `--list` make no connection. Exit codes: 0 for audit/executed, 1 for failure, 2 for blocked/usage errors. Results include `runId`, `startedAt`, `state`, and `alertConfirmed: false`. Correlate `dojo-attack-test:<scenario>:<run-id>` with the VM, time window, and actual alert evidence; failed-logon identities use `dojo_invalid_<run-id-without-hyphens>`.
+
+Audit-only samples are separate: a sample read, a rolled-back data change, or a permission-boundary query generates SQL Audit evidence, not a guaranteed Defender alert. The six themed audit samples use `dojo-simulation-sample` markers for Sentinel training incidents. SQL Audit can describe rolled-back statements; it is not committed row history.
+
+Login mutations protect system, Windows, privileged, and application identities. The built-in administrator is recognized by SID `0x01`, including after rename. Only its credential changes synchronize to Key Vault; other rotated passwords are shown once. Optional blank-password changes require an unprivileged `dojo_demo_` identity with no application database user mapping; rotate to a strong password afterward. Disabling a login does not terminate existing sessions.
+
+Defender protection changes remain explicit Azure operations and may affect other workloads or billing. Keep SQL Audit enabled, record the baseline, and restore protection after any authorized comparison. Consult the [SQL alert reference](https://learn.microsoft.com/azure/defender-for-cloud/alerts-sql-database-and-azure-synapse-analytics) and [SQL protection controls](https://learn.microsoft.com/azure/defender-for-cloud/disable-sql-on-machines).
 
 ## Quick Start
 
-Prerequisites: Git, Node.js 20+, Docker/Docker Compose, and Bash. Azure deployment additionally requires Azure CLI; GitHub OIDC bootstrap requires GitHub CLI.
+Prerequisites: Git, Node.js 24 (use the version in `.node-version` and npm version in `package.json`), Docker/Docker Compose, and Bash. Azure deployment additionally requires Azure CLI; GitHub OIDC bootstrap requires GitHub CLI.
 
 ```bash
 git clone https://github.com/ninjapaw/ninjapaws-cloud-security-dojo.git
@@ -197,7 +342,14 @@ npm run deploy:dev
 
 ### Repository layout
 
-Application source lives under `src/`; the root is reserved for repository contracts and tool entry points. `Dockerfile` stays at the repository root because Docker, Docker Compose, GitHub Actions, and Azure container build flows all default to that location. `entrypoint.sh` also stays at the root because it is the container runtime entrypoint copied by the Dockerfile, not a host-side lifecycle command. Host-side commands live under `scripts/`, with `scripts/manage.sh` as the human-friendly lifecycle entry point.
+| Path                                        | Contents                                                       |
+| ------------------------------------------- | -------------------------------------------------------------- |
+| `src/`                                      | Scenario 1 dashboard and runtime evidence API                  |
+| `apps/pawton-manufacturing/`                | Scenario 2 portal and bounded SQL lab actions                  |
+| `config/deploy.config.json`                 | Scenario and environment configuration                         |
+| `scripts/`                                  | Local lifecycle commands, SQL bootstrap, and validation        |
+| `infra/`                                    | Bicep templates, generated ARM templates, and Sentinel content |
+| `Dockerfile`, `entrypoint.sh`, `nginx.conf` | Scenario 1 container build and runtime                         |
 
 ### Endpoint surface
 
@@ -210,17 +362,24 @@ Application source lives under `src/`; the root is reserved for repository contr
 `/api/status` reports two different classes of truth, and the payload keeps them separate on purpose. `runtime_verification` is proven inside the container by reading the actual NGINX binary, Debian package, and rendered configuration. `defender_monitoring` reports the Defender coverage the deployment **requested**, because the container holds no Azure credentials and cannot query subscription plan state. Each monitoring flag is a plain `true`/`false`, and the block names Defender for Cloud as the authoritative source:
 
 ```json
-"defender_monitoring": {
-  "source": "deployment-configuration",
-  "plans": { "defender_for_app_service": "Standard", "defender_for_containers": "Standard", "defender_cspm": "Standard", "defender_for_resource_manager": "Standard" },
-  "monitoring": {
-    "app_service_threat_protection": true,
-    "resource_manager_threat_detection": true,
-    "container_registry_vulnerability_assessment": true,
-    "cspm_serverless_protection": true,
-    "cspm_serverless_containers": true,
-    "devops_connector_requested": true,
-    "github_advanced_security_expected": true
+{
+  "defender_monitoring": {
+    "source": "deployment-configuration",
+    "plans": {
+      "defender_for_app_service": "Standard",
+      "defender_for_containers": "Standard",
+      "defender_cspm": "Standard",
+      "defender_for_resource_manager": "Standard"
+    },
+    "monitoring": {
+      "app_service_threat_protection": true,
+      "resource_manager_threat_detection": true,
+      "container_registry_vulnerability_assessment": true,
+      "cspm_serverless_protection": true,
+      "cspm_serverless_containers": true,
+      "devops_connector_requested": true,
+      "github_advanced_security_expected": true
+    }
   }
 }
 ```
@@ -229,7 +388,7 @@ The deployment report's verification matrix is where those requests are checked 
 
 `map` is an internal NGINX configuration directive rendered by `entrypoint.sh` into `/etc/nginx/scenario.conf`. In the affected image it combines regex matching and captures; the detector reports this as `runtime_verification.map_regex_enabled: true`. Inspect that evidence through `/api/status`.
 
-The current production deployment is available at [ninjapaws-dojo-app-prod.azurewebsites.net](https://ninjapaws-dojo-app-prod.azurewebsites.net/). Its [health endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/health) is suitable for probes; its [status endpoint](https://ninjapaws-dojo-app-prod.azurewebsites.net/api/status) is the authoritative demo evidence surface.
+Use the application URL printed by your deployment report. The repository does not provide a supported public hosted service.
 
 Run the containerized stack:
 
@@ -259,13 +418,7 @@ Baseline deployment:
 bash scripts/deploy.sh deploy --environment dev --defaults --yes
 ```
 
-Open `output/dev/deployment-dev.html` and review the task list, verification matrix, environment access links, and audit trail. The deployed dev application should expose:
-
-```text
-https://ninjapaws-dojo-app-dev.azurewebsites.net/
-https://ninjapaws-dojo-app-dev.azurewebsites.net/api/status
-https://ninjapaws-dojo-app-dev.azurewebsites.net/health
-```
+Open `output/dev/deployment-dev.html` and review the task list, verification matrix, environment access links, and audit trail. Use the report's application URL to inspect `/`, `/api/status`, and `/health`.
 
 In `/api/status`, treat `runtime_verification` and `defender_monitoring` differently. Runtime evidence is proven inside the container; Defender monitoring reports what the deployment requested, while the deployment report compares those requests against Azure. The vulnerable baseline should show `vulnerability.detected: true`, `vulnerability.status: vulnerable`, `runtime_verification.scenario_config_state: affected`, and `runtime_verification.map_regex_enabled: true`.
 
@@ -350,8 +503,8 @@ Defender CSPM extensions are applied as one set, because the API replaces the wh
 | `ServerlessContainers`                        | `true`  | Serverless container posture for Container Apps, Container Instances, and ECS on Fargate; also supplies registry-aware container context |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | Registry access, required for full serverless container and image posture                                                                |
 | `AgentlessDiscoveryForKubernetes`             | `false` | No AKS or Kubernetes workload is deployed                                                                                                |
-| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                                                                                         |
-| `SensitiveDataDiscovery`                      | `false` | This project stores no data; the extension reads customer data, so it stays opt-in                                                       |
+| `AgentlessVmScanning`                         | `false` | Scenario 1 deploys no virtual machines                                                                                                   |
+| `SensitiveDataDiscovery`                      | `false` | Scenario 1 stores no application data; discovery stays opt-in                                                                            |
 | `EntraPermissionsManagement`                  | `false` | CIEM has tenant-wide scope beyond this scenario                                                                                          |
 | `ApiPosture`                                  | `false` | Preview capability is outside the required App Service and ACR scenario                                                                  |
 
@@ -361,7 +514,7 @@ Defender for Containers extensions follow the same pattern:
 | --------------------------------------------- | ------- | ----------------------------------------------------------------------------- |
 | `ContainerRegistriesVulnerabilityAssessments` | `true`  | On; generates and links findings artifacts for every new or updated ACR image |
 | `AgentlessDiscoveryForKubernetes`             | `false` | Not applicable to App Service                                                 |
-| `AgentlessVmScanning`                         | `false` | No virtual machines are deployed                                              |
+| `AgentlessVmScanning`                         | `false` | Scenario 1 deploys no virtual machines                                        |
 | `ContainerSensor`                             | `false` | The runtime threat sensor is an AKS component                                 |
 
 DevOps and code security settings:
@@ -385,20 +538,11 @@ The lifecycle does **not** automatically deactivate an already-enabled Defender 
 
 Never put credentials in these variables. Runtime secrets belong in Azure Key Vault with managed identity. GitHub Environment secrets are reserved for values GitHub itself must keep confidential when OIDC or Key Vault cannot provide them.
 
-### Why this deployment ships no Key Vault
+### Secrets by scenario
 
-This project deliberately provisions no Key Vault, because it has no secret to store. Every credential that a container deployment normally needs was designed out rather than protected:
+Scenario 1 provisions no Key Vault: App Service pulls from ACR using managed identity, GitHub Actions uses OIDC, and the container has no database or API credentials. Its settings contain only non-secret configuration.
 
-| Normally a secret           | How this project avoids it                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Registry password           | ACR is created with `adminUserEnabled: false`; App Service pulls with a user-assigned managed identity holding `AcrPull` |
-| Azure deployment credential | GitHub Actions uses OIDC federated credentials, so no client secret is ever created                                      |
-| App configuration           | NGINX version, port, scenario state, and Defender flags are all non-secret and ship as App Service settings              |
-| Database or API credential  | No database, queue, or third-party API is deployed                                                                       |
-
-Adding a Key Vault here would introduce a resource to secure, an access policy or RBAC surface to maintain, and a monthly cost — while protecting nothing. It would also imply this environment holds secrets that it does not, which is misleading in a training demo.
-
-The rule stays unchanged for future work: the moment a real secret is introduced, it belongs in Key Vault, referenced from App Service with the existing managed identity, and `KeyVaults` should move to the `Standard` Defender plan at that point. Until then the report records Defender for Key Vault as **Not applicable** rather than enabling a plan for a resource type that does not exist.
+Scenario 2 does provision Key Vault for SQL and administrator credentials. Its privileged portal and direct password app settings are deliberate lab anti-patterns, described in [Scenario 2](#defender-for-cloud---scenario-2). Do not treat either scenario as a production secret-management template.
 
 ### Defender endpoint blocks during npm builds
 
@@ -415,8 +559,6 @@ That is a network-policy block on Docker Desktop, not a malicious npm path and n
 $env:NPM_REGISTRY_URL = 'https://npm-mirror.contoso.example/repository/npm-group/'
 docker build --build-arg NPM_REGISTRY_URL=$env:NPM_REGISTRY_URL -t ninja-paws-dojo .
 ```
-
-For enterprise builds, I recommend an **Azure Artifacts npm feed** configured with an npmjs.org upstream source. It provides organizational access control, retention, auditability, and caching while preserving package provenance. Set `NPM_REGISTRY_URL` to that feed URL and allow the endpoint to reach the approved feed.
 
 To skip mirror configuration for a diagnostic comparison:
 
@@ -479,17 +621,9 @@ Use `--defaults` to accept built-in values and `--yes` for non-interactive confi
 
 `uninstall` uses a focused teardown wizard rather than deployment prompts: it shows the branch-locked environment, offers the configured resource group as the default, and defaults to waiting for Azure to confirm deletion. It then verifies the live Ninja Paws ownership tags before asking for the destructive confirmation. Use `--no-wait` only when an automation caller intentionally needs an asynchronous deletion request.
 
-The initial wizard intentionally does not include arbitrary advanced resource operations or subscription-wide Defender plan changes. Those actions have a larger blast radius than the dojo lifecycle and need a separately designed allowlist, role model, preview, and confirmation flow before they should be exposed interactively.
-
 Each lifecycle run also writes an auto-refreshing HTML status dashboard to `output/<environment>/deployment-<environment>.html`. Open that local file in a browser while the command runs to see the latest stage, percentage, environment coordinates, image, and links to detailed logs/state. No web server is required; the terminal remains the authoritative live stream. Use `--no-status-html` when a file report is not wanted.
 
-The dashboard and live console are refreshed throughout the run, so the browser view and terminal show the same progress information. The existing report is reused: its link is printed and copied to the clipboard once per run, and the browser is opened once while the file continues to refresh. In VS Code or Codespaces, the opener first hands the report URL to the active VS Code window with `code --open-url`; this uses the integrated browser when available. It then detects Microsoft Edge (`msedge.exe`, `microsoft-edge`, `microsoft-edge-dev`, or `edge`) before falling back to the platform default. Set `DEPLOY_BROWSER` or `BROWSER` to an available browser command when a remote shell needs an explicit opener.
-
-While the run is active the dashboard is an **executive progress report**: a task list shows every lifecycle stage as _Not started_, _In progress_ (animated spinner), _Success_, _Failure_, _Skipped_, or _Not applicable_, each with its own duration and a one-line detail. A failed stage shows the reason inline.
-
-The page never reloads itself. It polls a small state feed (`deployment-<environment>.state.js`) every 2 seconds and patches the DOM in place, so the progress bar, task list, verification matrix, run facts, next steps, and live console all update without flicker and without losing your scroll position. `fetch()` is blocked on `file://` origins, so the feed is loaded by injecting a `<script>` tag, which `file://` does permit.
-
-A **Generate PDF** button at the bottom renders the report through a dedicated print stylesheet (A4, page-break-safe sections and table rows, repeated table headers, preserved status colours) and opens the browser's print dialog — choose _Save as PDF_. It always reflects whatever is on screen at that moment, so you can take a snapshot mid-run or after completion. The raw console is excluded from the PDF to keep it to the executive content.
+The report shows stage outcomes, durations, failure details, verification evidence, and next steps. Use **Generate PDF** to open the browser's print dialog and save a snapshot. Set `DEPLOY_BROWSER` or `BROWSER` to choose an opener, or use `--no-open-status` in headless terminals and CI.
 
 The task list is built dynamically from the command you ran, so it always reflects the real work:
 
@@ -504,8 +638,6 @@ The task list is built dynamically from the command you ran, so it always reflec
 | `deploy` / `setup` / `update` / `repair` | all stages end to end, followed by the Defender scan and workload-coverage task       |
 | `uninstall`                              | locate the resource group, confirm ownership tags, request deletion, confirm teardown |
 
-Overall progress is derived from that list rather than hardcoded, so the percentage is meaningful for every command. Each stage also contributes its own rows to the verification matrix and its own tailored **Next steps**, so `uninstall`, `doctor`, and `plan` produce a genuine executive report instead of a deployment-shaped one.
-
 ### Defender for Cloud scan and workload coverage
 
 For deployment-shaped commands, the report runs a Defender task **after** App Service and endpoint verification. The task performs these actions and records each result in the verification matrix:
@@ -514,7 +646,7 @@ For deployment-shaped commands, the report runs a Defender task **after** App Se
 2. Reads the latest Defender for Cloud assessment inventory for the target resource group.
 3. Searches the assessment payload for the configured target CVE.
 4. Verifies that App Service attack detection and ACR image vulnerability assessment are covered.
-5. Explicitly records Kubernetes runtime coverage and unrelated Defender plans as **Not applicable** because this project deploys a custom Linux container to Azure App Service, not AKS, SQL, Storage, Key Vault, DNS, or Resource Manager workloads.
+5. Records Kubernetes runtime coverage and unrelated workload plans as **Not applicable** for Scenario 1. SQL/VM coverage belongs to Scenario 2; Resource Manager protection is configured separately at subscription scope.
 
 The scan task is deliberately honest about timing. Defender vulnerability assessment is asynchronous and its engines continuously rescan or rescan on their service schedule; the Azure CLI does not provide a supported synchronous "scan this image now" operation for this deployment shape. The task therefore forces a fresh post-deployment assessment inventory read and reports **Not sure** when the target CVE is not yet present, rather than treating an empty or still-initializing result as proof that the image is clean.
 
@@ -528,7 +660,7 @@ The report's Environment access panel links directly to App Service Metrics/diag
 
 Official references: [What is Microsoft Defender for Cloud?](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction), [Defender for App Service](https://learn.microsoft.com/azure/defender-for-cloud/tutorial-enable-app-service-plan), [Defender for Containers](https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction), and [view vulnerabilities for running containers](https://learn.microsoft.com/azure/defender-for-cloud/view-and-remediate-vulnerabilities-containers).
 
-When the run reaches 100% the page rewrites itself as a **final executive report** with auto-refresh disabled. It adds a verification matrix where every check is recorded as **Pass**, **Failure**, **Not sure**, or **Not applicable** together with the evidence used to decide, an **Environment access** panel with clickable links to the live application, its `/api/status` and `/health` endpoints, App Service Metrics and diagnostics, Defender for Cloud Recommendations, and the Azure portal blades for the resource group, App Service, and container registry — annotated with whether the site actually responded — and a **Next steps** section tailored to whether the run succeeded or failed.
+The final report stops refreshing and retains **Pass**, **Failure**, **Not sure**, and **Not applicable** outcomes alongside evidence and links to the application and Azure resources.
 
 ### Content-addressed builds
 
@@ -546,9 +678,7 @@ The report shows the resolved manifest digest, the fingerprint, and whether the 
 
 Every run starts with a clean environment output directory. The previous run is archived under `output/archive/<timestamp>-<environment>/` by default, preserving troubleshooting history without allowing stale files to affect the current run. Use `--no-archive` only when automatic deletion of the previous output is explicitly preferred.
 
-The dashboard includes one **Live Console** artifact at `output/<environment>/deployment-<environment>.console.html`. During interactive setup it shows **Waiting for your input** while the terminal prompts for values; after each answer it updates with the resolved stage and deployment messages. Raw capture is kept only as hidden per-run staging data while the HTML is regenerated.
-
-When possible, the wizard opens the dashboard in the default browser automatically and prints both the absolute path and a clickable `file://` link. Use `--no-open-status` in headless terminals or CI.
+The **Live Console** artifact at `output/<environment>/deployment-<environment>.console.html` preserves deployment messages. Answer interactive prompts in the terminal, not the report.
 
 Initial GitHub OIDC setup is separate and runs once per Environment:
 
@@ -575,7 +705,9 @@ Package metadata must match the repository name and description, remain MIT lice
 
 ## Workflows
 
-- `validate-infrastructure.yml`: Bash, package, ARM JSON, and Bicep checks
+Reusable Bicep validation and Defender posture checks come from [Pawprint](https://github.com/ninjapaw/pawprint). Workflow files contain the pinned revisions; scenario code and deployment configuration remain owned by this repository.
+
+- `validate-infrastructure.yml`: installs dependencies, runs repository/runtime and portal tests, builds the portal, and delegates Bicep compilation/drift checks to the shared Pawprint contract
 - `validate-remediation.yml`: container remediation and endpoint validation
 - `deploy.yml`: branch-aware staged Azure deployment (Scenario 1: NGINX CVE / App Service + ACR)
 - `deploy-sql-scenario.yml`: plan/doctor/deploy/uninstall lifecycle for Scenario 2 (SQL Server on Azure VM); a separate workflow because it's a separate architecture and resource group from Scenario 1
@@ -587,9 +719,16 @@ Package metadata must match the repository name and description, remain MIT lice
 Run the shared checks locally:
 
 ```bash
+npm ci
+npm ci --prefix apps/pawton-manufacturing
+npm test
 bash scripts/test.sh --skip-azure
+npm test --prefix apps/pawton-manufacturing
+npm run build --prefix apps/pawton-manufacturing
 bash scripts/test.sh
 ```
+
+`npm test` covers the container runtime; the portal has its own dependency graph and test command. `scripts/test.sh --skip-azure` also runs container tests, shared-helper checks, offline Sentinel contracts, and deployment-report smoke checks. It works from any current directory. The non-skipped Azure path compiles local Bicep but does not deploy resources. These checks do not replace disposable-VM SQL bootstrap validation or live Defender/Sentinel detection testing.
 
 ## Security
 

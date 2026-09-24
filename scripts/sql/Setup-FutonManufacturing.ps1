@@ -3,20 +3,16 @@
     Ninja Paws Cloud Security Dojo - Scenario 2 VM bootstrap.
 
 .DESCRIPTION
-    Runs once via the Custom Script Extension after SQL Server is available on the
+    Runs via the Custom Script Extension after SQL Server is available on the
     "SQL Server 2022 on Windows Server 2022" marketplace image. It:
       1. Downloads the Futon Manufacturing sample database scripts from
          microsoft/sql-server-samples and restores them in order.
-      2. Applies SQL Server security best practices: Transparent Data Encryption,
-         SQL Server Audit to the Windows Security event log (collected by Defender
-         for Endpoint / MDE), a least-privilege application login instead of sa,
-         and disabling the legacy SQL Server Browser service.
+        2. Configures Transparent Data Encryption, SQL Server Audit to the Windows
+            Application log (forwarded by AMA), application and privileged lab logins,
+            and the explicitly configured SQL shell setting.
 
-    This script uses sqlcmd.exe (bundled with every SQL Server engine install) rather than the
-    SqlServer PowerShell module, because Install-Module can hang on an interactive repository-
-    trust prompt that a Custom Script Extension has no stdin to answer. The application login
-    password is supplied by the deploy script and never printed anywhere other than this VM's
-    local transcript log.
+     Uses sqlcmd.exe to avoid interactive PowerShell Gallery trust prompts.
+     Deployment supplies passwords through protected extension settings.
 #>
 
 [CmdletBinding()]
@@ -32,7 +28,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AdminOpsLoginPasswordBase64,
     [Parameter(Mandatory = $true)]
-    [string]$SaLoginPasswordBase64
+    [string]$SaLoginPasswordBase64,
+    [ValidateSet('true', 'false')]
+    [string]$EnableSqlShellAttackTests = 'true'
 )
 
 $AppLoginPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($AppLoginPasswordBase64))
@@ -59,9 +57,6 @@ function Get-RandomPassword {
 
 Write-Host "== Ninja Paws Dojo :: Futon Manufacturing bootstrap starting =="
 
-# sqlcmd.exe ships with every SQL Server engine install and needs no PowerShell Gallery access.
-# Invoke-Sqlcmd (the SqlServer module) was avoided deliberately: Install-Module can block on an
-# interactive "untrusted repository" prompt, and a Custom Script Extension has no stdin to answer it.
 function Invoke-SqlFile {
     param([Parameter(Mandatory = $true)][string]$Path)
     # -I: sqlcmd defaults QUOTED_IDENTIFIER to OFF (SSMS/Invoke-Sqlcmd default it ON), which breaks
@@ -114,6 +109,37 @@ if (-not (Test-SqlSysadmin)) {
     }
     Write-Host "Sysadmin access recovered for NT AUTHORITY\SYSTEM."
 }
+
+$sqlShellEnabled = if ($EnableSqlShellAttackTests -eq 'true') { 1 } else { 0 }
+Invoke-SqlText -Query @"
+USE master;
+SET NOCOUNT ON;
+DECLARE @desired int = $sqlShellEnabled;
+DECLARE @lockResult int;
+EXEC @lockResult = sys.sp_getapplock @Resource = N'Dojo.SqlShellConfiguration', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0;
+IF @lockResult < 0 THROW 51000, 'SQL shell configuration is busy.', 1;
+DECLARE @advanced int = (SELECT CAST(value_in_use AS int) FROM sys.configurations WHERE name = 'show advanced options');
+BEGIN TRY
+    IF EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'xp_cmdshell' AND (CAST(value_in_use AS int) <> @desired OR CAST(value AS int) <> @desired))
+    BEGIN
+        IF @advanced = 0 BEGIN EXEC sys.sp_configure 'show advanced options', 1; RECONFIGURE; END;
+        EXEC sys.sp_configure 'xp_cmdshell', @desired;
+        RECONFIGURE;
+        IF @advanced = 0 BEGIN EXEC sys.sp_configure 'show advanced options', 0; RECONFIGURE; END;
+    END;
+    IF NOT EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'xp_cmdshell' AND CAST(value_in_use AS int) = @desired)
+        THROW 51001, 'SQL shell setting verification failed.', 1;
+    SELECT name, value_in_use FROM sys.configurations WHERE name = 'xp_cmdshell';
+    EXEC sys.sp_releaseapplock @Resource = N'Dojo.SqlShellConfiguration', @LockOwner = 'Session';
+END TRY
+BEGIN CATCH
+    IF @advanced = 0 AND EXISTS (SELECT 1 FROM sys.configurations WHERE name = 'show advanced options' AND CAST(value_in_use AS int) = 1)
+    BEGIN EXEC sys.sp_configure 'show advanced options', 0; RECONFIGURE; END;
+    EXEC sys.sp_releaseapplock @Resource = N'Dojo.SqlShellConfiguration', @LockOwner = 'Session';
+    THROW;
+END CATCH;
+"@
+Write-Host "Lab SQL shell access configured and verified: $EnableSqlShellAttackTests"
 
 $scriptFiles = @(
     '01-schema.sql',

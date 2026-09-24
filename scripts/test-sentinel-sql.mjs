@@ -19,11 +19,25 @@ const filters = [
 ].map((match) => match[1].replace("FAILED_LOGIN_THRESHOLD", "5"));
 
 assert.equal(filters.length, 4);
+for (const theme of [
+  "brute-force",
+  "suspicious-app",
+  "sql-injection",
+  "principal-anomaly",
+  "external-source",
+  "obfuscated-shell",
+]) {
+  assert(
+    bicep.includes(`theme: '${theme}'`),
+    `Missing safe simulation analytics rule for ${theme}.`,
+  );
+}
 assert(
   bicep.includes("let DojoSqlAuditInline ="),
   "Inline rules must not shadow the published workspace parser",
 );
-assert.equal(arm.variables.detections.length, 4);
+assert.equal(arm.variables.staticDetections.length, 4);
+assert.equal(arm.variables.simulationDetections.length, 6);
 assert.equal(
   Object.values(arm.variables)
     .find((value) => typeof value === "string" && value.startsWith("Event"))
@@ -45,9 +59,24 @@ const analytics = arm.resources.find((resource) =>
   resource.type.endsWith("/alertRules"),
 );
 assert.equal(analytics.kind, "Scheduled");
+assert.equal(analytics.copy.count, "[length(variables('detections'))]");
 assert.equal(analytics.properties.queryFrequency, "PT5M");
 assert.equal(analytics.properties.queryPeriod, "PT1H");
 assert.equal(analytics.properties.suppressionEnabled, false);
+assert.match(
+  analytics.properties.eventGroupingSettings.aggregationKind,
+  /login-changes.*AlertPerResult.*SingleAlert/,
+);
+assert.match(
+  JSON.stringify(analytics.properties.alertDetailsOverride),
+  /Dojo SQL - \{\{Operation\}\}: \{\{TargetLogin\}\} \(\{\{Outcome\}\}\)/,
+);
+assert.match(
+  JSON.stringify(
+    analytics.properties.incidentConfiguration.groupingConfiguration,
+  ),
+  /DisplayName/,
+);
 assert(
   !parser.includes("(?="),
   "KQL parsing must not depend on unsupported lookahead",
@@ -59,7 +88,7 @@ assert(
 assert(!parser.split("| project ").at(-1).includes("Statement"));
 assert(!parser.split("| project ").at(-1).includes("RenderedDescription"));
 console.log(
-  "Sentinel content contract checks passed (4 rules, scoped parser, no ingestion/onboarding resources).",
+  "Sentinel content contract checks passed (10 rules, scoped parser, no ingestion/onboarding resources).",
 );
 
 const workspaceIndex = process.argv.indexOf("--workspace");
@@ -89,11 +118,63 @@ function audit({
   succeeded = "true",
   sequence = "test",
   actorSid = "abcd",
+  objectName = "",
 } = {}) {
-  return `Audit event: audit_schema_version:1 event_time:2026-09-23 15:00:00.1234567 sequence_number:1 action_id:${action} succeeded:${succeeded} client_ip:10.20.3.254 permission_bitmask:0 sequence_group_id:${sequence} session_server_principal_name:session-actor server_principal_name:${actor} server_principal_sid:${actorSid} database_principal_name: target_server_principal_name:${target} target_server_principal_sid:${sid} target_database_principal_name: server_instance_name:fixture database_name: schema_name: object_name: statement:${statement} additional_information:<action_info/> user_defined_information: application_name:node-mssql connection_id:test`;
+  return `Audit event: audit_schema_version:1 event_time:2026-09-23 15:00:00.1234567 sequence_number:1 action_id:${action} succeeded:${succeeded} client_ip:10.20.3.254 permission_bitmask:0 sequence_group_id:${sequence} session_server_principal_name:session-actor server_principal_name:${actor} server_principal_sid:${actorSid} database_principal_name: target_server_principal_name:${target} target_server_principal_sid:${sid} target_database_principal_name: server_instance_name:fixture database_name: schema_name: object_name:${objectName} statement:${statement} additional_information:<action_info/> user_defined_information: application_name:node-mssql connection_id:test`;
 }
 
 const fixtures = [
+  {
+    name: "object-enable",
+    description: audit({
+      action: "LGEA",
+      target: "",
+      sid: "",
+      objectName: "sa",
+      statement: "ALTER LOGIN [sa] ENABLE;",
+    }),
+    operation: "Login enabled",
+    outcome: "Succeeded",
+  },
+  {
+    name: "explicit-target",
+    description: audit({
+      action: "LGEA",
+      target: "ordinary_login",
+      sid: "abcd",
+      objectName: "sa",
+    }),
+    operation: "Login enabled",
+    outcome: "Succeeded",
+  },
+  {
+    name: "non-login-object",
+    description: audit({ action: "SL", target: "", sid: "", objectName: "sa" }),
+    operation: "Other SQL audit",
+    outcome: "Succeeded",
+  },
+  {
+    name: "sa-enable",
+    description: audit({
+      action: "LGEA",
+      target: "sa",
+      sid: "0x01",
+      statement: "ALTER LOGIN [sa] ENABLE;",
+    }),
+    operation: "Login enabled",
+    outcome: "Succeeded",
+  },
+  {
+    name: "failed-enable",
+    description: audit({
+      action: "LGEA",
+      target: "sa",
+      sid: "0x01",
+      succeeded: "false",
+    }),
+    operation: "Login enabled",
+    outcome: "Failed",
+  },
   {
     name: "enable",
     description: audit({
@@ -297,6 +378,42 @@ assert.equal(
   true,
 );
 assert.equal(
+  parsed.find((row) => row.Computer === "sa-enable").IsBuiltInAdmin,
+  true,
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "sa-enable").TargetLogin,
+  "sa",
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "failed-enable").IsBuiltInAdmin,
+  true,
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "object-enable").TargetLogin,
+  "sa",
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "object-enable").IsBuiltInAdmin,
+  true,
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "explicit-target").TargetLogin,
+  "ordinary_login",
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "explicit-target").IsBuiltInAdmin,
+  false,
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "non-login-object").TargetLogin,
+  "",
+);
+assert.equal(
+  parsed.find((row) => row.Computer === "non-login-object").IsBuiltInAdmin,
+  false,
+);
+assert.equal(
   parsed.find((row) => row.Computer === "admin-login").IsBuiltInAdminActor,
   true,
 );
@@ -310,6 +427,10 @@ console.log(
 
 const expectedComputers = [
   [
+    "object-enable",
+    "explicit-target",
+    "sa-enable",
+    "failed-enable",
     "enable",
     "disable",
     "fallback-enable",
