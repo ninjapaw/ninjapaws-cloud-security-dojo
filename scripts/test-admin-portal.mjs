@@ -58,6 +58,17 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
   assert.match(injection.boundary.waf, /WAF can detect.*block/);
   assert.match(injection.boundary.waf, /not proof.*bypassed/);
   assert.match(injection.boundary.prevention, /Parameterized queries/);
+  assert.equal(injection.story.orders.length, 4);
+  assert.equal(
+    new Set(injection.story.orders.map((order) => order.CustomerCode)).size,
+    3,
+  );
+  assert.match(
+    injection.story.queries.unsafe,
+    /OrderNumber = N'PW-1042' OR 1=1 --/,
+  );
+  assert.match(injection.story.queries.parameterized, /OrderNumber = @value;/);
+  assert.doesNotMatch(injection.story.queries.parameterized, /OR 1=1/);
   const external = attackScenarios.find(
     (scenario) => scenario.id === "external-source",
   );
@@ -83,6 +94,9 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
   assert.match(page, /separate run and need not match this portal run ID/);
   assert.match(page, /simulate-alerts-sql-machines/);
   assert.match(page, /No Defender for SQL alert\?/);
+  assert.match(page, /scenario.story.orders.map/);
+  assert.match(page, /preview, not execution evidence/);
+  assert.match(page, /Verified SQL counts/);
   assert.match(page, /suppression rules or filters/);
   const shell = attackScenarios.find(
     (scenario) => scenario.id === "obfuscated-shell",
@@ -752,7 +766,16 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
             query: async (text) => {
               queries.push(text);
               if (text.includes("AS SafeMatches"))
-                return { recordset: [{ SafeMatches: 0, UnsafeMatches: 2 }] };
+                return {
+                  recordset: [
+                    {
+                      BaselineMatches: 1,
+                      SafeMatches: 0,
+                      UnsafeMatches: 4,
+                      QuoteProbeError: 105,
+                    },
+                  ],
+                };
               return { recordset: [{ principalId: null, enabled: 0 }] };
             },
           };
@@ -834,11 +857,50 @@ test("direct SQL lab tests are bounded, isolated, cleaned up, and do not claim a
   await assert.rejects(runner.run("brute-force"), /disabled/);
   assert.deepEqual((await runner.availability()).ids, []);
 });
-test("synthetic injection requires unsafe and parameterized counts without exposing rows", async () => {
+test("synthetic injection requires baseline, unsafe and parameterized counts without exposing database rows", async () => {
   for (const counts of [
-    { SafeMatches: 0, UnsafeMatches: 2 },
-    { SafeMatches: 2, UnsafeMatches: 2 },
-    { SafeMatches: 0, UnsafeMatches: 0 },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 0,
+      UnsafeMatches: 4,
+      QuoteProbeError: 105,
+    },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 0,
+      UnsafeMatches: 4,
+      QuoteProbeError: 102,
+    },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 0,
+      UnsafeMatches: 4,
+      QuoteProbeError: 0,
+    },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 0,
+      UnsafeMatches: 4,
+      QuoteProbeError: 229,
+    },
+    {
+      BaselineMatches: 0,
+      SafeMatches: 0,
+      UnsafeMatches: 4,
+      QuoteProbeError: 105,
+    },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 4,
+      UnsafeMatches: 4,
+      QuoteProbeError: 105,
+    },
+    {
+      BaselineMatches: 1,
+      SafeMatches: 0,
+      UnsafeMatches: 0,
+      QuoteProbeError: 105,
+    },
     {},
   ]) {
     let closed = false;
@@ -859,7 +921,14 @@ test("synthetic injection requires unsafe and parameterized counts without expos
               /@value = @input, @matched = @safeMatches OUTPUT/,
             );
             assert.match(text, /\+ @input \+/);
-            assert.equal((text.match(/FROM \(VALUES/g) || []).length, 2);
+            assert.equal((text.match(/FROM \(VALUES/g) || []).length, 4);
+            assert.match(text, /IF ERROR_NUMBER\(\) NOT IN \(102, 105\) THROW/);
+            assert.match(text, /PW-1042/);
+            assert.match(text, /CUS-300/);
+            assert.match(
+              text,
+              /dojo-attack-test:sql-injection:[a-f0-9-]+:unsafe/,
+            );
             assert.doesNotMatch(text, /dbo\.|\b(?:INSERT|UPDATE|DELETE)\b/i);
             return {
               recordset: [{ ...counts, privateValue: "not-for-browser" }],
@@ -868,9 +937,24 @@ test("synthetic injection requires unsafe and parameterized counts without expos
         }),
       }),
     });
-    if (counts.SafeMatches === 0 && counts.UnsafeMatches === 2) {
+    if (
+      counts.BaselineMatches === 1 &&
+      counts.SafeMatches === 0 &&
+      counts.UnsafeMatches === 4 &&
+      [102, 105].includes(counts.QuoteProbeError)
+    ) {
       const result = await runner.run("sql-injection");
       assert.equal(result.state, "executed");
+      assert.equal(result.alertConfirmed, false);
+      assert.equal(result.comparison.synthetic, true);
+      assert.equal(result.comparison.quoteProbeError, counts.QuoteProbeError);
+      assert.equal(result.comparison.baselineMatches, 1);
+      assert.equal(result.comparison.unsafeMatches, 4);
+      assert.equal(result.comparison.parameterizedMatches, 0);
+      assert.deepEqual(
+        result.comparison.exposedOrders.map((order) => order.OrderNumber),
+        ["PW-1042", "PW-1043", "PW-2088", "PW-3091"],
+      );
       assert.doesNotMatch(JSON.stringify(result), /not-for-browser/);
     } else {
       await assert.rejects(runner.run("sql-injection"), /expected counts/);
@@ -904,6 +988,10 @@ test(
     const result = await runner.run("sql-injection");
     assert.equal(result.state, "executed");
     assert.match(result.outcome, /parameter binding matched zero rows/);
+    assert.ok([102, 105].includes(result.comparison.quoteProbeError));
+    assert.equal(result.comparison.baselineMatches, 1);
+    assert.equal(result.comparison.unsafeMatches, 4);
+    assert.equal(result.comparison.parameterizedMatches, 0);
     assert.equal(result.alertConfirmed, false);
     const discovery = createSqlAttackRunner({
       environment: {
@@ -1080,6 +1168,11 @@ test("Defender evidence matches each documented scenario family without treating
     assert.equal(candidate.state, "possible", `${scenario}: ${alertType}`);
     assert.equal(candidate.alerts[0].correlated, false);
     assert.match(candidate.alerts[0].correlation, /shared across scenarios/);
+    properties.alertType = "SQL.VM_UnknownSqlInjection";
+    assert.equal(
+      (await getRunDefenderEvidence(run, options)).state,
+      "none-yet",
+    );
     properties.alertType = "SQL.VM_DataExfiltration";
     assert.equal(
       (await getRunDefenderEvidence(run, options)).state,
@@ -1240,7 +1333,14 @@ test("SQL attack cooldown accepts configured seconds and falls back to sixty for
         close: async () => {},
         request: () => ({
           query: async () => ({
-            recordset: [{ SafeMatches: 0, UnsafeMatches: 2 }],
+            recordset: [
+              {
+                BaselineMatches: 1,
+                SafeMatches: 0,
+                UnsafeMatches: 4,
+                QuoteProbeError: 105,
+              },
+            ],
           }),
         }),
       }),
@@ -1285,6 +1385,14 @@ test("shell tests execute only fixed marker commands and validate output", async
           query: async (text) => {
             if (text.includes("sys.configurations"))
               return { recordset: [{ enabled: 1 }] };
+            if (!command) {
+              const literal = /xp_cmdshell '((?:[^']|'')*)'; SELECT/.exec(text);
+              assert.ok(
+                literal,
+                "Fixed shell command must be a safely escaped SQL literal",
+              );
+              command = literal[1].replaceAll("''", "'");
+            }
             commands.push(command);
             statements.push(text);
             const decoded = command.includes("-EncodedCommand")
@@ -1336,7 +1444,11 @@ test("shell tests execute only fixed marker commands and validate output", async
   await assert.rejects(runner.run("external-source"), /expected marker/);
   assert.match(
     statements[0],
-    /EXEC @result = master\.dbo\.xp_cmdshell @command/,
+    /EXEC @result = master\.dbo\.xp_cmdshell 'powershell\.exe/,
+  );
+  assert.match(
+    statements[0],
+    /https:\/\/ninjapaws-pawton-dev\.azurewebsites\.net\/lab\/external-source-canary\.txt/,
   );
   assert.match(statements[1], /N'xp_' \+ N'cmdshell @shellCommand;'/);
   assert.match(statements[1], /EXEC sys\.sp_executesql @statement/);

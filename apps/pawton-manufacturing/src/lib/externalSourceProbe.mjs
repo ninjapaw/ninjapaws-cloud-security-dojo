@@ -42,3 +42,8 @@ export function externalSourceCommand(marker) {
   ].join(" ");
   return `powershell.exe -NoProfile -NonInteractive -Command "${script}"`;
 }
+
+export function externalSourceStatement(marker) {
+  const command = externalSourceCommand(marker).replaceAll("'", "''");
+  return `DECLARE @result int; EXEC @result = master.dbo.xp_cmdshell '${command}'; SELECT @result AS exitCode; /* ${marker} */`;
+}

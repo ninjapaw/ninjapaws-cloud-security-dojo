@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import sql from "mssql";
-import { externalSourceCommand } from "./externalSourceProbe.mjs";
+import { externalSourceStatement } from "./externalSourceProbe.mjs";
 
 export class SimulationError extends Error {
   constructor(message, status = 409) {
@@ -8,6 +8,77 @@ export class SimulationError extends Error {
     this.status = status;
   }
 }
+
+const injectionStoryData = {
+  title: "The order lookup that crossed customer boundaries",
+  brief:
+    "Monday, 08:45. Harbor House Furnishings asks Pawton's order desk about PW-1042. The fictional legacy lookup joins the customer's account filter to an order number using string concatenation. A tampered order number turns that narrow lookup into a read of every order in this four-row training dataset, including two other customers' orders.",
+  impact:
+    "Customer names, negotiated order values, products, and shipment status cross the intended account boundary. All names and records below are invented; no production or portal business table is read.",
+  customerCode: "CUS-100",
+  orderNumber: "PW-1042",
+  input: "PW-1042' OR 1=1 --",
+  orders: [
+    {
+      OrderNumber: "PW-1042",
+      CustomerCode: "CUS-100",
+      CustomerName: "Harbor House Furnishings",
+      Product: "Cedar futon frame",
+      Quantity: 12,
+      TotalUsd: 3480,
+      Status: "Ready to ship",
+    },
+    {
+      OrderNumber: "PW-1043",
+      CustomerCode: "CUS-100",
+      CustomerName: "Harbor House Furnishings",
+      Product: "Cotton futon mattress",
+      Quantity: 12,
+      TotalUsd: 2160,
+      Status: "In production",
+    },
+    {
+      OrderNumber: "PW-2088",
+      CustomerCode: "CUS-200",
+      CustomerName: "Northstar Campus Living",
+      Product: "Studio sleeper",
+      Quantity: 40,
+      TotalUsd: 19600,
+      Status: "Awaiting payment",
+    },
+    {
+      OrderNumber: "PW-3091",
+      CustomerCode: "CUS-300",
+      CustomerName: "Juniper Lodge Supply",
+      Product: "Guest suite futon",
+      Quantity: 18,
+      TotalUsd: 9720,
+      Status: "Dispatch scheduled",
+    },
+  ],
+};
+
+const sqlLiteral = (value) => `N'${value.replaceAll("'", "''")}'`;
+const syntheticOrders = `(VALUES\n${injectionStoryData.orders
+  .map(
+    (order) =>
+      `  (${Object.values(order)
+        .map((value) => (typeof value === "number" ? value : sqlLiteral(value)))
+        .join(", ")})`,
+  )
+  .join(
+    ",\n",
+  )}\n) AS Orders(OrderNumber, CustomerCode, CustomerName, Product, Quantity, TotalUsd, Status)`;
+const orderLookup = `FROM ${syntheticOrders}\nWHERE CustomerCode = ${sqlLiteral(injectionStoryData.customerCode)} AND OrderNumber = `;
+export const sqlInjectionStory = {
+  ...injectionStoryData,
+  queries: {
+    baseline: `SELECT @matched = COUNT(*) ${orderLookup}${sqlLiteral(injectionStoryData.orderNumber)};`,
+    quoteProbe: `SELECT @matched = COUNT(*) ${orderLookup}N'${injectionStoryData.orderNumber}'';`,
+    unsafe: `SELECT @matched = COUNT(*) ${orderLookup}N'${injectionStoryData.input}';`,
+    parameterized: `SELECT @matched = COUNT(*) ${orderLookup}@value;`,
+  },
+};
 
 export const attackScenarios = [
   {
@@ -85,12 +156,14 @@ export const attackScenarios = [
   {
     id: "sql-injection",
     name: "SQL injection",
+    story: sqlInjectionStory,
     description:
-      "Compare a fixed injection string passed through unsafe concatenation versus parameter binding against two synthetic rows. No browser-supplied SQL or business data is used.",
-    evidence: "SQL injection alert family",
+      "An order-desk lookup for PW-1042 exposes four fictional orders across three customers when a fixed input is concatenated into SQL. One fixed stray-quote probe first produces a caught SQL syntax error; compare the legitimate lookup, unsafe query, and parameterized fix. No browser-supplied SQL or business data is used.",
+    evidence:
+      "SQL.VM_PotentialSqlInjection / SQL.VM_VulnerabilityToSqlInjection",
     protection: {
       noAlert:
-        "The fixed input changes the meaning of an intentionally concatenated query over synthetic rows, while parameter binding prevents that change. This is an isolated demonstration, not exploitation of an HTTP endpoint, and it need not generate a detection. Microsoft documents PotentialSqlInjection for both injection and SQL shell obfuscation; the alert type alone cannot distinguish them. Use the supported SQL injection simulation to validate alert delivery.",
+        "The fixed quote probe produces a caught syntax error, matching the faulty-statement behavior described for VulnerabilityToSqlInjection; the subsequent OR 1=1 input changes the unsafe lookup while parameter binding prevents that change. Neither guarantees detection. This is an isolated demonstration, not exploitation of an HTTP endpoint. Microsoft also documents PotentialSqlInjection for SQL shell obfuscation; the alert type alone cannot distinguish them. Use the supported SQL injection simulation to validate alert delivery.",
       steps: [
         "Use parameterized queries for data values and allowlisted identifiers at the application input boundary; avoid concatenating untrusted input into SQL.",
         "Restrict the application login to required data operations. Use WAF prevention rules for inspected HTTP requests as an additional layer, not as a substitute for parameterization.",
@@ -101,7 +174,7 @@ export const attackScenarios = [
       simulation: "SQL injection",
     },
     about:
-      "SQL injection occurs when input becomes executable query syntax. The same fixed input is compared as concatenated SQL and as a bound value over two synthetic rows; only the deliberately unsafe query should match both rows.",
+      "SQL injection occurs when input becomes executable query syntax. Here OR 1=1 makes the fictional order lookup true for every row, including other customers' orders, and -- comments out the trailing quote. Binding that same input as a value preserves the customer and order filters.",
     boundary: {
       path: "Application server -> SQL engine -> synthetic query evaluation. The test sends fixed SQL directly; it does not inject through an HTTP parameter.",
       waf: "A WAF can detect and, in prevention mode, block recognizable SQL injection in HTTP requests it inspects. Here the HTTP request contains only a scenario selection; the SQL is generated on the server afterward. The WAF cannot inspect that backend query. This is not proof that a WAF rule was bypassed.",
@@ -111,12 +184,12 @@ export const attackScenarios = [
         "Defender for SQL may detect suspicious query patterns at the database layer. SQL Audit and application logs provide separate evidence. The synthetic query does not establish a portal vulnerability, data loss, or a Defender block.",
     },
     steps: [
-      "Connect with the application SQL login.",
-      "Run the same fixed OR 1=1 input against two synthetic rows using parameter binding and then unsafe concatenation.",
-      "Require zero parameterized matches and two concatenated matches; close the connection without returning any rows to the browser.",
+      "Connect with the application SQL login and require the legitimate CUS-100 / PW-1042 lookup to match one synthetic order.",
+      "Send one fixed stray-quote lookup and require a caught syntax error, then compare PW-1042' OR 1=1 -- under parameter binding and unsafe concatenation.",
+      "Require one baseline match, zero parameterized matches, and four unsafe matches; show only the known fictional fixture and close the connection.",
     ],
     expected:
-      "Unsafe concatenation matches two synthetic rows; parameter binding matches zero. Unexpected counts fail the test. This does not expose business records or establish a vulnerability in the portal's order endpoints.",
+      "The legitimate lookup matches PW-1042 only. Unsafe concatenation matches all four synthetic orders, including CUS-200 and CUS-300; parameter binding matches zero. Unexpected counts fail the test. This does not establish a vulnerability in the portal's order endpoints or confirm a Defender alert.",
   },
   {
     id: "principal-anomaly",
@@ -395,21 +468,21 @@ export function createSqlAttackRunner({
                 detail:
                   "SQL Server has xp_cmdshell disabled. No shell command ran and no server setting was changed.",
               };
-            const command =
-              id === "external-source"
-                ? externalSourceCommand(marker)
-                : `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`Write-Output '${marker}'`, "utf16le").toString("base64")}`;
-            const result = await pool
-              .request()
-              .input("command", sql.VarChar(8000), command)
-              .query(
-                id === "obfuscated-shell"
-                  ? `DECLARE @result int;
+            const request = pool.request();
+            if (id === "obfuscated-shell")
+              request.input(
+                "command",
+                sql.VarChar(8000),
+                `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`Write-Output '${marker}'`, "utf16le").toString("base64")}`,
+              );
+            const result = await request.query(
+              id === "obfuscated-shell"
+                ? `DECLARE @result int;
 DECLARE @statement nvarchar(max) = N'EXEC @shellResult = master.dbo.' + N'xp_' + N'cmdshell @shellCommand;';
 EXEC sys.sp_executesql @statement, N'@shellCommand varchar(8000), @shellResult int OUTPUT', @shellCommand = @command, @shellResult = @result OUTPUT;
 SELECT @result AS exitCode; /* ${marker} */`
-                  : `DECLARE @result int; EXEC @result = master.dbo.xp_cmdshell @command; SELECT @result AS exitCode; /* ${marker} */`,
-              );
+                : externalSourceStatement(marker),
+            );
             const records = result.recordsets?.flat() || [];
             if (
               !records.some((row) => row.exitCode === 0) ||
@@ -438,22 +511,49 @@ SELECT @result AS exitCode; /* ${marker} */`
               "SELECT APP_NAME() AS ApplicationName, ORIGINAL_LOGIN() AS OriginalLogin, DB_NAME() AS DatabaseName; SELECT TOP (5) SCHEMA_NAME(schema_id) AS SchemaName, name AS TableName FROM sys.tables WHERE is_ms_shipped = 0 ORDER BY schema_id, name";
           if (id === "sql-injection") {
             const result = await pool.request().query(`/* ${marker} */
-DECLARE @input nvarchar(100) = N''' OR 1=1 --';
-DECLARE @safeMatches int, @unsafeMatches int;
-DECLARE @safeStatement nvarchar(max) = N'SELECT @matched = COUNT(*) FROM (VALUES (1, N''dojo''), (2, N''training'')) AS sample(ItemId, ItemName) WHERE ItemName = @value;';
+DECLARE @input nvarchar(100) = ${sqlLiteral(sqlInjectionStory.input)};
+DECLARE @baselineMatches int, @safeMatches int, @unsafeMatches int, @quoteProbeError int = 0;
+DECLARE @baselineStatement nvarchar(max) = ${sqlLiteral(`/* ${marker}:baseline */\n${sqlInjectionStory.queries.baseline}`)};
+EXEC sys.sp_executesql @baselineStatement, N'@matched int OUTPUT', @matched = @baselineMatches OUTPUT;
+DECLARE @quoteProbeStatement nvarchar(max) = ${sqlLiteral(`/* ${marker}:quote-probe */\n${sqlInjectionStory.queries.quoteProbe}`)};
+BEGIN TRY
+  DECLARE @probeMatches int;
+  EXEC sys.sp_executesql @quoteProbeStatement, N'@matched int OUTPUT', @matched = @probeMatches OUTPUT;
+END TRY
+BEGIN CATCH
+  IF ERROR_NUMBER() NOT IN (102, 105) THROW;
+  SET @quoteProbeError = ERROR_NUMBER();
+END CATCH;
+DECLARE @safeStatement nvarchar(max) = ${sqlLiteral(`/* ${marker}:parameterized */\n${sqlInjectionStory.queries.parameterized}`)};
 EXEC sys.sp_executesql @safeStatement, N'@value nvarchar(100), @matched int OUTPUT', @value = @input, @matched = @safeMatches OUTPUT;
-DECLARE @unsafeStatement nvarchar(max) = N'SELECT @matched = COUNT(*) FROM (VALUES (1, N''dojo''), (2, N''training'')) AS sample(ItemId, ItemName) WHERE ItemName = N''' + @input + N'''';
+DECLARE @unsafeStatement nvarchar(max) = ${sqlLiteral(`/* ${marker}:unsafe */\nSELECT @matched = COUNT(*) ${orderLookup}N'`)} + @input + N'''';
 EXEC sys.sp_executesql @unsafeStatement, N'@matched int OUTPUT', @matched = @unsafeMatches OUTPUT;
-SELECT @safeMatches AS SafeMatches, @unsafeMatches AS UnsafeMatches;`);
+SELECT @baselineMatches AS BaselineMatches, @safeMatches AS SafeMatches, @unsafeMatches AS UnsafeMatches, @quoteProbeError AS QuoteProbeError;`);
             if (
+              ![102, 105].includes(result.recordset?.[0]?.QuoteProbeError) ||
+              result.recordset?.[0]?.BaselineMatches !== 1 ||
               result.recordset?.[0]?.SafeMatches !== 0 ||
-              result.recordset?.[0]?.UnsafeMatches !== 2
+              result.recordset?.[0]?.UnsafeMatches !==
+                sqlInjectionStory.orders.length
             )
               throw new SimulationError(
-                "Synthetic injection comparison did not return its expected counts.",
+                "Synthetic injection comparison did not return its expected counts and quote-probe syntax error.",
                 502,
               );
-            return "Fixed input changed the concatenated query to match both synthetic rows; parameter binding matched zero rows. No business tables were queried or changed. This demonstrates an isolated query-construction flaw, not a vulnerability in the portal's order endpoints.";
+            return {
+              detail:
+                "The legitimate order lookup matched PW-1042 only. One fixed stray-quote probe produced a caught SQL syntax error. Fixed input changed the concatenated query to match all four synthetic orders across three customers; parameter binding matched zero rows. No business tables were queried or changed. This demonstrates an isolated query-construction flaw, not a vulnerability in the portal's order endpoints.",
+              comparison: {
+                quoteProbeError: result.recordset[0].QuoteProbeError,
+                baselineMatches: result.recordset[0].BaselineMatches,
+                unsafeMatches: result.recordset[0].UnsafeMatches,
+                parameterizedMatches: result.recordset[0].SafeMatches,
+                synthetic: true,
+                exposedOrders: sqlInjectionStory.orders.map((order) => ({
+                  ...order,
+                })),
+              },
+            };
           }
           if (id === "principal-anomaly") {
             const principal = `dojo_probe_${runId.replaceAll("-", "")}`;
@@ -498,6 +598,7 @@ END CATCH`;
         defenderBlocking:
           "Not confirmed. SQL results alone do not identify a Defender prevention action.",
         alertConfirmed: false,
+        ...(detail?.comparison ? { comparison: detail.comparison } : {}),
         outcome: `${detail?.blocked ? "Attack test blocked." : "Attack test completed successfully."} ${detail?.detail || detail} Defender alert generation is not guaranteed; verify the configured VM's Defender alerts separately.`,
       });
     } catch (error) {

@@ -115,7 +115,8 @@ export async function getDefenderStatus() {
 const attackAlertTypes = {
   "brute-force": /^SQL\.VM_BruteForce$/i,
   "suspicious-app": /^SQL\.VM_HarmfulApplication$/i,
-  "sql-injection": /^SQL\.VM_.*SqlInjection$/i,
+  "sql-injection":
+    /^SQL\.VM_(?:PotentialSqlInjection|VulnerabilityToSqlInjection)$/i,
   "principal-anomaly": /^SQL\.VM_PrincipalAnomaly$/i,
   "external-source": /^SQL\.VM_ShellExternalSourceAnomaly$/i,
   "obfuscated-shell": /^SQL\.VM_PotentialSqlInjection$/i,

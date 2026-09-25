@@ -99,6 +99,28 @@ if (auditConfigured) {
     {simulationAvailability.reason && <div class="warn">{simulationAvailability.reason}</div>}
     <div class="attack-scenarios" data-timezone={portalTimeZone}>{attackScenarios.map((scenario, index) => <details class="attack-scenario" id={`attack-${scenario.id}`} open={index === 0}>
     <summary><h3>{scenario.name}</h3><span class="scenario-family">{scenario.evidence}</span></summary>
+    {scenario.story && <section class="injection-story" aria-label="SQL injection case file">
+      <h4>{scenario.story.title}</h4><p>{scenario.story.brief}</p>
+      <p><strong>Business impact:</strong> {scenario.story.impact}</p>
+      <div class="table-shell" tabindex="0" role="region" aria-label="Fictional order dataset"><table>
+        <caption>Fictional training data. Expected matches below are a preview, not execution evidence.</caption>
+        <thead><tr><th>Order</th><th>Customer</th><th>Product</th><th>Quantity</th><th>Value (USD)</th><th>Status</th><th>Lookup boundary</th></tr></thead>
+        <tbody>{scenario.story.orders.map((order) => <tr>
+          <td>{order.OrderNumber}</td><td>{order.CustomerName}<br /><code>{order.CustomerCode}</code></td><td>{order.Product}</td><td>{order.Quantity}</td><td>{order.TotalUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</td><td>{order.Status}</td>
+          <td>{order.OrderNumber === scenario.story.orderNumber ? 'Intended order' : order.CustomerCode === scenario.story.customerCode ? 'Extra order, same customer' : 'Different customer'}</td>
+        </tr>)}</tbody>
+      </table></div>
+      <p><strong>Fixed tampered order number:</strong> <code>{scenario.story.input}</code></p>
+      <p>The quote closes the order number. <code>OR 1=1</code> makes the entire filter true, including for other customers. <code>--</code> comments out the remaining quote. Parameter binding treats all of those characters as the order number instead.</p>
+      <details class="injection-queries"><summary>SQL comparison: legitimate lookup, unsafe input, parameterized fix</summary>
+        <h4>Legitimate lookup: one expected match</h4><pre><code>{scenario.story.queries.baseline}</code></pre>
+        <h4>Stray-quote probe: expected SQL syntax error</h4><pre><code>{scenario.story.queries.quoteProbe}</code></pre>
+        <p>One fixed malformed lookup is caught inside the SQL batch. Only syntax errors 102 or 105 qualify; unrelated errors fail the run. This supplies a faulty-query signal for Defender evaluation, not proof of an alert.</p>
+        <h4>Unsafe concatenation: four expected matches</h4><pre><code>{scenario.story.queries.unsafe}</code></pre>
+        <h4>Parameterized lookup: zero expected matches</h4><pre><code>{scenario.story.queries.parameterized}</code></pre>
+        <p><code>@value</code> is bound as <code>nvarchar(100)</code> to the same fixed input. <code>@matched</code> is an integer output parameter. Every query reads inline synthetic values only.</p>
+      </details>
+    </section>}
     <div class="scenario-walkthrough">
     <div class="scenario-brief">
       <h4>1. What this attack is about</h4><p>{scenario.about}</p><p>{scenario.description}</p>
@@ -120,6 +142,7 @@ if (auditConfigured) {
     </form>
     <h4>4. Execution result</h4>
     <p class="attack-outcome" role="status" aria-live="polite">Not run.</p>
+    {scenario.story && <p class="injection-comparison" role="status" aria-live="polite" hidden></p>}
     <dl class="attack-result" hidden>
       <dt>Run ID</dt><dd data-result="runId"></dd>
       <dt>Started</dt><dd data-result="startedAt"></dd>
@@ -254,6 +277,14 @@ if (auditConfigured) {
   .scenario-walkthrough h4 { font-size: 1rem; margin-block: 1rem 0.5rem; }
   .scenario-walkthrough p { margin-block: 0.5rem 1rem; }
   .scenario-execution { border-left: 2px solid var(--border); padding-left: 1.5rem; min-width: 0; }
+  .injection-story { min-width: 0; padding-block: 1rem; border-bottom: 1px solid var(--border); }
+  .injection-story h4 { font-size: 1.1rem; margin-block: 0.5rem; }
+  .injection-story caption { text-align: left; color: var(--muted); padding-block: 0.75rem; }
+  .injection-story .table-shell { max-width: 100%; overflow-x: auto; }
+  .injection-story pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .injection-queries { margin-block: 1rem; }
+  .injection-comparison { border-left: 3px solid var(--link); padding-left: 0.75rem; }
+  .injection-comparison[hidden] { display: none; }
   .attack-steps { padding-left: 1.5rem; }
   .attack-steps li { padding-block: 0.35rem; color: var(--text-soft); }
   .attack-result[hidden] { display: none; }
@@ -306,7 +337,7 @@ if (auditConfigured) {
     let runId = '';
     let generation = 0;
 
-    function renderRun(run: Record<string, string>) {
+    function renderRun(run: Record<string, string> & { comparison?: { baselineMatches: number; unsafeMatches: number; parameterizedMatches: number; quoteProbeError: number } }) {
       runId = run.runId;
       scenario.querySelector<HTMLElement>('.attack-result')!.hidden = false;
       scenario.querySelectorAll<HTMLElement>('[data-result]').forEach((field) => {
@@ -315,6 +346,11 @@ if (auditConfigured) {
       });
       outcome.textContent = `${run.state === 'blocked' ? 'Blocked by SQL configuration' : run.state === 'failed' ? 'Incomplete or failed' : 'Test completed'}: ${run.outcome}`;
       blocking.textContent = `Defender blocking: ${run.defenderBlocking}`;
+      const comparison = scenario.querySelector<HTMLElement>('.injection-comparison');
+      if (comparison && run.comparison) {
+        comparison.hidden = false;
+        comparison.textContent = `Verified SQL counts: legitimate lookup ${run.comparison.baselineMatches}; unsafe concatenation ${run.comparison.unsafeMatches}; parameterized input ${run.comparison.parameterizedMatches}. Fixed quote probe: caught SQL syntax error ${run.comparison.quoteProbeError}. Only the fictional dataset above was queried. Defender detection is checked separately below.`;
+      }
       evidenceState.textContent = 'Not checked. Defender alerts may take time to appear.';
       checkButton.disabled = false;
     }
@@ -366,6 +402,8 @@ if (auditConfigured) {
       checkButton.disabled = true;
       scenario.setAttribute('aria-busy', 'true');
       scenario.querySelector<HTMLElement>('.attack-result')!.hidden = true;
+      const comparison = scenario.querySelector<HTMLElement>('.injection-comparison');
+      if (comparison) { comparison.hidden = true; comparison.textContent = ''; }
       alerts.replaceChildren();
       progress.textContent = 'Running the fixed lab test. Awaiting the server response...';
       outcome.textContent = 'Execution in progress. Individual steps are not confirmed until the server returns.';
