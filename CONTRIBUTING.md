@@ -8,20 +8,13 @@ Use the Node.js version in `.node-version`, the npm version in `package.json`, D
 
 ```bash
 npm ci
-npm ci --prefix apps/pawton-manufacturing
 npm test
 bash scripts/test.sh --skip-azure
-npm test --prefix apps/pawton-manufacturing
-npm run build --prefix apps/pawton-manufacturing
 ```
-
-The portal test command runs both `scripts/test-admin-portal.mjs` and `scripts/test-order-portal.mjs`; the deployment-assets workflow runs it on portal and test changes. For focused login and order regressions, run `node --test scripts/test-order-portal.mjs`.
-
-Shared-login coverage includes both roles and legacy endpoints, role switching and cookie cleanup, cross-origin and malformed requests, credential/configuration boundaries, shared throttling and expiry, session tampering, and signing-key rotation. These tests use synthetic credentials and mocked SQL operations; they do not contact Azure or modify live orders. The form checks are source assertions, not browser tests. The root `npm run test:e2e` targets Scenario 1, not the Pawton portal; portal UI changes also need a local browser check of `/login`, both role redirects, and desktop/mobile layouts using test-only credentials.
 
 Do not commit `.env` files, secrets, customer data, production credentials, generated Azure deployment output, or private infrastructure details.
 
-The audit-template SQL integration test is opt-in and must run only against a disposable local SQL Server 2022 container. Set `DOJO_AUDIT_TEST_PORT` to its loopback-mapped SQL port and `MSSQL_SA_PASSWORD` to that container's test password, then run `node --test --test-name-pattern="reusable auditing SQL" scripts/test-admin-portal.mjs`. It creates a randomly named fixture database and audit definitions, uses the container's `/var/opt/mssql/log/` directory, verifies all scopes and no-overwrite behavior, and leaves artifacts for inspection. Remove the disposable container afterward and unset both variables. Do not point it at a persistent SQL instance; the test does not delete its fixtures. Without `DOJO_AUDIT_TEST_PORT`, normal portal tests skip this integration case.
+The SQL Server on Azure VM / Defender for SQL / Sentinel scenario, including the Pawton Manufacturing portal and its tests, now lives in the separate [`ninjapaw/pawton`](https://github.com/ninjapaw/pawton) repository; see that repo's CONTRIBUTING.md for its test commands.
 
 ## Branch Flow
 

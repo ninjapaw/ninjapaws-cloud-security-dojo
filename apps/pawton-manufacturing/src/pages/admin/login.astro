@@ -1,4 +1,0 @@
----
-const error = Astro.url.searchParams.get('error');
-return Astro.redirect(error ? `/login?error=${encodeURIComponent(error)}` : '/login');
----

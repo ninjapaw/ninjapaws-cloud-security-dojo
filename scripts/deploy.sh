@@ -354,7 +354,7 @@ Options:
 
 The wizard command lists every scenario registered in config/deploy.config.json (interactively,
 when not run with --defaults) and hands off to that scenario's own deploy script when one is
-declared, e.g. Scenario 2 (SQL Server on Azure VM) runs via scripts/deploy-sql-scenario.sh.
+declared in its `deployScript` config key.
     --yes                    Skip confirmation; required for non-interactive uninstall
     --defaults               Accept built-in defaults without interactive prompts
   --force                  Allow uninstall of an untagged resource group

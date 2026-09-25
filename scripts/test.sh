@@ -44,9 +44,6 @@ fi
 
 echo "Checking Bash syntax..."
 bash -n "$REPO_ROOT/scripts/deploy.sh"
-bash -n "$REPO_ROOT/scripts/deploy-sql-scenario.sh"
-bash -n "$REPO_ROOT/scripts/deploy-pawton-domain.sh"
-bash -n "$REPO_ROOT/scripts/deploy-sentinel-sql.sh"
 bash -n "$REPO_ROOT/scripts/lib/common.sh"
 bash -n "$REPO_ROOT/scripts/manage.sh"
 bash -n "$REPO_ROOT/scripts/setup-azure-github-oidc.sh"
@@ -58,8 +55,6 @@ echo "Checking Node.js runtime syntax..."
     cd "$REPO_ROOT"
     "$NODE_COMMAND" --check src/app.js
     "$NODE_COMMAND" --test tests/*.test.js
-    "$NODE_COMMAND" scripts/test-sentinel-sql.mjs
-    "$NODE_COMMAND" --test scripts/test-pawton-domain.mjs
 )
 
 echo "Checking shared report helpers..."
@@ -188,12 +183,6 @@ file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CSPM_API_POSTURE: \${{ vars.DEFENDER_CSPM_API_POSTURE || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/publish-release.yml" "DEFENDER_CONTAINERS_VM_SCANNING: \${{ vars.DEFENDER_CONTAINERS_VM_SCANNING || 'false' }}"
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6'
-file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'workflow_call:'
-file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'SCENARIO_SCRIPT'
-file_contains "$REPO_ROOT/.github/workflows/scenario-lifecycle.yml" 'confirm_resource_group'
-file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'uses: ./.github/workflows/scenario-lifecycle.yml'
-file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'kit-defender-posture.yml@889f24b85b6c30b260931dd6b8b1b7d5d6c4f3b6'
-file_contains "$REPO_ROOT/.github/workflows/deploy-sql-scenario.yml" 'defender-containers-tier: disabled'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-servers-tier:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-sql-tier:'
 file_contains "$REPO_ROOT/.github/workflows/deploy.yml" 'defender-cspm-api-posture:'
@@ -226,35 +215,11 @@ file_contains "$REPO_ROOT/scripts/deploy.sh" 'defender-cloud-scenario-1'
 file_contains "$REPO_ROOT/scripts/deploy.sh" '--all-scenarios'
 file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 1: NGINX CVE Detection and Remediation'
 file_contains "$REPO_ROOT/README.md" 'Defender for Cloud - Scenario 1'
-file_contains "$REPO_ROOT/config/deploy.config.json" 'Defender for Cloud - Scenario 2: SQL Server on Azure VM Protection'
-file_contains "$REPO_ROOT/README.md" 'Defender for Cloud - Scenario 2'
-file_contains "$REPO_ROOT/README.md" 'Futon Manufacturing sample database'
-file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'DEFENDER_SERVERS_SUBPLAN'
-file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'SqlServerVirtualMachines'
-file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'sqlVirtualMachines'
 file_contains "$REPO_ROOT/README.md" 'real F5 advisory'
 file_contains "$REPO_ROOT/README.md" 'Patched-state demonstration'
 file_contains "$REPO_ROOT/scripts/deploy.sh" 'source "$SCRIPT_DIR/lib/common.sh"'
-file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'source "$SCRIPT_DIR/lib/common.sh"'
 file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_lookup()'
 file_contains "$REPO_ROOT/scripts/lib/common.sh" 'config_scenario_ids()'
-file_contains "$REPO_ROOT/README.md" 'Pawton Manufacturing'
-file_contains "$REPO_ROOT/config/deploy.config.json" '"webAppName": "ninjapaws-pawton-dev"'
-file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'deploy_web_app_code'
-file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'sql_app_login_password'
-file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'Microsoft.KeyVault/vaults'
-file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'sqlAppLoginPassword'
-file_contains "$REPO_ROOT/infra/sql-defender-scenario/main.bicep" 'virtualNetworkSubnetId'
-file_contains "$REPO_ROOT/scripts/sql/Setup-FutonManufacturing.ps1" 'AppLoginPassword'
-test -f "$REPO_ROOT/apps/pawton-manufacturing/package.json"
-test -f "$REPO_ROOT/apps/pawton-manufacturing/astro.config.mjs"
-(
-    cd "$REPO_ROOT/apps/pawton-manufacturing"
-    "$NODE_COMMAND" --check src/lib/db.mjs
-    "$NODE_COMMAND" --check src/pages/health.js
-    "$NODE_COMMAND" --check src/pages/api/status.js
-    "$NODE_COMMAND" -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))"
-)
 if [[ "$SKIP_REPORT" == false ]]; then
     rendered_nginx="$(mktemp)"
     test_output="$(mktemp -d)"
@@ -282,12 +247,6 @@ if [[ "$SKIP_REPORT" == false ]]; then
     file_contains "$status_html" 'Resolved deployment settings'
     file_contains "$test_output/dev/deployment-dev.state.js" 'currentTask'
     file_contains "$status_html" 'deployment-dev.log'
-    sql_status_html="$test_output/dev/sql-deployment-dev.status.html"
-    OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults --no-open-status >/dev/null
-    file_contains "$sql_status_html" 'Scenario 2 live status'
-    file_contains "$sql_status_html" 'Monitoring links'
-    file_contains "$sql_status_html" 'Audit context'
-    file_contains "$REPO_ROOT/scripts/deploy-sql-scenario.sh" 'Run audit'
     test ! -e "$REPO_ROOT/deployment-output.json"
     test ! -e "$REPO_ROOT/.azure/deployment-dev.json"
     fake_browser_dir="$test_output/bin"
@@ -302,11 +261,6 @@ SH
     BROWSER_CALLS="$browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy.sh" plan --environment dev --defaults --image-tag test-open-two >/dev/null
     test "$(wc -l < "$browser_calls" | tr -d ' ')" -eq 1
     file_contains "$test_output/.deployment-dev.browser-opened" 'file://'
-    sql_browser_calls="$test_output/sql-browser-calls"
-    BROWSER_CALLS="$sql_browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults >/dev/null
-    BROWSER_CALLS="$sql_browser_calls" PATH="$fake_browser_dir:$PATH" DEPLOY_BROWSER=msedge OUTPUT_ROOT="$test_output" bash "$REPO_ROOT/scripts/deploy-sql-scenario.sh" plan --environment dev --defaults >/dev/null
-    test "$(wc -l < "$sql_browser_calls" | tr -d ' ')" -eq 1
-    file_contains "$test_output/.sql-deployment-dev.browser-opened" 'file://'
 fi
 # The guard must refuse whichever environment does not belong to the current branch.
 case "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" in
