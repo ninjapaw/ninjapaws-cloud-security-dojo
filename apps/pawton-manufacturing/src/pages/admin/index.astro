@@ -86,7 +86,7 @@ if (auditConfigured) {
     <details><summary>Sample SQL</summary><p>The portal generates a unique run ID in place of <code>&lt;run-id&gt;</code> and enforces the same fixed statements shown here.</p>{probes.map((probe) => <div><h3>{probe.name}</h3><pre><code>{probe.script}</code></pre></div>)}</details>
   </section>
   <section class="section"><div class="section-header"><h2>Defender for SQL attack tests</h2><a href={alertReferenceDocs} target="_blank" rel="noopener noreferrer">SQL alert reference</a></div>
-    <p>Direct, bounded activity against the configured lab SQL Server. Results distinguish execution from SQL blocking; Defender detection is not guaranteed. Anomaly detections depend on learned behavior. External-source tests only print a URL and do not reproduce a download.</p>
+    <p>Direct, bounded activity against the configured lab SQL Server. Results distinguish execution from SQL blocking; Defender detection is not guaranteed. Anomaly detections depend on learned behavior. The external-source test downloads a hash-verified inert text canary from a fixed first-party HTTPS endpoint, removes it, and never executes downloaded content.</p>
     <p><strong>Beyond the web boundary:</strong> a web application firewall (WAF) inspects HTTP/S requests routed through it. These tests run over separate backend SQL connections. A WAF could stop their incoming HTTP trigger, but cannot inspect the resulting SQL session or host process. Each scenario separates web filtering, database/host prevention, and detection; no test here certifies WAF coverage or bypass.</p>
     <details class="missing-alert-guidance"><summary>No Defender for SQL alert?</summary>
       <ol>
@@ -114,7 +114,7 @@ if (auditConfigured) {
     <div class="scenario-execution">
     <h4>3. Run the lab attack</h4>
     <form class="defender-simulation-form" method="post" action="/api/admin/defender-simulation">
-      <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!simulationAvailability.ids.includes(scenario.id)} />I authorize this lab test</label>
+      <input type="hidden" name="simulation" value={scenario.id} /><label class="confirmation"><input type="checkbox" name="confirm" value="yes" required disabled={!simulationAvailability.ids.includes(scenario.id)} />{scenario.id === 'external-source' ? 'I authorize one outbound HTTPS canary download and temporary-file cleanup on the SQL host; no downloaded code will execute' : 'I authorize this lab test'}</label>
       <button type="submit" disabled={!simulationAvailability.ids.includes(scenario.id)}>Run attack test</button><p class="simulation-sample-result" role="status" aria-live="polite"></p>
       {!simulationAvailability.ids.includes(scenario.id) && <p class="muted">SQL connection unavailable or lab tests disabled.</p>}
     </form>

@@ -63,7 +63,7 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
   );
   assert.match(
     external.boundary.prevention,
-    /cannot validate an outbound-network block/,
+    /Egress filtering can deny the fixed HTTPS destination/,
   );
   const page = await readFile(
     new URL(
@@ -96,7 +96,7 @@ test("every attack scenario explains its purpose, bounded steps, and expected ou
   );
   assert.match(
     external.protection.verification,
-    /cannot test outbound filtering/,
+    /require matching firewall or endpoint evidence/,
   );
   assert.match(
     injection.protection.verification,
@@ -1298,7 +1298,15 @@ test("shell tests execute only fixed marker commands and validate output", async
             assert.ok(marker);
             return {
               recordsets: [
-                [{ output: validOutput ? marker : "unexpected" }],
+                [
+                  {
+                    output: validOutput
+                      ? marker.includes(":external-source:")
+                        ? `${marker}:download-verified-and-removed`
+                        : marker
+                      : "unexpected",
+                  },
+                ],
                 [{ exitCode: 0 }],
               ],
             };
@@ -1314,8 +1322,12 @@ test("shell tests execute only fixed marker commands and validate output", async
   }
   assert.match(
     commands[0],
-    /^cmd.exe \/d \/c echo https:\/\/example.invalid\/dojo-attack-test:/,
+    /^powershell.exe -NoProfile -NonInteractive -Command /,
   );
+  assert.match(commands[0], /AllowAutoRedirect = \$false/);
+  assert.match(commands[0], /\$total -gt 1024/);
+  assert.match(commands[0], /Security.Cryptography.SHA256/);
+  assert.match(commands[0], /Remove-Item -LiteralPath \$directory/);
   assert.match(
     Buffer.from(commands[1].split(" ").at(-1), "base64").toString("utf16le"),
     /^Write-Output 'dojo-attack-test:obfuscated-shell:[a-f0-9-]{36}'$/,
@@ -1335,6 +1347,141 @@ test("shell tests execute only fixed marker commands and validate output", async
   assert.ok(!statements[1].includes(commands[1]));
   assert.match(statements[1], /SELECT @result AS exitCode/);
 });
+
+test("external-source canary command is fixed, bounded, and never executes the download", async () => {
+  const { externalSourceCommand, externalSourceContent, externalSourceUrl } =
+    await import("../apps/pawton-manufacturing/src/lib/externalSourceProbe.mjs");
+  const marker =
+    "dojo-attack-test:external-source:11111111-1111-4111-8111-111111111111";
+  const command = externalSourceCommand(marker);
+  assert.ok(command.length < 8000);
+  assert.equal(
+    new URL(externalSourceUrl).hostname,
+    "ninjapaws-pawton-dev.azurewebsites.net",
+  );
+  assert.equal(
+    await readFile(
+      new URL(
+        "../apps/pawton-manufacturing/public/lab/external-source-canary.txt",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    externalSourceContent,
+  );
+  assert.throws(() => externalSourceCommand(`${marker}'; whoami`), /Invalid/);
+  assert.match(command, /Timeout = 10000/);
+  assert.match(command, /ReadWriteTimeout = 3000/);
+  assert.match(command, /UseDefaultCredentials = \$false/);
+  assert.doesNotMatch(
+    command,
+    /Invoke-Expression|Start-Process|DownloadString|EncodedCommand|ServerCertificateValidationCallback/i,
+  );
+});
+
+test(
+  "external-source PowerShell verifies downloads and cleans up after HTTP failures",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const { externalSourceCommand, externalSourceContent, externalSourceUrl } =
+      await import("../apps/pawton-manufacturing/src/lib/externalSourceProbe.mjs");
+    const { createServer } = await import("node:http");
+    const { spawn } = await import("node:child_process");
+    const { mkdtemp, readdir, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    let mode = "success";
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests++;
+      if (mode === "redirect") {
+        response.writeHead(302, { Location: "/redirected" });
+        response.end();
+      } else if (mode === "error") {
+        response.writeHead(500);
+        response.end();
+      } else if (mode === "large") {
+        response.writeHead(200, { "Content-Length": "1025" });
+        response.end("x".repeat(1025));
+      } else if (mode === "chunked") {
+        response.writeHead(200, { "Transfer-Encoding": "chunked" });
+        response.end("x".repeat(1025));
+      } else if (mode === "stalled") {
+        response.writeHead(200, { "Content-Length": "1" });
+        response.flushHeaders();
+      } else
+        response.end(
+          mode === "success" ? externalSourceContent : "wrong canary",
+        );
+    });
+    const directory = await mkdtemp(join(tmpdir(), "dojo-canary-test-"));
+    const marker =
+      "dojo-attack-test:external-source:11111111-1111-4111-8111-111111111111";
+    try {
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const command = externalSourceCommand(marker);
+      const script = command
+        .slice(command.indexOf('"') + 1, -1)
+        .replace(
+          externalSourceUrl,
+          `http://127.0.0.1:${server.address().port}/canary.txt`,
+        );
+      for (mode of [
+        "success",
+        "mismatch",
+        "large",
+        "chunked",
+        "redirect",
+        "error",
+        "stalled",
+      ]) {
+        const before = requests;
+        const result = await new Promise((resolve, reject) => {
+          const child = spawn(
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-Command", script],
+            {
+              env: { ...process.env, TEMP: directory, TMP: directory },
+              timeout: 30000,
+            },
+          );
+          let output = "";
+          child.stdout.on("data", (data) => {
+            output += data;
+          });
+          child.stderr.on("data", (data) => {
+            output += data;
+          });
+          child.on("error", reject);
+          child.on("close", (code) => resolve({ code, output }));
+        });
+        assert.equal(
+          requests - before,
+          1,
+          `${mode}: redirects or retries are not allowed`,
+        );
+        assert.equal(
+          result.code,
+          mode === "success" ? 0 : 1,
+          `${mode}: ${result.output}`,
+        );
+        if (mode === "success")
+          assert.match(result.output, /download-verified-and-removed/);
+        else
+          assert.doesNotMatch(result.output, /download-verified-and-removed/);
+        assert.deepEqual(
+          await readdir(directory),
+          [],
+          `${mode}: temporary files remain`,
+        );
+      }
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("direct SQL runner rejects overlap and closes failed connections without leaking errors", async () => {
   let finishConnection;

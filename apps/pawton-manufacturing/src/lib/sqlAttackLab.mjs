@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import sql from "mssql";
+import { externalSourceCommand } from "./externalSourceProbe.mjs";
 
 export class SimulationError extends Error {
   constructor(message, status = 409) {
@@ -157,37 +158,37 @@ export const attackScenarios = [
     id: "external-source",
     name: "Shell external source anomaly",
     description:
-      "Print a reserved external URL through the SQL shell. No network request or download occurs. Requires xp_cmdshell already enabled.",
-    evidence: "SQL.VM_ShellExternalSourceAnomaly (limited probe)",
+      "Download one inert text canary from Pawton's fixed HTTPS endpoint through the SQL shell. Verify its SHA-256 and remove the temporary file without executing it. Requires xp_cmdshell already enabled.",
+    evidence: "SQL.VM_ShellExternalSourceAnomaly",
     protection: {
       noAlert:
-        "This probe only echoes an example.invalid URL. It performs no download or outbound connection, so external-source behavior is not fully reproduced and no alert is guaranteed. Use the supported Shell external source anomaly simulation to validate alert delivery; do not replace the reserved URL with a real download destination to force an alert.",
+        "This probe performs a real outbound HTTPS request and downloads inert text, without executing downloaded content. Whether the destination or behavior is anomalous depends on Defender analytics and prior activity; a successful download still does not guarantee an alert. Use the supported Shell external source anomaly simulation to validate alert delivery separately.",
       steps: [
         "For an approved lab comparison, use Disable SQL shell access in this page's SQL shell section and verify the live state is Disabled. This is a server-wide SQL change; review other consumers first.",
         "Restrict privileges that can execute or re-enable xp_cmdshell. For lasting hardening, review the deployment's enableSqlShellAttackTests value because bootstrap can reapply its configured default.",
         "For real outbound activity, use scoped egress controls and host application control. Defender for Endpoint prevention is a separate product/control from Defender for SQL; verify its onboarding and applicable policies independently.",
       ],
       verification:
-        "After disabling shell access, this runner should report blocked at its xp_cmdshell precheck. Confirm the disabled SQL state independently. This demonstrates the SQL configuration gate, not a Defender block or an egress block; the echo-only probe cannot test outbound filtering.",
+        "After disabling shell access, this runner should report blocked at its xp_cmdshell precheck. With shell access enabled, an approved egress policy can deny the fixed endpoint; require matching firewall or endpoint evidence to identify the blocker. Timeout, HTTP failure, hash mismatch, or cleanup failure alone is not proof of Defender prevention.",
       simulation: "Shell external source anomaly",
     },
     about:
-      "Shell commands referencing external sources can accompany payload downloads. This limited probe only prints a reserved URL and does not reproduce a download.",
+      "SQL-launched shell downloads cross from database privileges into host execution and outbound network access. This test performs that download stage using a known inert text file, never a program or script, and never executes the downloaded bytes.",
     boundary: {
-      path: "Privileged SQL session -> xp_cmdshell -> operating-system command. A real download would cross a further boundary from the host to an external destination; this probe does not.",
-      waf: "An inbound WAF does not govern SQL-launched processes or the VM's outbound connections. Printing a URL through the SQL shell is outside its HTTP request inspection. An egress firewall or proxy is a different control from a WAF.",
+      path: "Privileged SQL session -> xp_cmdshell -> PowerShell -> outbound HTTPS -> unique temporary text file -> hash verification -> cleanup. The destination is the fixed ninjapaws-pawton-dev.azurewebsites.net/lab/external-source-canary.txt endpoint, with only a run ID in its query string.",
+      waf: "An inbound WAF protecting the portal does not govern SQL-launched processes or the VM's outbound connections. The destination can independently filter the canary request; an egress firewall or proxy, not the portal's inbound WAF, controls the VM's outbound boundary.",
       prevention:
-        "Keep xp_cmdshell disabled unless required, restrict shell execution privileges, constrain the execution identity, and apply host application controls. Egress filtering can restrict real downloads, but this echo-only probe cannot validate an outbound-network block.",
+        "Keep xp_cmdshell disabled unless required, restrict shell execution privileges, constrain the execution identity, and apply host application controls. Egress filtering can deny the fixed HTTPS destination; use the enforcing control's logs rather than assuming every failed download is a security block.",
       detection:
-        "Defender for SQL may observe suspicious shell usage; endpoint protection can provide process or file evidence for actual host activity. No download, connection, or file is created here, so neither download detection nor blocking is demonstrated.",
+        "Defender for SQL may observe shell access to an external source; endpoint and network telemetry can separately show PowerShell, HTTPS, and temporary-file activity. Correlate the marker, destination, and activity time with an actual alert. Download success is not proof of detection or a protection failure.",
     },
     steps: [
       "Read the current xp_cmdshell setting without changing it.",
-      "If enabled, use the SQL shell to echo an example.invalid URL containing the run marker.",
-      "Verify the printed marker and successful shell exit status.",
+      "If enabled, fetch the fixed first-party HTTPS text canary once, reject redirects, cap the file at 1 KiB, and enforce request/read time limits.",
+      "Verify the expected SHA-256, delete the unique temporary directory, and require the download-and-cleanup marker plus a successful shell exit status.",
     ],
     expected:
-      "SQL blocks the test if xp_cmdshell is disabled; otherwise the URL is printed. No outbound request, file download, or persistence is requested.",
+      "With shell access enabled and the canary deployed/reachable, one inert file is downloaded, verified, and removed. Nothing downloaded is executed. A failed or interrupted run is not a confirmed block; abrupt process termination can leave a dojo-external-* temporary directory for operator review.",
   },
   {
     id: "obfuscated-shell",
@@ -340,6 +341,7 @@ export function createSqlAttackRunner({
         429,
       );
     const config = connectionConfig(environment, privilegedScenarios.has(id));
+    if (id === "external-source") config.requestTimeout = 30000;
     const runId = randomUUID();
     const marker = `dojo-attack-test:${id}:${runId}`;
     const startedAt = new Date(now()).toISOString();
@@ -395,7 +397,7 @@ export function createSqlAttackRunner({
               };
             const command =
               id === "external-source"
-                ? `cmd.exe /d /c echo https://example.invalid/${marker}`
+                ? externalSourceCommand(marker)
                 : `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`Write-Output '${marker}'`, "utf16le").toString("base64")}`;
             const result = await pool
               .request()
@@ -414,7 +416,11 @@ SELECT @result AS exitCode; /* ${marker} */`
               !records.some((row) =>
                 Object.values(row).some(
                   (value) =>
-                    typeof value === "string" && value.includes(marker),
+                    typeof value === "string" &&
+                    (id === "external-source"
+                      ? value.trim() ===
+                        `${marker}:download-verified-and-removed`
+                      : value.includes(marker)),
                 ),
               )
             )
@@ -422,7 +428,9 @@ SELECT @result AS exitCode; /* ${marker} */`
                 "Shell probe did not return its expected marker and success status.",
                 502,
               );
-            return "SQL shell printed the test marker. No download, outbound connection, or persistence was requested.";
+            return id === "external-source"
+              ? "SQL shell downloaded the fixed first-party inert canary over HTTPS, verified its SHA-256, and removed its temporary directory. No downloaded content was executed. Defender detection is separate from this execution result."
+              : "SQL shell printed the test marker. No download, outbound connection, or persistence was requested.";
           }
           let statement;
           if (id === "suspicious-app")
