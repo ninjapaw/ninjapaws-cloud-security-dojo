@@ -7,6 +7,7 @@ on:
       - "scripts/**"
       - "src/**"
       - "tests/**"
+      - "apps/pawton-manufacturing/**"
       - "config/**"
       - "package*.json"
       - ".node-version"
@@ -20,6 +21,7 @@ on:
       - "scripts/**"
       - "src/**"
       - "tests/**"
+      - "apps/pawton-manufacturing/**"
       - "config/**"
       - "package*.json"
       - ".node-version"
@@ -57,11 +59,15 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
+            apps/pawton-manufacturing/package-lock.json
 
       - name: Install test dependencies
         run: |
           npm ci
+          npm ci --prefix apps/pawton-manufacturing
 
       - name: Validate repository and portal
         run: |
           bash scripts/test.sh --skip-azure
+          npm test --prefix apps/pawton-manufacturing
+          npm run build --prefix apps/pawton-manufacturing
